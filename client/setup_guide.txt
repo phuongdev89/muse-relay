@@ -1,0 +1,125 @@
+============================================================
+MUSE RELAY — SETUP GUIDE (for Muse)
+============================================================
+You (Muse) receive a setup bundle with these files: muse_client.py,
+poller.py, relay_auth.py, AGENTS.md, setup_guide.txt (this file),
+requirements.txt, run.sh, run.bat, config.json, start_daemon.sh,
+restart_poller.sh.
+
+Follow the steps below IN ORDER. If you hit an error, re-read the
+current step and tell the owner clearly before trying another way.
+
+STEP 1 — UNZIP
+- Unzip the bundle into a fixed folder, for example:
+  ~/muse-relay (Linux/macOS) or D:\muse-relay (Windows).
+- Do all later steps inside that folder.
+
+STEP 2 — CREATE THE PYTHON ENVIRONMENT
+Run inside the folder you just unzipped:
+
+    python3 -m venv .venv
+    source .venv/bin/activate        (Windows: .venv\Scripts\activate)
+    pip install -r requirements.txt
+
+requirements.txt only contains the libraries that are needed (requests) — it installs quickly.
+
+STEP 3 — FILL IN THE 3 PUBLIC VALUES (config.json)
+Open config.json and put in these values (the owner gave them in the
+instruction — none of them is secret):
+
+    SUPABASE_PROJECT_ID      e.g. jnmi… (20 letters)
+    SUPABASE_PUBLISHABLE_KEY e.g. sb_publishable_…
+    SUPABASE_URL             https://<project id>.supabase.co
+    MUSE_EMAIL               e.g. muse_design@muserelay.local
+
+Write them into config.json yourself — the owner never touches the folder.
+
+STEP 4 — THE ONE SECRET: RELAY PASSWORD (secure form)
+The password is the ONLY secret. When you are ready to start the client,
+show the owner the secure form labelled "Muse Relay password" so they can
+type it directly (the field is hidden).
+
+- ABSOLUTELY:
+  * Never ask the owner to paste the password into the chat window.
+  * Never print/echo the password to the screen, chat, or any file.
+  * The password must ONLY exist in the MUSE_PASSWORD environment variable
+    of the client process. Never save it into any file.
+- After login, the client keeps a refresh token in state/session.json
+  (permissions 600) so the daemon can restart without the password — that
+  is normal and safe; the password itself is never on disk.
+
+STEP 5 — RUN THE DAEMON (exactly ONE puller per folder)
+The daemon (poller.py) pulls new messages into state/inbox.jsonl and pushes
+replies from outbox/ up to Supabase, ~3 seconds per round.
+
+Start it (Linux/macOS):
+
+    nohup python3 poller.py >> state/poller.log 2>&1 &
+
+or use the helper:  bash start_daemon.sh   (starts only if not running)
+
+Windows (optional, foreground): double-click run.bat — but note the daemon
+is the preferred background runner; run.bat runs muse_client.py instead.
+
+A lockfile (state/puller.lock) makes sure exactly ONE puller runs — if
+muse_client.py is already running, poller.py exits by itself, and the
+other way round. NEVER run both at the same time on purpose.
+
+Optional — systemd auto-restart (Linux):
+Create /etc/systemd/system/muse-relay-<muse_id>.service:
+
+    [Unit]
+    Description=Muse Relay daemon (<muse_id>)
+    After=network-online.target
+
+    [Service]
+    Type=simple
+    WorkingDirectory=/path/to/the/unzipped/folder
+    ExecStart=/path/to/the/unzipped/folder/.venv/bin/python poller.py
+    Restart=always
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+
+Then: sudo systemctl daemon-reload && sudo systemctl enable --now muse-relay-<muse_id>
+(view logs with: journalctl -u muse-relay-<muse_id> -f, or tail state/poller.log)
+
+STEP 6 — CONFIRM THE DAEMON IS LISTENING
+Read the log (tail -f state/poller.log). On success you see:
+
+    daemon start — GoTrue login, RLS-isolated, one puller, ~3s per round
+    (then, on the first message: "inbox +N new messages, cursor=…")
+
+A login failure prints "fatal: …" — most often the owner typed the
+password wrong: show the secure form again and restart the daemon.
+
+STEP 7 — WAIT FOR A TEST MESSAGE AND REPLY TO IT
+- The owner sends a test message from the web UI; the daemon moves it into
+  state/inbox.jsonl (one JSON per line; only process lines with role="user").
+- Reply by writing the file outbox/<thread_id>.txt (UTF-8) — 1 file = 1
+  message for that thread. The daemon pushes it and deletes the file.
+- The owner confirms the reply arrived → setup is complete.
+
+STEP 8 — READ AGENTS.md CAREFULLY
+Read all of AGENTS.md in the same folder and FOLLOW IT FOREVER: the
+Dropbox-only rule for assets, the inbox/outbox protocol, the prohibitions,
+and the capability limits from the project's tags.
+
+ADDITIONAL NOTES
+
+1) How often does the daemon poll?
+- Every ~3 seconds. A hook wakes Muse within ~10 seconds when a new message
+  arrives; Muse's schedule also starts the daemon every 3 minutes if it died.
+
+2) What if the daemon dies?
+- Transient network error → the daemon backs off by itself (1, 2, 4 … 60s).
+- Machine restart → start_daemon.sh (or systemd) brings it back; the saved
+  session (state/session.json) re-logins without the password.
+- The cursor in state/cursor.json is atomic and persistent: processed
+  messages are never re-read, new messages are never missed. NEVER edit
+  cursor.json by hand; if it is corrupt, ask the owner — do not delete it.
+
+3) What can this Muse see?
+- Only its own project's data. Every request is RLS-scoped by its own
+  login: messages for other Muses are INVISIBLE to this client.

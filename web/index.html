@@ -1,13 +1,17 @@
 <!DOCTYPE html>
 <!--
-  Muse Relay v2 — Web UI (MỘT file duy nhất, không build step)
-  - Dark theme theo design system (token-only, mọi màu nằm trong :root).
-  - Chạy local: mở terminal trong thư mục web/ rồi chạy `python -m http.server`,
-    sau đó mở http://localhost:8000 (fetch templates qua file:// sẽ fail).
-  - Keys Supabase chỉ lưu trong localStorage (mr_supabase_url / mr_anon_key / mr_service_key),
-    KHÔNG có key thật nào nằm trong file này.
+  Muse Relay — Web UI (single static file, served by serve.py)
+  - Dark theme per the design system (token-only, every color lives in :root).
+  - Layout: collapsible tree sidebar (each Muse = a group of threads) + main chat area.
+    "＋ New Muse" lives at the top-right of the main header.
+  - NO keys live in the browser: all Supabase calls go through the local server
+    (serve.py) which reads .env — /sb proxies REST (secret key server-side),
+    /api/events streams new messages over SSE.
+  - Each Muse logs in with its own GoTrue email/password → RLS locks it to its
+    own project (created by the wizard; password via the Muse's secure form).
+  - Run: python3 serve.py  →  http://127.0.0.1:8080
 -->
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -230,7 +234,16 @@ input, textarea { caret-color: var(--caret-color); }
   background: var(--bg-panel);
   border-right: 1px solid var(--border-default);
   display: flex; flex-direction: column;
+  transition: width var(--dur-base) var(--ease-in-out);
 }
+/* Thu gọn sidebar: còn thanh dọc 48px, chỉ còn nút mở rộng */
+#sidebar.collapsed { width: 48px; }
+#sidebar.collapsed .brand-glyph,
+#sidebar.collapsed .brand-name,
+#sidebar.collapsed .side-controls,
+#sidebar.collapsed .side-divider,
+#sidebar.collapsed #projList { display: none; }
+#sidebar.collapsed .brand-row { justify-content: center; padding: 0; }
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
 /* ================================================================
@@ -269,39 +282,85 @@ input, textarea { caret-color: var(--caret-color); }
 .side-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: var(--sp-4) var(--sp-3); line-height: 1.6; }
 .search-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: var(--sp-4) var(--sp-3); }
 
-/* Thẻ project */
-.proj-card {
-  position: relative;
-  display: block;
-  margin: 0 var(--sp-2) var(--sp-1);
-  padding: var(--sp-2) var(--sp-3);
+/* ================================================================
+   E2. SIDEBAR TREE — mỗi Muse là 1 group (folder), thread là lá
+   ================================================================ */
+.muse-group { margin: 0 var(--sp-2) 2px; }
+.group-head {
+  display: flex; align-items: center; gap: 4px;
+  height: 32px;
+  padding: 0 var(--sp-2);
   border-radius: var(--radius-input);
   cursor: pointer;
-  border: none;
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  width: auto;
+  user-select: none;
   transition: background-color var(--dur-fast) var(--ease-out);
 }
-.proj-card:hover { background: var(--bg-hover); }
-.proj-card.selected { background: var(--bg-selected); box-shadow: inset 2px 0 0 var(--accent), var(--shadow-sm); }
-.proj-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-input); }
+.group-head:hover { background: var(--bg-hover); }
+.group-head.selected { background: var(--bg-selected); box-shadow: inset 2px 0 0 var(--accent); }
+.group-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.group-caret {
+  appearance: none; border: none; background: transparent;
+  width: 16px; height: 16px; padding: 0; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 9px;
+  border-radius: 4px; cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.group-caret:hover { color: var(--text-primary); background: var(--bg-surface); }
+.group-caret.closed { transform: rotate(-90deg); }
+.group-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-head .badge { margin-left: 0; }
+.group-actions { display: none; gap: 2px; flex-shrink: 0; }
+.group-head:hover .group-actions, .group-head:focus-within .group-actions { display: inline-flex; }
 
-.proj-top { display: flex; align-items: center; gap: var(--sp-1); }
-.proj-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.proj-time { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
-/* Thẻ không chọn: hover-reveal — ⋮ hiện thay chỗ giờ; thẻ SELECTED: giữ giờ, ⋮ đứng ngay cạnh trái giờ (gap 4px) */
-.proj-card:hover:not(.selected) .proj-time { display: none; }
+.group-threads { margin: 1px 0 2px; }
+.thread-row {
+  display: flex; align-items: center; gap: 4px;
+  height: 30px;
+  margin: 1px 0 0 var(--sp-4);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-input);
+  cursor: pointer;
+  font-size: 13px; color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.thread-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+.thread-row.selected { background: var(--bg-selected); color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
+.thread-row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.thread-row .t-ico { width: 14px; flex-shrink: 0; text-align: center; font-size: 10px; color: var(--text-muted); }
+.thread-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thread-menu { display: none; flex-shrink: 0; }
+.thread-row:hover .thread-menu, .thread-row:focus-within .thread-menu { display: inline-flex; }
+/* Thread đang pin (hiện ở section Pinned đầu sidebar): prefix tên Muse */
+.thread-row .pm { flex-shrink: 0; color: var(--text-muted); font-size: 12px; }
+.thread-row .pm strong { color: var(--text-secondary); font-weight: 600; }
 
-.proj-mid { display: flex; align-items: center; gap: 6px; margin-top: var(--sp-1); }
-.proj-id { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
-.proj-prev { display: flex; gap: 2px; margin-top: var(--sp-1); font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.prev-role { font-weight: 500; color: var(--text-secondary); flex-shrink: 0; }
-.prev-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thread-empty { margin: 1px 0 0 var(--sp-4); padding: 3px var(--sp-2); font-size: 12px; color: var(--text-muted); }
 
-.card-menu { display: none; flex-shrink: 0; }
-.proj-card:hover .card-menu, .proj-card.selected .card-menu, .proj-card:focus-visible .card-menu { display: inline-flex; }
+.show-more {
+  appearance: none; border: none; background: transparent;
+  display: flex; align-items: center;
+  width: calc(100% - var(--sp-4));
+  margin: 2px 0 0 var(--sp-4);
+  height: 26px; padding: 0 var(--sp-2);
+  border-radius: var(--radius-input);
+  font: 500 12px/1 var(--font-sans);
+  color: var(--text-muted);
+  cursor: pointer; text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.show-more:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* Section PINNED — thread được pin dồn lên đầu sidebar, prefix tên Muse */
+.pinned-label {
+  display: flex; align-items: center; gap: 6px;
+  height: 24px;
+  margin: var(--sp-1) var(--sp-2) 2px;
+  padding: 0 var(--sp-2);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.pinned-label .pico { color: var(--warning-text); font-size: 11px; }
 
 /* Chip tag 3 màu — một hàm class duy nhất cho sidebar + header */
 .chips { display: inline-flex; gap: var(--sp-1); align-items: center; flex-shrink: 0; }
@@ -354,6 +413,8 @@ input, textarea { caret-color: var(--caret-color); }
 #hdrName { font-weight: 600; font-size: 14px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30%; }
 #hdrName.dim { color: var(--text-muted); }
 #hdrMuseId { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+#hdrThread { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+#hdrThread::before { content: '›'; margin-right: 6px; color: var(--text-muted); }
 #rtLabel {
   font-size: 11px; color: var(--warning-text);
   background: var(--warning-bg);
@@ -566,6 +627,8 @@ input, textarea { caret-color: var(--caret-color); }
 .ph-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .panel-body { padding: var(--sp-6); overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-4); }
 .panel-foot { padding: var(--sp-4) var(--sp-6); border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: var(--sp-2); flex-shrink: 0; }
+.panel-foot.split { justify-content: space-between; }
+.panel-foot .pf-left, .panel-foot .pf-right { display: flex; gap: var(--sp-2); }
 
 /* Stepper */
 .stepper { display: flex; align-items: center; justify-content: center; margin-bottom: var(--sp-5); }
@@ -755,24 +818,21 @@ input, textarea { caret-color: var(--caret-color); }
 </head>
 <body>
 
-<!-- ===================== KHUNG CHÍNH: SIDEBAR + KHỐI PHẢI ===================== -->
+<!-- ===================== MAIN FRAME: SIDEBAR (tree) + MAIN ===================== -->
 <div id="app" hidden>
   <aside id="sidebar">
     <div class="brand-row">
       <span class="brand-glyph" aria-hidden="true">✦</span>
       <span class="brand-name">Muse Relay</span>
-      <button type="button" id="btnGear" class="icon-btn" aria-label="Mở Settings — kết nối Supabase" title="Settings — kết nối Supabase">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      </button>
+      <button type="button" id="btnCollapse" class="icon-btn" aria-label="Collapse sidebar" title="Collapse sidebar">«</button>
     </div>
     <div class="side-controls">
       <div class="search-wrap">
         <span class="search-ico" aria-hidden="true">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </span>
-        <input id="searchInput" type="text" placeholder="Tìm Muse…" aria-label="Tìm Muse" autocomplete="off">
+        <input id="searchInput" type="text" placeholder="Search Muses…" aria-label="Search Muses" autocomplete="off">
       </div>
-      <button type="button" id="btnNew" class="btn primary block">＋ New</button>
     </div>
     <div class="side-divider" aria-hidden="true"></div>
     <div id="projList"></div>
@@ -784,15 +844,11 @@ input, textarea { caret-color: var(--caret-color); }
         <span id="hdrName" class="dim">Muse Relay</span>
         <span id="hdrMuseId" class="mono"></span>
         <span id="hdrChips" class="chips"></span>
-        <span id="rtLabel" hidden>ⓘ Ngoại tuyến — polling 30s</span>
+        <span id="rtLabel" hidden>ⓘ Offline — polling 30s</span>
+        <span id="hdrThread" class="trunc" hidden></span>
       </div>
-      <div id="hdrRight" hidden>
-        <button type="button" id="btnThreadMenu" class="btn secondary sm" aria-label="Chọn thread">
-          <span id="threadLabel" class="trunc" style="max-width:180px">Chọn thread</span>
-          <span class="caret" aria-hidden="true">▾</span>
-        </button>
-        <button type="button" id="btnNewThread" class="btn secondary sm">＋ Thread mới</button>
-        <button type="button" id="btnProjMenu" class="icon-btn" aria-label="Menu dự án">⋮</button>
+      <div id="hdrRight">
+        <button type="button" id="btnNew" class="btn primary sm">＋ New Muse</button>
       </div>
     </header>
 
@@ -801,85 +857,44 @@ input, textarea { caret-color: var(--caret-color); }
     <div id="composer">
       <div class="composer-row">
         <div class="composer-box">
-          <textarea id="inputMsg" rows="1" placeholder="Nhập tin nhắn cho Muse…" aria-label="Nhập tin nhắn cho Muse"></textarea>
+          <textarea id="inputMsg" rows="1" placeholder="Message your Muse…" aria-label="Message your Muse"></textarea>
         </div>
-        <button type="button" id="btnSend" class="send-btn" aria-label="Gửi" disabled>
+        <button type="button" id="btnSend" class="send-btn" aria-label="Send" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
         </button>
       </div>
-      <div id="composerHint">Enter để gửi · Shift+Enter để xuống dòng</div>
+      <div id="composerHint">Enter to send · Shift+Enter for a new line</div>
     </div>
   </section>
 </div>
 
-<!-- ===================== MÀN SETTINGS (B.6) ===================== -->
-<div id="settingsLayer" class="settings-layer" hidden>
-  <div class="settings-head">
-    <div class="settings-glyph" aria-hidden="true">✦</div>
-    <h1>Muse Relay</h1>
-    <p>Kết nối Supabase của bạn để quản lý Muse</p>
-  </div>
-  <div class="settings-card">
-    <div class="f-group">
-      <label class="f-label" for="setUrl">SUPABASE_URL</label>
-      <input id="setUrl" class="f-input mono" type="text" autocomplete="off" spellcheck="false" placeholder="https://abcdefgh.supabase.co">
-    </div>
-    <div class="f-group">
-      <label class="f-label" for="setAnon">ANON_KEY</label>
-      <div class="pw-wrap">
-        <input id="setAnon" class="f-input mono" type="password" autocomplete="off" placeholder="●●●●●●●●●●●●">
-        <button type="button" class="icon-btn small eye-btn" id="eyeAnon" aria-label="Hiện key">
-          <svg class="ico-eye" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          <svg class="ico-eyeoff" hidden width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="f-group">
-      <label class="f-label" for="setService">SERVICE_KEY</label>
-      <div class="pw-wrap">
-        <input id="setService" class="f-input mono" type="password" autocomplete="off" placeholder="●●●●●●●●●●●●">
-        <button type="button" class="icon-btn small eye-btn" id="eyeService" aria-label="Hiện key">
-          <svg class="ico-eye" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          <svg class="ico-eyeoff" hidden width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-        </button>
-      </div>
-      <div class="f-hint">Dùng service_role JWT legacy (bắt đầu bằng eyJ...) — key mới sb_secret_ bị Supabase chặn khi gọi từ trình duyệt (401).</div>
-    </div>
-    <button type="button" id="btnCheck" class="btn primary block lg">Kiểm tra kết nối</button>
-    <div id="setStatus" class="set-status" hidden></div>
-    <div class="set-hint">Key chỉ lưu trong localStorage của máy bạn, không nằm trong code. Mở lại màn này bất cứ lúc nào bằng nút bánh răng góc trên trái. Xem <a href="../README.md" target="_blank" rel="noopener">README</a> để biết cách lấy URL và key Supabase.</div>
-  </div>
-</div>
-
-<!-- ===================== WIZARD NEW MUSE — 3 BƯỚC (B.5) ===================== -->
+<!-- ===================== NEW MUSE WIZARD — 2 STEPS ===================== -->
 <div id="modalWizard" class="overlay" hidden>
   <div class="panel" role="dialog" aria-modal="true" aria-labelledby="wizTitle">
     <div class="panel-head">
-      <h2 id="wizTitle">Wizard: New Muse — Bước 1/3</h2>
-      <button type="button" id="wizClose" class="icon-btn" aria-label="Đóng">✕</button>
+      <h2 id="wizTitle">New Muse — Step 1/2</h2>
+      <button type="button" id="wizClose" class="icon-btn" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
       <div class="stepper" aria-hidden="true">
-        <div class="step-dot" id="sd1"><span class="dot">1</span><span class="lbl">Thông tin</span></div>
+        <div class="step-dot" id="sd1"><span class="dot">1</span><span class="lbl">Info</span></div>
         <div class="connector" id="sc1"></div>
-        <div class="step-dot" id="sd2"><span class="dot">2</span><span class="lbl">Credentials</span></div>
-        <div class="connector" id="sc2"></div>
-        <div class="step-dot" id="sd3"><span class="dot">3</span><span class="lbl">Tải cài đặt</span></div>
+        <div class="step-dot" id="sd2"><span class="dot">2</span><span class="lbl">Keys &amp; instructions</span></div>
       </div>
 
-      <!-- Bước 1 — form thông tin -->
+      <!-- Step 1 — info form -->
       <div class="step" id="step1">
         <div class="f-group">
-          <label class="f-label" for="wizMuseId">Muse ID <span class="req">*</span></label>
-          <input id="wizMuseId" class="f-input mono" type="text" autocomplete="off" spellcheck="false" placeholder="muse_design">
+          <label class="f-label" for="wizName">Muse name <span class="req">*</span></label>
+          <input id="wizName" class="f-input" type="text" autocomplete="off" placeholder="Design Muse">
+        </div>
+        <div class="f-group">
+          <label class="f-label" for="wizMuseId">Muse ID <span class="req">*</span> <span class="f-note">(auto-slugged from the name — editable)</span></label>
+          <input id="wizMuseId" class="f-input mono" type="text" autocomplete="off" spellcheck="false" placeholder="design_muse">
           <div id="wizIdFb" class="f-feedback" hidden></div>
         </div>
         <div class="f-group">
-          <label class="f-label" for="wizName">Tên hiển thị <span class="req">*</span></label>
-          <input id="wizName" class="f-input" type="text" autocomplete="off" placeholder="Muse Thiết kế">
-        </div>
-        <div class="f-group">
-          <span class="f-label">Năng lực <span class="f-note">(chọn những gì Muse này làm được)</span></span>
+          <span class="f-label">Capabilities <span class="f-note">(pick what this Muse can do)</span></span>
           <div class="tag-row">
             <label class="toggle-chip c-chat"><input type="checkbox" id="tagChat" value="chat" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">chat</span></label>
             <label class="toggle-chip c-image"><input type="checkbox" id="tagImage" value="image" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">image</span></label>
@@ -888,9 +903,21 @@ input, textarea { caret-color: var(--caret-color); }
         </div>
       </div>
 
-      <!-- Bước 2 — credentials -->
+      <!-- Step 2 — Muse login + setup instruction -->
       <div class="step" id="step2" hidden>
         <div class="creds-frame">
+          <div class="cred-row">
+            <span class="cred-label">Project ID</span>
+            <span class="cred-value" id="wizPid">—</span>
+            <button type="button" class="btn mini secondary" id="cpyPid">Copy</button>
+          </div>
+          <div class="cred-sep" aria-hidden="true"></div>
+          <div class="cred-row">
+            <span class="cred-label">Publishable</span>
+            <span class="cred-value" id="wizPub">—</span>
+            <button type="button" class="btn mini secondary" id="cpyPub">Copy</button>
+          </div>
+          <div class="cred-sep" aria-hidden="true"></div>
           <div class="cred-row">
             <span class="cred-label">Email</span>
             <span class="cred-value" id="wizEmail">—</span>
@@ -903,52 +930,39 @@ input, textarea { caret-color: var(--caret-color); }
             <button type="button" class="btn mini secondary" id="cpyPass">Copy</button>
           </div>
         </div>
-        <div class="callout warn"><span class="ico">⚠</span><span>Lưu ngay — form cài đặt trên máy Muse sẽ hỏi 2 giá trị này. Không gửi qua chat và sẽ không hiện lại lần sau.</span></div>
-      </div>
-
-      <!-- Bước 3 — zip + setup_guide.txt -->
-      <div class="step" id="step3" hidden>
-        <div class="zip-card">
-          <span class="zip-icon" aria-hidden="true">⬇</span>
-          <div class="zip-meta">
-            <span class="zip-name" id="zipName">muse_…_setup.zip</span>
-            <span class="zip-sub" id="zipSub">7 file · đóng gói bằng JSZip</span>
-          </div>
-          <button type="button" class="btn primary" id="btnZip" disabled>Tải zip</button>
-        </div>
-        <div id="zipErr" class="callout danger" hidden><span class="ico">⚠</span><span>Không đọc được templates — hãy chạy `python -m http.server` trong thư mục web/ rồi mở lại.</span></div>
+        <div class="callout warn"><span class="ico">⚠</span><span>Save the password now — paste it into the Muse's secure form when it asks. It stays available anytime via ⚙ → Token.</span></div>
         <div class="guide-head">
-          <span>setup_guide.txt</span>
-          <button type="button" class="btn mini secondary" id="cpyGuide" aria-label="Copy nội dung hướng dẫn">Copy</button>
+          <span>Instruction for your Muse</span>
+          <button type="button" class="btn mini secondary" id="cpyInstr" aria-label="Copy the instruction">Copy</button>
         </div>
-        <textarea id="guideBox" class="guide-box" readonly aria-label="Nội dung setup_guide.txt"></textarea>
-        <div class="callout warn"><span class="ico">⚠</span><span>Gửi tệp zip + toàn bộ nội dung txt này cho Muse. Bộ cài KHÔNG chứa secret nào.</span></div>
+        <textarea id="instrBox" class="guide-box" readonly aria-label="Instruction to paste into your Muse's chat"></textarea>
+        <div class="callout warn"><span class="ico">⚠</span><span>Paste the whole instruction into your Muse's chat. The password never appears inside it — you type it into the Muse's secure form.</span></div>
       </div>
     </div>
     <div class="panel-foot">
-      <button type="button" class="btn secondary" id="btnWizCancel">Hủy</button>
-      <button type="button" class="btn secondary" id="btnWizBack" hidden>← Quay lại</button>
-      <button type="button" class="btn primary" id="btnWizNext">Tiếp tục →</button>
-      <button type="button" class="btn secondary" id="btnWizDone" hidden>Đóng</button>
+      <button type="button" class="btn secondary" id="btnWizCancel">Cancel</button>
+      <button type="button" class="btn secondary" id="btnWizBack" hidden>← Back</button>
+      <button type="button" class="btn primary" id="btnWizNext">Continue →</button>
+      <button type="button" class="btn secondary" id="btnWizDone" hidden>Done</button>
     </div>
   </div>
 </div>
 
-<!-- ===================== MODAL TOKEN (B.7) ===================== -->
+<!-- ===================== TOKEN MODAL (B.7) ===================== -->
 <div id="modalToken" class="overlay" hidden>
   <div class="panel sm" role="dialog" aria-modal="true" aria-labelledby="tokTitle">
     <div class="panel-head">
       <div class="ph-stack">
-        <h2 id="tokTitle">Token đăng nhập của Muse</h2>
+        <h2 id="tokTitle">Muse login token</h2>
         <div class="ph-sub" id="tokName">—</div>
       </div>
-      <button type="button" id="tokClose" class="icon-btn" aria-label="Đóng">✕</button>
+      <button type="button" id="tokClose" class="icon-btn" aria-label="Close">✕</button>
     </div>
     <div class="panel-body">
       <div id="tokSkeleton" hidden>
         <div class="skel-row"></div>
         <div class="skel-row"></div>
-        <div class="skel-note">Đang tải…</div>
+        <div class="skel-note">Loading…</div>
       </div>
       <div id="tokRows" hidden>
         <div class="cred-row">
@@ -963,36 +977,109 @@ input, textarea { caret-color: var(--caret-color); }
           <button type="button" class="btn mini secondary" id="cpyTokSecret">Copy</button>
         </div>
       </div>
-      <div class="callout note"><span class="ico">ⓘ</span><span>Secret chính là mật khẩu đăng nhập Supabase của Muse — chỉ chủ sở hữu nhìn thấy.</span></div>
+      <div class="callout note"><span class="ico">ⓘ</span><span>The Muse's login password (paired with the Email above) — RLS locks this Muse to its own project. Visible only to the owner.</span></div>
     </div>
   </div>
 </div>
 
-<!-- ===================== MODAL XÓA MUSE (B.7) ===================== -->
+<!-- ===================== DELETE MUSE MODAL (B.7) ===================== -->
 <div id="modalDelete" class="overlay" hidden>
   <div class="panel sm" role="dialog" aria-modal="true" aria-labelledby="delTitle">
     <div class="panel-body">
       <div class="del-head">
         <span class="del-icon" aria-hidden="true">⚠</span>
-        <h2 id="delTitle">Xóa Muse này?</h2>
+        <h2 id="delTitle">Delete this Muse?</h2>
       </div>
       <p class="del-text" id="delText"></p>
       <div class="del-actions">
-        <button type="button" class="btn secondary" id="btnDelCancel">Hủy</button>
-        <button type="button" class="btn danger" id="btnDelConfirm">Xóa Muse</button>
+        <button type="button" class="btn secondary" id="btnDelCancel">Cancel</button>
+        <button type="button" class="btn danger" id="btnDelConfirm">Delete Muse</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Menu dropdown dùng chung (card ⋮, header ⋮, dropdown thread) -->
+<!-- ===================== RENAME THREAD MODAL ===================== -->
+<div id="modalRenameThread" class="overlay" hidden>
+  <div class="panel sm" role="dialog" aria-modal="true" aria-labelledby="renTitle">
+    <div class="panel-head">
+      <h2 id="renTitle">Rename thread</h2>
+      <button type="button" id="renClose" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="f-group">
+        <label class="f-label" for="renInput">Thread name</label>
+        <input id="renInput" class="f-input" type="text" autocomplete="off" maxlength="200">
+      </div>
+    </div>
+    <div class="panel-foot">
+      <button type="button" class="btn secondary" id="btnRenCancel">Cancel</button>
+      <button type="button" class="btn primary" id="btnRenSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DELETE THREAD MODAL ===================== -->
+<div id="modalDelThread" class="overlay" hidden>
+  <div class="panel sm" role="dialog" aria-modal="true" aria-labelledby="delThrTitle">
+    <div class="panel-body">
+      <div class="del-head">
+        <span class="del-icon" aria-hidden="true">⚠</span>
+        <h2 id="delThrTitle">Delete this thread?</h2>
+      </div>
+      <p class="del-text" id="delThrText"></p>
+      <div class="del-actions">
+        <button type="button" class="btn secondary" id="btnDelThrCancel">Cancel</button>
+        <button type="button" class="btn danger" id="btnDelThrConfirm">Delete thread</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MUSE CONFIG MODAL (rename + capabilities) ===================== -->
+<div id="modalMuseCfg" class="overlay" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="cfgTitle">
+    <div class="panel-head">
+      <div class="ph-stack">
+        <h2 id="cfgTitle">Muse settings</h2>
+        <div class="ph-sub" id="cfgSub">—</div>
+      </div>
+      <button type="button" id="cfgClose" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="f-group">
+        <label class="f-label" for="cfgName">Display name</label>
+        <input id="cfgName" class="f-input" type="text" autocomplete="off" maxlength="80">
+      </div>
+      <div class="f-group">
+        <span class="f-label">Capabilities <span class="f-note">(what this Muse can do)</span></span>
+        <div class="tag-row" id="cfgTags">
+          <label class="toggle-chip c-chat"><input type="checkbox" value="chat" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">chat</span></label>
+          <label class="toggle-chip c-image"><input type="checkbox" value="image" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">image</span></label>
+          <label class="toggle-chip c-video"><input type="checkbox" value="video" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">video</span></label>
+        </div>
+      </div>
+      <div class="f-hint">Changes apply to this admin UI immediately; the Muse client picks up new capabilities on its next restart.</div>
+    </div>
+    <div class="panel-foot split">
+      <div class="pf-left">
+        <button type="button" class="btn secondary sm" id="btnCfgToken">Token</button>
+        <button type="button" class="btn danger sm" id="btnCfgDelete">Delete Muse</button>
+      </div>
+      <div class="pf-right">
+        <button type="button" class="btn secondary" id="btnCfgCancel">Cancel</button>
+        <button type="button" class="btn primary" id="btnCfgSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Shared dropdown menu (thread ⋯ menu) -->
 <div id="ctxMenu" role="menu" hidden></div>
 
 <!-- Toast container -->
 <div id="toasts" aria-live="polite"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.2"></script>
 <script>
 'use strict';
 (function () {
@@ -1011,47 +1098,62 @@ function el(tag, cls, text) {
 /* ================================================================
    HẰNG SỐ
    ================================================================ */
-const LS_KEYS = { url: 'mr_supabase_url', anon: 'mr_anon_key', service: 'mr_service_key' };
+const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed' };
 const RE_MUSE_ID = /^[a-z0-9_]{3,40}$/;
-// Nhận dạng link Dropbox theo spec §3: dropbox.com (kể cả www) hoặc dl.dropboxusercontent.com
+// Zip tĩnh host trên branch `web` — dùng link raw để Muse tải thẳng được
+const SETUP_ZIP_URL = 'https://raw.githubusercontent.com/phuongdev89/muse-relay/web/muse-relay.zip';
+// Dropbox link recognition per spec §3: dropbox.com (incl. www) or dl.dropboxusercontent.com
 const RE_DROPBOX = /https:\/\/(www\.)?dropbox\.com\/\S+|https:\/\/dl\.dropboxusercontent\.com\/\S+/g;
 const RE_DB_A = /^https:\/\/(www\.)?dropbox\.com\/\S+$/;
 const RE_DB_B = /^https:\/\/dl\.dropboxusercontent\.com\/\S+$/;
 const CHIP_ORDER = ['chat', 'image', 'video'];
-const TEMPLATE_FILES = ['muse_client.py', 'AGENTS.md', 'setup_guide.txt', 'env.template', 'requirements.txt', 'run.sh', 'run.bat'];
 const POLL_FALLBACK_MS = 30000;
 const COMPOSER_MAX_H = 160;
 const MSG_BATCH_LIMIT = 200;
+const THREADS_PAGE = 5; // mỗi lần "Show more" mở thêm 5 thread
 
 /* ================================================================
    TRẠNG THÁI CLIENT (theo architecture A5)
    ================================================================ */
-function loadSettings() {
-  return {
-    url: localStorage.getItem(LS_KEYS.url) || '',
-    anonKey: localStorage.getItem(LS_KEYS.anon) || '',
-    serviceKey: localStorage.getItem(LS_KEYS.service) || ''
-  };
+/* Keys KHÔNG còn trong browser — serve.py đọc .env và đứng ra proxy mọi call Supabase. */
+
+/* Pin thread: lưu localStorage (mr_pinned_threads) — không cần đổi schema DB.
+   Thread đang pin dồn lên section Pinned đầu sidebar, prefix tên Muse. */
+function loadPins() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_KEYS.pin) || '[]');
+    return Array.isArray(v) ? v.filter(function (x) { return typeof x === 'number'; }) : [];
+  } catch (e) { return []; }
+}
+function savePins() {
+  try { localStorage.setItem(LS_KEYS.pin, JSON.stringify(state.pins)); } catch (e) { /* storage đầy/không khả dụng — bỏ qua */ }
 }
 
 const state = {
-  settings: loadSettings(),
+  settings: { projectId: '', publishable: '' },  // từ /config — key public, không secret
   projects: [],          // [{id, muse_id, name, tags[], email, secret, user_id}]
   threads: [],           // [{id, project_id, title, last_read_id}]
   msgs200: [],           // 200 tin mới nhất — nguồn dựng preview/unread
   messagesByThread: new Map(),  // Map<threadId, Message[]>
   preview: new Map(),    // Map<projectId, message cuối>
   unread: new Map(),     // Map<projectId, int>
+  pins: loadPins(),      // [threadId] — pin order
+  groupOpen: new Map(),  // Map<projectId, bool> — mặc định mở
+  groupVisible: new Map(), // Map<projectId, int> — số thread đang hiển thị trong group
+  collapsed: localStorage.getItem(LS_KEYS.sidebar) === '1',
   activeProjectId: null,
   activeThreadId: null,
   realtime: { status: 'offline' },
-  sb: null, channel: null,
+  sse: null,
   pollTimer: null,
   loading: false,
   chatError: null,
   checking: false,
   deleting: false,
   creatingThread: false,
+  renamingThread: false,
+  deletingThread: false,
+  savingCfg: false,
   sending: false
 };
 
@@ -1059,40 +1161,41 @@ const state = {
    CACHE PHẦN TỬ
    ================================================================ */
 const app = E('app');
+const sidebarEl = E('sidebar');
 const projList = E('projList');
 const searchInput = E('searchInput');
+const btnCollapse = E('btnCollapse');
 const btnNew = E('btnNew');
-const btnGear = E('btnGear');
 const hdrName = E('hdrName');
 const hdrMuseId = E('hdrMuseId');
 const hdrChips = E('hdrChips');
+const hdrThread = E('hdrThread');
 const rtLabel = E('rtLabel');
-const hdrRight = E('hdrRight');
-const btnThreadMenu = E('btnThreadMenu');
-const threadLabel = E('threadLabel');
-const btnNewThread = E('btnNewThread');
-const btnProjMenu = E('btnProjMenu');
 const chatArea = E('chatArea');
 const inputMsg = E('inputMsg');
 const btnSend = E('btnSend');
-const settingsLayer = E('settingsLayer');
-const setUrl = E('setUrl'), setAnon = E('setAnon'), setService = E('setService');
-const eyeAnon = E('eyeAnon'), eyeService = E('eyeService');
-const btnCheck = E('btnCheck'), setStatus = E('setStatus');
 const modalWizard = E('modalWizard'), wizTitle = E('wizTitle'), wizClose = E('wizClose');
-const sd1 = E('sd1'), sd2 = E('sd2'), sd3 = E('sd3'), sc1 = E('sc1'), sc2 = E('sc2');
-const step1 = E('step1'), step2 = E('step2'), step3 = E('step3');
+const sd1 = E('sd1'), sd2 = E('sd2'), sc1 = E('sc1');
+const step1 = E('step1'), step2 = E('step2');
 const wizMuseId = E('wizMuseId'), wizIdFb = E('wizIdFb'), wizName = E('wizName');
 const tagChat = E('tagChat'), tagImage = E('tagImage'), tagVideo = E('tagVideo');
+const wizPid = E('wizPid'), wizPub = E('wizPub');
 const wizEmail = E('wizEmail'), wizPass = E('wizPass');
-const zipName = E('zipName'), zipSub = E('zipSub'), btnZip = E('btnZip'), zipErr = E('zipErr');
-const guideBox = E('guideBox');
+const instrBox = E('instrBox');
 const btnWizCancel = E('btnWizCancel'), btnWizBack = E('btnWizBack'), btnWizNext = E('btnWizNext'), btnWizDone = E('btnWizDone');
 const modalToken = E('modalToken'), tokName = E('tokName'), tokClose = E('tokClose');
 const tokSkeleton = E('tokSkeleton'), tokRows = E('tokRows');
 const tokEmail = E('tokEmail'), tokSecret = E('tokSecret');
 const modalDelete = E('modalDelete'), delText = E('delText');
 const btnDelCancel = E('btnDelCancel'), btnDelConfirm = E('btnDelConfirm');
+const modalRenameThread = E('modalRenameThread'), renInput = E('renInput');
+const renClose = E('renClose'), btnRenCancel = E('btnRenCancel'), btnRenSave = E('btnRenSave');
+const modalDelThread = E('modalDelThread'), delThrText = E('delThrText');
+const btnDelThrCancel = E('btnDelThrCancel'), btnDelThrConfirm = E('btnDelThrConfirm');
+const modalMuseCfg = E('modalMuseCfg'), cfgSub = E('cfgSub'), cfgName = E('cfgName'), cfgClose = E('cfgClose');
+const cfgTags = E('cfgTags');
+const btnCfgToken = E('btnCfgToken'), btnCfgDelete = E('btnCfgDelete');
+const btnCfgCancel = E('btnCfgCancel'), btnCfgSave = E('btnCfgSave');
 const ctxMenu = E('ctxMenu');
 const toasts = E('toasts');
 
@@ -1128,7 +1231,7 @@ function toast(o) {
   }
   const x = document.createElement('button');
   x.type = 'button'; x.className = 'icon-btn xsmall';
-  x.setAttribute('aria-label', 'Đóng thông báo');
+  x.setAttribute('aria-label', 'Dismiss notification');
   x.textContent = '✕';
   x.addEventListener('click', kill);
   t.appendChild(ic); t.appendChild(body); t.appendChild(x);
@@ -1147,24 +1250,23 @@ function toastOnce(key, ttlMs, o) {
 }
 
 function errText(e) {
-  if (!e) return 'lỗi không rõ';
+  if (!e) return 'unknown error';
   if (e.network) return e.message;
-  if (e.status) return e.status + ' — ' + (e.message || 'lỗi từ Supabase');
-  return e.message || 'lỗi không rõ';
+  if (e.status) return e.status + ' — ' + (e.message || 'error from Supabase');
+  return e.message || 'unknown error';
 }
 function toastError(title, e) { toast({ kind: 'error', title: title, detail: errText(e) }); }
-// 401/403 đã được rest()/adminReq() toast riêng (sticky + nút Mở Settings) — tránh double toast
+// 401/403 already get their own toast in rest()/adminReq() (sticky + Open Settings button) — avoid double toasts
 function toastErrNoAuth(title, e) {
   if (e && (e.status === 401 || e.status === 403)) return;
   toastError(title, e);
 }
-// 401/403: toast giữ đến khi tương tác, kèm nút Mở Settings — không in giá trị key
+// 401/403: sticky toast — key nằm trong .env, sửa xong restart serve.py
 function toastAuth(status) {
   toast({
     kind: 'error', sticky: true,
-    title: status + ' — key bị từ chối',
-    detail: 'SERVICE_KEY không hợp lệ hoặc đã bị đổi. Mở Settings để kiểm tra lại.',
-    action: { label: 'Mở Settings', fn: function () { openSettings('gear'); } }
+    title: status + ' — key rejected',
+    detail: 'SUPABASE_SECRET_KEY in .env is invalid or was rotated. Fix the file and restart serve.py.'
   });
 }
 
@@ -1188,11 +1290,11 @@ async function copyText(text, btn) {
   }
   if (ok && btn) {
     const old = btn.textContent;
-    btn.textContent = '✓ Đã copy';
+    btn.textContent = '✓ Copied';
     btn.classList.add('copied');
     setTimeout(function () { btn.textContent = old; btn.classList.remove('copied'); }, 1200);
   } else if (!ok) {
-    toast({ kind: 'warn', title: 'Không copy được tự động', detail: 'Hãy bôi đen và copy thủ công.' });
+    toast({ kind: 'warn', title: 'Could not copy automatically', detail: 'Select the text and copy manually.' });
   }
   return ok;
 }
@@ -1216,38 +1318,23 @@ function btnBusy(btn, on, busyLabel) {
 }
 
 /* ================================================================
-   THỜI GIAN — vi-VN
+   TIME — en-US
    ================================================================ */
 function dateOf(iso) { const d = new Date(iso); return isNaN(d.getTime()) ? null : d; }
 function pad2(n) { return String(n).padStart(2, '0'); }
-function fmtHM(d) { return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }); }
-function fmtFull(d) { return fmtHM(d) + ' · ' + pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + '/' + d.getFullYear(); }
-function relTime(iso) {
-  const d = dateOf(iso);
-  if (!d) return '';
-  const diff = Math.max(0, Date.now() - d.getTime());
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return 'bây giờ';
-  if (m < 60) return m + ' phút';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + ' giờ';
-  const days = Math.floor(h / 24);
-  if (days < 7) return days + ' ngày';
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + (sameYear ? '' : '/' + d.getFullYear());
-}
+function fmtHM(d) { return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); }
+function fmtFull(d) { return fmtHM(d) + ' · ' + pad2(d.getMonth() + 1) + '/' + pad2(d.getDate()) + '/' + d.getFullYear(); }
 
 /* ================================================================
-   REST HELPER — mọi call PostgREST bằng SERVICE key (bypass RLS)
+   REST HELPER — mọi call đi qua serve.py (/sb proxy), key nằm server-side
    ================================================================ */
-function baseUrl() { return state.settings.url.replace(/\/+$/, ''); }
+function baseUrl() {
+  return '/sb';
+}
 
 async function rest(path, opts) {
   opts = opts || {};
-  const headers = {
-    'apikey': state.settings.serviceKey,
-    'Authorization': 'Bearer ' + state.settings.serviceKey
-  };
+  const headers = {};
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (opts.prefer) headers['Prefer'] = opts.prefer;
   let res;
@@ -1258,11 +1345,11 @@ async function rest(path, opts) {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
     });
   } catch (e) {
-    throw { network: true, message: 'Không kết nối được Supabase — kiểm tra mạng hoặc URL.' };
+    throw { network: true, message: 'Could not reach serve.py — is the local server still running?' };
   }
   if (res.status === 401 || res.status === 403) {
     toastAuth(res.status);
-    throw { status: res.status, message: 'SERVICE_KEY bị từ chối' };
+    throw { status: res.status, message: 'SECRET_KEY rejected' };
   }
   if (!res.ok && res.status !== 204) {
     let msg = 'HTTP ' + res.status;
@@ -1270,20 +1357,17 @@ async function rest(path, opts) {
       const j = await res.json();
       if (j && j.message) msg = j.message;
       else if (j && j.error) msg = j.error;
-    } catch (e2) { /* body không phải JSON — giữ msg mặc định */ }
+    } catch (e2) { /* body is not JSON — keep default msg */ }
     throw { status: res.status, message: msg };
   }
   if (res.status === 204) return null;
   try { return await res.json(); } catch (e3) { return null; }
 }
 
-/* GoTrue admin (tạo/xóa user của Muse) — fetch trực tiếp, KHÔNG qua supabase-js */
+/* GoTrue admin (tạo/xóa user ngầm của Muse) — qua /sb proxy */
 async function adminReq(path, opts) {
   opts = opts || {};
-  const headers = {
-    'apikey': state.settings.serviceKey,
-    'Authorization': 'Bearer ' + state.settings.serviceKey
-  };
+  const headers = {};
   if (opts.body) headers['Content-Type'] = 'application/json';
   let res;
   try {
@@ -1293,11 +1377,11 @@ async function adminReq(path, opts) {
       body: opts.body ? JSON.stringify(opts.body) : undefined
     });
   } catch (e) {
-    throw { network: true, message: 'Không kết nối được Supabase.' };
+    throw { network: true, message: 'Could not reach Supabase.' };
   }
   if (res.status === 401 || res.status === 403) {
     toastAuth(res.status);
-    throw { status: res.status, message: 'SERVICE_KEY bị từ chối' };
+    throw { status: res.status, message: 'SECRET_KEY rejected' };
   }
   if (!res.ok && res.status !== 204 && res.status !== 404) {
     let msg = 'HTTP ' + res.status;
@@ -1312,109 +1396,9 @@ async function adminReq(path, opts) {
 }
 
 /* ================================================================
-   SETTINGS — màn đầu + kiểm tra kết nối (spec §8)
-   ================================================================ */
-let settingsMode = 'first'; // 'first' = lần đầu chưa có key; 'gear' = mở lại từ app
-
-function openSettings(mode) {
-  settingsMode = mode;
-  setUrl.value = state.settings.url;
-  setAnon.value = state.settings.anonKey;
-  setService.value = state.settings.serviceKey;
-  setStatus.hidden = true;
-  setStatus.className = 'set-status';
-  setStatus.textContent = '';
-  if (mode === 'first') app.hidden = true;
-  settingsLayer.hidden = false;
-  setUrl.focus();
-}
-
-function setEye(btn, show) {
-  const eye = btn.querySelector('.ico-eye');
-  const off = btn.querySelector('.ico-eyeoff');
-  eye.hidden = !show;
-  off.hidden = show;
-  btn.setAttribute('aria-label', show ? 'Ẩn key' : 'Hiện key');
-}
-eyeAnon.addEventListener('click', function () {
-  const show = setAnon.type === 'password';
-  setAnon.type = show ? 'text' : 'password';
-  setEye(eyeAnon, show);
-});
-eyeService.addEventListener('click', function () {
-  const show = setService.type === 'password';
-  setService.type = show ? 'text' : 'password';
-  setEye(eyeService, show);
-});
-
-async function checkConnection() {
-  if (state.checking) return;
-  const url = setUrl.value.trim().replace(/\/+$/, '');
-  const anon = setAnon.value.trim();
-  const svc = setService.value.trim();
-  function fail(msg) {
-    setStatus.hidden = false;
-    setStatus.className = 'set-status bad';
-    setStatus.textContent = '✕ ' + msg;
-    toast({ kind: 'error', title: 'Kết nối thất bại', detail: msg });
-  }
-  if (!/^https:\/\/.+/.test(url)) { fail('URL không hợp lệ — phải bắt đầu bằng https://'); return; }
-  if (!anon || !svc) { fail('Thiếu ANON_KEY hoặc SERVICE_KEY.'); return; }
-  state.checking = true;
-  btnBusy(btnCheck, true, 'Đang kiểm tra…');
-  try {
-    const r = await fetch(url + '/rest/v1/projects?select=id&limit=1', {
-      headers: { 'apikey': svc, 'Authorization': 'Bearer ' + svc }
-    });
-    if (r.status === 401 && svc.indexOf('sb_secret_') === 0) {
-      // Key mới dạng sb_secret_ bị Supabase chặn khi gọi từ trình duyệt (401) —
-      // chỉ service_role JWT legacy dùng được từ web UI.
-      fail('401 — key sb_secret_ bị Supabase chặn từ trình duyệt. Hãy dùng service_role JWT legacy (eyJ...).');
-    } else if (r.status === 401 || r.status === 403) {
-      fail(r.status + ' — service key không hợp lệ. Kiểm tra lại SERVICE_KEY.');
-    } else if (!r.ok) {
-      fail(r.status + ' — Supabase từ chối yêu cầu.');
-    } else {
-      state.settings = { url: url, anonKey: anon, serviceKey: svc };
-      localStorage.setItem(LS_KEYS.url, url);
-      localStorage.setItem(LS_KEYS.anon, anon);
-      localStorage.setItem(LS_KEYS.service, svc);
-      setStatus.hidden = false;
-      setStatus.className = 'set-status ok';
-      setStatus.textContent = '✓ Kết nối thành công — đã lưu trên máy này (localStorage)';
-      toast({ kind: 'success', title: 'Kết nối thành công', detail: 'Đã lưu trên máy này — lần sau vào thẳng.' });
-      setTimeout(function () {
-        settingsLayer.hidden = true;
-        app.hidden = false;
-        boot();
-      }, 600);
-    }
-  } catch (e) {
-    fail('Không kết nối được — kiểm tra mạng hoặc URL.');
-  } finally {
-    state.checking = false;
-    btnBusy(btnCheck, false);
-  }
-}
-btnCheck.addEventListener('click', checkConnection);
-
-/* ================================================================
    BOOT + TẢI DỮ LIỆU LẦN ĐẦU (spec §8 Dữ liệu)
    ================================================================ */
-function teardownRealtime() {
-  if (state.channel && state.sb) {
-    try { state.sb.removeChannel(state.channel); } catch (e) { /* bỏ qua */ }
-  }
-  if (state.sb) {
-    try { state.sb.removeAllChannels(); } catch (e) { /* bỏ qua */ }
-  }
-  state.channel = null;
-  state.sb = null;
-  setRealtime('offline');
-}
-
 function boot() {
-  teardownRealtime();
   state.projects = [];
   state.threads = [];
   state.msgs200 = [];
@@ -1423,10 +1407,25 @@ function boot() {
   state.activeThreadId = null;
   state.chatError = null;
   app.hidden = false;
-  settingsLayer.hidden = true;
   ensurePoll();
   loadData();
   setupRealtime();
+}
+
+/* Khởi động: lấy project id từ serve.py, rồi boot. Lỗi = server chưa chạy / .env thiếu. */
+async function initApp() {
+  try {
+    const r = await fetch('/config');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const cfg = await r.json();
+    state.settings.projectId = cfg.project_id || '';
+    state.settings.publishable = cfg.publishable_key || '';
+    boot();
+  } catch (e) {
+    app.hidden = false;
+    state.chatError = 'serve.py is not reachable — start it with `python3 serve.py` and make sure .env has SUPABASE_PROJECT_ID + SUPABASE_SECRET_KEY.';
+    renderChat();
+  }
 }
 
 async function loadData() {
@@ -1510,66 +1509,140 @@ function chipEl(tag) {
   return c;
 }
 
-function isOnlyDropbox(text) {
-  const tokens = String(text || '').trim().split(/\s+/).filter(Boolean);
-  if (!tokens.length) return false;
-  return tokens.every(function (tk) { return RE_DB_A.test(tk) || RE_DB_B.test(tk); });
+function projectById(pid) {
+  return state.projects.find(function (p) { return p.id === pid; }) || null;
 }
 
-function projectCard(p) {
-  const card = el('div', 'proj-card' + (p.id === state.activeProjectId ? ' selected' : ''));
-  card.setAttribute('role', 'button');
-  card.tabIndex = 0;
+/* ================================================================
+   SIDEBAR TREE — mỗi Muse là 1 group; thread là lá; hover group:
+   ＋ tạo thread mới + ⚙ mở config của Muse đó. Thread pinned dồn
+   lên section "Pinned" đầu sidebar, prefix tên Muse.
+   ================================================================ */
+function groupIsOpen(pid) {
+  return state.groupOpen.has(pid) ? state.groupOpen.get(pid) : true;
+}
+function toggleGroup(pid) {
+  state.groupOpen.set(pid, !groupIsOpen(pid));
+  renderSidebar();
+}
 
-  // Hàng 1: tên + ⋮ (chèn sau, đứng cạnh trái giờ) + thời gian tương đối
-  const r1 = el('div', 'proj-top');
-  const nm = el('span', 'proj-name', p.name || p.muse_id);
-  const prev = state.preview.get(p.id);
-  const tm = el('span', 'proj-time', prev ? relTime(prev.created_at) : '');
-  if (prev) { const d = dateOf(prev.created_at); if (d) tm.title = fmtFull(d); }
-  r1.appendChild(nm); r1.appendChild(tm);
+function threadsOfProject(pid) {
+  // Không tính thread đang pin (chúng sống ở section Pinned đầu sidebar)
+  const list = state.threads.filter(function (t) {
+    return t.project_id === pid && state.pins.indexOf(t.id) === -1;
+  });
+  list.sort(function (a, b) { return a.id - b.id; });
+  return list;
+}
 
-  // Hàng 2: muse_id mono + tag chips + badge unread
-  const r2 = el('div', 'proj-mid');
-  r2.appendChild(el('span', 'proj-id', '@' + (p.muse_id || '')));
-  const chips = el('span', 'chips');
-  for (const tag of CHIP_ORDER) {
-    if ((p.tags || []).indexOf(tag) !== -1) chips.appendChild(chipEl(tag));
-  }
-  if (chips.children.length) r2.appendChild(chips);
-  const u = state.unread.get(p.id) || 0;
-  if (u > 0) r2.appendChild(el('span', 'badge', u > 99 ? '99+' : String(u)));
-
-  // Hàng 3: preview tin cuối — tin chỉ chứa link Dropbox thì KHÔNG prefix vai trò
-  // (design B.1: "⬇ tên_file · Dropbox"); tin thường giữ prefix "Bạn:"/"Muse:"
-  const r3 = el('div', 'proj-prev');
-  if (prev) {
-    if (isOnlyDropbox(prev.text)) {
-      r3.appendChild(el('span', 'prev-text', '⬇ ' + fileNameFromLink(firstDropboxLink(prev.text)) + ' · Dropbox'));
-    } else {
-      r3.appendChild(el('span', 'prev-role', prev.role === 'user' ? 'Bạn: ' : 'Muse: '));
-      r3.appendChild(el('span', 'prev-text', prev.text));
+function threadRow(t, pinnedRow) {
+  const row = el('div', 'thread-row' + (t.id === state.activeThreadId ? ' selected' : ''));
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  const ico = el('span', 't-ico', pinnedRow ? '📌' : '·');
+  ico.setAttribute('aria-hidden', 'true');
+  row.appendChild(ico);
+  if (pinnedRow) {
+    const p = projectById(t.project_id);
+    if (p) {
+      const pm = el('span', 'pm');
+      pm.appendChild(el('strong', '', p.name || p.muse_id));
+      pm.appendChild(document.createTextNode(' · '));
+      row.appendChild(pm);
     }
   }
-
-  // Menu ⋮ per project
-  const km = document.createElement('button');
-  km.type = 'button';
-  km.className = 'icon-btn small card-menu';
-  km.textContent = '⋮';
-  km.setAttribute('aria-label', 'Menu dự án: ' + (p.name || p.muse_id));
-  km.addEventListener('click', function (e) {
+  const nm = el('span', 'thread-name', t.title || ('Thread #' + t.id));
+  nm.title = t.title || '';
+  row.appendChild(nm);
+  const mb = document.createElement('button');
+  mb.type = 'button';
+  mb.className = 'icon-btn xsmall thread-menu';
+  mb.textContent = '⋯';
+  mb.setAttribute('aria-label', 'Thread menu: ' + (t.title || ('#' + t.id)));
+  mb.addEventListener('click', function (e) {
     e.stopPropagation();
-    openProjMenu(p, km);
+    openThreadMenu(t, mb);
   });
+  row.appendChild(mb);
+  row.addEventListener('click', function () { openThread(t.id); });
+  row.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openThread(t.id); }
+  });
+  return row;
+}
 
-  r1.insertBefore(km, tm); // ⋮ nằm NGAY CẠNH TRÁI giờ (gap 4px) — selected thấy cả hai
-  card.appendChild(r1); card.appendChild(r2); card.appendChild(r3);
-  card.addEventListener('click', function () { selectProject(p.id); });
-  card.addEventListener('keydown', function (e) {
+function museGroup(p, q) {
+  const g = el('div', 'muse-group');
+  const open = groupIsOpen(p.id);
+
+  const head = el('div', 'group-head' + (p.id === state.activeProjectId ? ' selected' : ''));
+  head.setAttribute('role', 'button');
+  head.tabIndex = 0;
+  const caret = document.createElement('button');
+  caret.type = 'button';
+  caret.className = 'group-caret' + (open ? '' : ' closed');
+  caret.textContent = '▼';
+  caret.setAttribute('aria-label', (open ? 'Collapse group ' : 'Expand group ') + (p.name || p.muse_id));
+  caret.addEventListener('click', function (e) { e.stopPropagation(); toggleGroup(p.id); });
+  const nm = el('span', 'group-name', p.name || p.muse_id);
+  nm.title = '@' + (p.muse_id || '');
+  head.appendChild(caret);
+  head.appendChild(nm);
+  const u = state.unread.get(p.id) || 0;
+  if (u > 0) head.appendChild(el('span', 'badge', u > 99 ? '99+' : String(u)));
+
+  // Hover group: ＋ tạo thread mới · ⚙ config Muse (đổi tên, đổi tag chức năng)
+  const act = el('span', 'group-actions');
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'icon-btn xsmall';
+  addBtn.textContent = '＋';
+  addBtn.setAttribute('aria-label', 'New thread in ' + (p.name || p.muse_id));
+  addBtn.title = 'New thread';
+  addBtn.addEventListener('click', function (e) { e.stopPropagation(); newThreadFor(p); });
+  const cfgBtn = document.createElement('button');
+  cfgBtn.type = 'button';
+  cfgBtn.className = 'icon-btn xsmall';
+  cfgBtn.textContent = '⚙';
+  cfgBtn.setAttribute('aria-label', 'Muse settings: ' + (p.name || p.muse_id));
+  cfgBtn.title = 'Muse settings';
+  cfgBtn.addEventListener('click', function (e) { e.stopPropagation(); openMuseCfg(p); });
+  act.appendChild(addBtn);
+  act.appendChild(cfgBtn);
+  head.appendChild(act);
+
+  head.addEventListener('click', function () { selectProject(p.id); });
+  head.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectProject(p.id); }
   });
-  return card;
+  g.appendChild(head);
+
+  if (!open) return g;
+
+  const body = el('div', 'group-threads');
+  const all = threadsOfProject(p.id);
+  const list = q ? all.filter(function (t) { return (t.title || '').toLowerCase().indexOf(q) !== -1; }) : all;
+  if (!list.length) {
+    body.appendChild(el('div', 'thread-empty', q ? 'No matching thread' : 'No threads yet — hover and press ＋'));
+  } else {
+    // Tối đa 5 thread mỗi lần; bấm Show more mở thêm 5 cho đến khi hết.
+    const vis = state.groupVisible.get(p.id) || THREADS_PAGE;
+    const shown = q ? list : list.slice(0, vis);
+    for (const t of shown) body.appendChild(threadRow(t, false));
+    if (!q && list.length > shown.length) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'show-more';
+      more.textContent = 'Show more (' + shown.length + '/' + list.length + ')';
+      more.addEventListener('click', function () {
+        state.groupVisible.set(p.id, vis + THREADS_PAGE);
+        renderSidebar();
+      });
+      body.appendChild(more);
+    }
+  }
+  g.appendChild(body);
+  return g;
 }
 
 function renderSidebar() {
@@ -1578,19 +1651,52 @@ function renderSidebar() {
     for (let i = 0; i < 4; i++) projList.appendChild(el('div', 'skel-card'));
     return;
   }
-  const q = searchInput.value.trim().toLowerCase();
-  const filtered = state.projects.filter(function (p) {
-    return !q || ((p.name + ' ' + p.muse_id).toLowerCase().indexOf(q) !== -1);
+  // Dọn pin trỏ tới thread đã bị xóa ở nơi khác
+  const alive = state.pins.filter(function (id) {
+    return state.threads.some(function (t) { return t.id === id; });
   });
+  if (alive.length !== state.pins.length) { state.pins = alive; savePins(); }
+
+  const q = searchInput.value.trim().toLowerCase();
+
+  // Section Pinned — thread pin từ MỌI Muse dồn lên đầu, prefix tên Muse
+  const pinnedThreads = state.pins
+    .map(function (id) { return state.threads.find(function (t) { return t.id === id; }); })
+    .filter(Boolean)
+    .filter(function (t) {
+      if (!q) return true;
+      const p = projectById(t.project_id);
+      return (t.title || '').toLowerCase().indexOf(q) !== -1 ||
+        (!!p && ((p.name + ' ' + p.muse_id).toLowerCase().indexOf(q) !== -1));
+    });
+
   if (!state.projects.length) {
-    projList.appendChild(el('div', 'side-empty', 'Chưa có Muse nào. Bấm ＋ New để tạo Muse đầu tiên.'));
+    projList.appendChild(el('div', 'side-empty', 'No Muses yet — click ＋ New Muse (top right) to create your first one.'));
     return;
   }
-  if (!filtered.length) {
-    projList.appendChild(el('div', 'search-empty', 'Không có Muse nào khớp "' + searchInput.value.trim() + '"'));
+  const filtered = state.projects.filter(function (p) {
+    if (!q) return true;
+    if ((p.name + ' ' + p.muse_id).toLowerCase().indexOf(q) !== -1) return true;
+    return state.threads.some(function (t) {
+      return t.project_id === p.id && (t.title || '').toLowerCase().indexOf(q) !== -1;
+    });
+  });
+  if (!filtered.length && !pinnedThreads.length) {
+    projList.appendChild(el('div', 'search-empty', 'Nothing matches "' + searchInput.value.trim() + '"'));
     return;
   }
-  for (const p of filtered) projList.appendChild(projectCard(p));
+  if (pinnedThreads.length) {
+    const sec = el('div', 'pinned-sec');
+    const lab = el('div', 'pinned-label');
+    const pi = el('span', 'pico', '📌');
+    pi.setAttribute('aria-hidden', 'true');
+    lab.appendChild(pi);
+    lab.appendChild(document.createTextNode('Pinned'));
+    sec.appendChild(lab);
+    for (const t of pinnedThreads) sec.appendChild(threadRow(t, true));
+    projList.appendChild(sec);
+  }
+  for (const p of filtered) projList.appendChild(museGroup(p, q));
 }
 
 /* ================================================================
@@ -1603,11 +1709,11 @@ function activeProject() {
 function renderHeader() {
   const p = activeProject();
   hdrChips.innerHTML = '';
+  hdrThread.hidden = true;
   if (!p) {
     hdrName.textContent = 'Muse Relay';
     hdrName.classList.add('dim');
     hdrMuseId.textContent = '';
-    hdrRight.hidden = true;
     return;
   }
   hdrName.textContent = p.name || p.muse_id;
@@ -1616,9 +1722,12 @@ function renderHeader() {
   for (const tag of CHIP_ORDER) {
     if ((p.tags || []).indexOf(tag) !== -1) hdrChips.appendChild(chipEl(tag));
   }
-  hdrRight.hidden = false;
   const th = state.threads.find(function (t) { return t.id === state.activeThreadId; });
-  threadLabel.textContent = th ? th.title : 'Chọn thread';
+  if (th) {
+    hdrThread.textContent = th.title || '';
+    hdrThread.title = th.title || '';
+    hdrThread.hidden = false;
+  }
 }
 
 /* ================================================================
@@ -1656,7 +1765,7 @@ function attachEl(link, isUser) {
   ic.setAttribute('aria-hidden', 'true');
   const meta = el('span', 'attach-meta');
   meta.appendChild(el('span', 'attach-name', fileNameFromLink(link)));
-  meta.appendChild(el('span', 'attach-sub', 'Dropbox · bấm để tải'));
+  meta.appendChild(el('span', 'attach-sub', 'Dropbox · click to download'));
   a.appendChild(ic); a.appendChild(meta);
   return a;
 }
@@ -1699,11 +1808,11 @@ function renderChat(opts) {
   }
   if (state.chatError) {
     const c = el('div', 'chat-error');
-    c.appendChild(el('div', '', '⚠ Không tải được dữ liệu — ' + state.chatError));
+    c.appendChild(el('div', '', '⚠ Could not load data — ' + state.chatError));
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'btn secondary';
-    b.textContent = 'Thử lại';
+    b.textContent = 'Retry';
     b.addEventListener('click', function () { loadData(); });
     c.appendChild(b);
     chatArea.appendChild(c);
@@ -1711,18 +1820,18 @@ function renderChat(opts) {
   }
   const p = activeProject();
   if (!p) {
-    chatArea.appendChild(emptyStateEl('Chưa chọn Muse nào', 'Chọn một Muse ở sidebar, hoặc bấm ＋ New để tạo Muse đầu tiên.'));
+    chatArea.appendChild(emptyStateEl('No Muse selected', 'Pick a Muse in the sidebar, or click ＋ New Muse (top right) to create your first one.'));
     return;
   }
   if (state.activeThreadId == null) {
-    chatArea.appendChild(emptyStateEl('Chưa chọn thread', 'Chọn một thread phía trên (mới tạo: nhắn tin đầu tiên để gọi Muse).'));
+    chatArea.appendChild(emptyStateEl('No thread selected', 'Pick a thread under this Muse in the sidebar — or hover the Muse and press ＋ to start one.'));
     return;
   }
   const rows = state.messagesByThread.get(state.activeThreadId) || [];
   if (!rows.length) {
     chatArea.appendChild(emptyStateEl(
-      'Thread còn trống',
-      'Chưa có tin nào. Gửi lời đầu cho ' + (p.name || p.muse_id) + ' — Muse trả lời qua client chạy trên máy nó (mất vài giây theo POLL_INTERVAL).'
+      'Thread is empty',
+      'No messages yet. Send the first note to ' + (p.name || p.muse_id) + ' — the Muse replies from its own machine via its client (a few seconds, depending on POLL_INTERVAL).'
     ));
     return;
   }
@@ -1748,9 +1857,16 @@ function selectProject(pid) {
 }
 
 /* ================================================================
-   THREAD — mở thread, đánh dấu đọc, gửi tin, thread mới
+   THREAD — mở thread (tự chọn Muse chứa nó), đánh dấu đọc, gửi tin,
+   tạo thread mới từ nút ＋ trên group
    ================================================================ */
 async function openThread(tid) {
+  const t = state.threads.find(function (x) { return x.id === tid; });
+  if (!t) return;
+  if (state.activeProjectId !== t.project_id) {
+    state.activeProjectId = t.project_id;
+    state.groupOpen.set(t.project_id, true); // mở group chứa thread vừa chọn
+  }
   state.activeThreadId = tid;
   renderHeader();
   renderSidebar();
@@ -1759,7 +1875,7 @@ async function openThread(tid) {
   const rows = await rest('/rest/v1/messages?thread_id=eq.' + tid + '&order=id.asc&limit=500')
     .then(function (r) { return r || []; })
     .catch(function (e) {
-      toastErrNoAuth('Không tải được thread', e);
+      toastErrNoAuth('Could not load thread', e);
       state.chatError = errText(e);
       return null;
     });
@@ -1783,7 +1899,7 @@ function markRead(tid) {
   renderSidebar();
   rest('/rest/v1/threads?id=eq.' + tid, { method: 'PATCH', body: { last_read_id: maxId } })
     .catch(function (e) {
-      toastOnce('markread', 60000, { kind: 'warn', title: 'Không ghi được trạng thái đã đọc', detail: errText(e) });
+      toastOnce('markread', 60000, { kind: 'warn', title: 'Could not save read state', detail: errText(e) });
     });
 }
 
@@ -1822,10 +1938,10 @@ async function sendMessage() {
       renderChat({ animateId: m.id });
       markRead(tid);
     } else {
-      toastOnce('sentquiet', 5000, { kind: 'info', title: 'Đã gửi', detail: 'Tin sẽ hiện sau khi đồng bộ (realtime hoặc polling 30s).' });
+      toastOnce('sentquiet', 5000, { kind: 'info', title: 'Sent', detail: 'The message will appear after the next sync (realtime or 30s polling).' });
     }
   } catch (e) {
-    toastErrNoAuth('Lỗi gửi tin nhắn', e);
+    toastErrNoAuth('Could not send message', e);
     inputMsg.value = text; // trả text về composer — không mất nội dung
     resizeInput();
   } finally {
@@ -1836,28 +1952,29 @@ async function sendMessage() {
   }
 }
 
-async function newThread() {
-  const p = activeProject();
+async function newThreadFor(p) {
   if (!p || state.creatingThread) return;
   state.creatingThread = true;
-  btnBusy(btnNewThread, true, 'Đang tạo…');
   try {
     const rows = await rest('/rest/v1/threads', {
       method: 'POST',
       prefer: 'return=representation',
-      body: { project_id: p.id, title: 'Thread mới' }
+      body: { project_id: p.id, title: 'New thread' }
     });
     const t = Array.isArray(rows) && rows[0] ? rows[0] : null;
     if (t) {
       state.threads.push(t);
       state.threads.sort(function (a, b) { return a.id - b.id; });
+      // Bảo đảm thread mới thấy được ngay trong group (mở group + đủ quota hiển thị)
+      state.groupOpen.set(p.id, true);
+      const count = threadsOfProject(p.id).length;
+      state.groupVisible.set(p.id, Math.max(state.groupVisible.get(p.id) || THREADS_PAGE, count));
       openThread(t.id);
     }
   } catch (e) {
-    toastError('Không tạo được thread', e);
+    toastError('Could not create thread', e);
   } finally {
     state.creatingThread = false;
-    btnBusy(btnNewThread, false);
   }
 }
 
@@ -1871,21 +1988,19 @@ function setRealtime(s) {
 }
 
 function setupRealtime() {
-  teardownRealtime();
-  if (typeof supabase === 'undefined') {
-    toastOnce('cdn', 60000, { kind: 'warn', title: 'Không tải được supabase-js từ CDN', detail: 'Realtime tắt — chỉ còn polling 30s.' });
-    return;
-  }
+  if (state.sse) { try { state.sse.close(); } catch (e) { /* bỏ qua */ } }
   try {
-    state.sb = supabase.createClient(state.settings.url, state.settings.serviceKey);
-    state.channel = state.sb.channel('mr-messages')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, onRealtimeInsert)
-      .subscribe(function (status) {
-        if (status === 'SUBSCRIBED') setRealtime('connected');
-        else setRealtime('offline');
-      });
+    state.sse = new EventSource('/api/events');
+    state.sse.onopen = function () { setRealtime('connected'); };
+    state.sse.onerror = function () { setRealtime('offline'); }; // EventSource tự reconnect
+    state.sse.onmessage = function (ev) {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d && d.type === 'message' && d.m) onRealtimeInsert({ new: d.m });
+      } catch (e2) { /* dòng lệch — bỏ qua */ }
+    };
   } catch (e) {
-    setRealtime('offline');
+    setRealtime('offline'); // còn polling 30s
   }
 }
 
@@ -1906,7 +2021,6 @@ function ensurePoll() {
 
 let pollFailStreak = 0;
 async function pollTick() {
-  if (!state.settings.serviceKey) return;
   try {
     const ms = await rest('/rest/v1/messages?select=id,project_id,thread_id,role,text,created_at&order=id.desc&limit=200');
     const sorted = (ms || []).slice().sort(function (a, b) { return a.id - b.id; });
@@ -1923,9 +2037,9 @@ async function pollTick() {
     pollFailStreak = 0;
   } catch (e) {
     pollFailStreak++;
-    // tránh spam toast mỗi 30s khi mạng đứt: chỉ báo lỗi ở chu kỳ đầu; 401/403 đã có toast riêng
+    // avoid toast spam every 30s when offline: only the first cycle errors; 401/403 have their own toast
     if (pollFailStreak === 1 && !(e && (e.status === 401 || e.status === 403))) {
-      toastOnce('poll', 60000, { kind: 'error', title: 'Lỗi đồng bộ dữ liệu', detail: errText(e) });
+      toastOnce('poll', 60000, { kind: 'error', title: 'Data sync error', detail: errText(e) });
     }
   }
 }
@@ -1973,34 +2087,141 @@ function openMenu(items, anchor, opts) {
 }
 function closeMenu() { ctxMenu.hidden = true; menuCtx = null; }
 
-function openProjMenu(p, anchor) {
+/* ================================================================
+   MENU THREAD (⋯) — Pin / Rename / Delete, + Muse config (⚙ group)
+   ================================================================ */
+let renThread = null;
+let delThrTarget = null;
+let cfgProject = null;
+
+function openThreadMenu(t, anchor) {
+  const pinned = state.pins.indexOf(t.id) !== -1;
   openMenu([
-    { label: 'Token', fn: function () { openToken(p.id); } },
-    { label: 'Xóa Muse', danger: true, fn: function () { openDelete(p); } }
+    { label: pinned ? 'Unpin' : 'Pin', fn: function () { togglePin(t.id); } },
+    { label: 'Rename', fn: function () { openRenameThread(t); } },
+    { label: 'Delete', danger: true, fn: function () { openDeleteThread(t); } }
   ], anchor);
 }
 
-btnProjMenu.addEventListener('click', function () {
-  const p = activeProject();
-  if (p) openProjMenu(p, btnProjMenu);
-});
-btnThreadMenu.addEventListener('click', function () {
-  const p = activeProject();
-  if (!p) return;
-  const list = state.threads.filter(function (t) { return t.project_id === p.id; });
-  if (!list.length) {
-    openMenu([{ label: 'Chưa có thread — bấm ＋ Thread mới', disabled: true }], btnThreadMenu);
-    return;
+function togglePin(tid) {
+  const i = state.pins.indexOf(tid);
+  if (i === -1) state.pins.push(tid);
+  else state.pins.splice(i, 1);
+  savePins();
+  renderSidebar();
+}
+
+/* Rename thread — modal nhập tên mới */
+function openRenameThread(t) {
+  renThread = t;
+  renInput.value = t.title || '';
+  showModal(modalRenameThread);
+  renInput.focus();
+  renInput.select();
+}
+
+async function saveRenameThread() {
+  const t = renThread;
+  const v = renInput.value.trim();
+  if (!t || !v || state.renamingThread) return;
+  state.renamingThread = true;
+  btnBusy(btnRenSave, true, 'Saving…');
+  try {
+    await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'PATCH', body: { title: v } });
+    t.title = v;
+    hideModal(modalRenameThread);
+    renderSidebar();
+    renderHeader();
+    toast({ kind: 'success', title: 'Thread renamed', detail: v });
+  } catch (e) {
+    toastErrNoAuth('Could not rename thread', e);
+  } finally {
+    state.renamingThread = false;
+    btnBusy(btnRenSave, false);
   }
-  openMenu(list.map(function (t) {
-    return {
-      label: t.title,
-      meta: '(id ' + t.id + ')',
-      checked: t.id === state.activeThreadId,
-      fn: function () { openThread(t.id); }
-    };
-  }), btnThreadMenu, { scroll: true });
-});
+}
+
+/* Delete thread — DELETE row; messages cascade theo FK */
+function openDeleteThread(t) {
+  delThrTarget = t;
+  delThrText.innerHTML = '';
+  const s = document.createElement('strong');
+  s.textContent = '"' + (t.title || ('Thread #' + t.id)) + '"';
+  delThrText.appendChild(s);
+  delThrText.appendChild(document.createTextNode(' will be deleted permanently, together with every message inside it. This cannot be undone.'));
+  showModal(modalDelThread);
+  btnDelThrConfirm.focus();
+}
+
+async function confirmDeleteThread() {
+  if (state.deletingThread || !delThrTarget) return;
+  const t = delThrTarget;
+  state.deletingThread = true;
+  btnBusy(btnDelThrConfirm, true, 'Deleting…');
+  btnDelThrCancel.disabled = true;
+  try {
+    await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'DELETE' });
+    state.threads = state.threads.filter(function (x) { return x.id !== t.id; });
+    state.messagesByThread.delete(t.id);
+    const pi = state.pins.indexOf(t.id);
+    if (pi !== -1) { state.pins.splice(pi, 1); savePins(); }
+    if (state.activeThreadId === t.id) state.activeThreadId = null;
+    renderAll();
+    toast({ kind: 'success', title: 'Thread deleted', detail: '"' + (t.title || '') + '" was removed.' });
+    hideModal(modalDelThread);
+    delThrTarget = null;
+  } catch (e) {
+    toastErrNoAuth('Could not delete thread', e);
+  } finally {
+    state.deletingThread = false;
+    btnBusy(btnDelThrConfirm, false);
+    btnDelThrCancel.disabled = false;
+  }
+}
+
+/* Muse config — sửa tên Muse + tag chức năng (chat/image/video) */
+function openMuseCfg(p) {
+  cfgProject = p;
+  cfgSub.textContent = '@' + (p.muse_id || '') + ' · id ' + p.id;
+  cfgName.value = p.name || '';
+  cfgTags.querySelectorAll('input[type=checkbox]').forEach(function (b) {
+    b.checked = (p.tags || []).indexOf(b.value) !== -1;
+  });
+  syncCfgChips();
+  showModal(modalMuseCfg);
+  cfgName.focus();
+}
+
+function syncCfgChips() {
+  cfgTags.querySelectorAll('input[type=checkbox]').forEach(function (b) {
+    b.closest('.toggle-chip').classList.toggle('on', b.checked);
+  });
+}
+
+async function saveMuseCfg() {
+  const p = cfgProject;
+  const name = cfgName.value.trim();
+  if (!p || !name || state.savingCfg) return;
+  const tags = [];
+  cfgTags.querySelectorAll('input[type=checkbox]').forEach(function (b) {
+    if (b.checked) tags.push(b.value);
+  });
+  state.savingCfg = true;
+  btnBusy(btnCfgSave, true, 'Saving…');
+  try {
+    await rest('/rest/v1/projects?id=eq.' + p.id, { method: 'PATCH', body: { name: name, tags: tags } });
+    p.name = name;
+    p.tags = tags;
+    hideModal(modalMuseCfg);
+    renderAll();
+    toast({ kind: 'success', title: 'Muse updated', detail: name + ' · ' + (tags.length ? tags.join(', ') : 'no capabilities') });
+  } catch (e) {
+    toastErrNoAuth('Could not update Muse', e);
+  } finally {
+    state.savingCfg = false;
+    btnBusy(btnCfgSave, false);
+  }
+}
 
 document.addEventListener('mousedown', function (e) {
   if (!ctxMenu.hidden && !ctxMenu.contains(e.target) && !(menuCtx && menuCtx.anchor.contains(e.target))) {
@@ -2024,13 +2245,14 @@ function hideModal(m) {
 }
 
 /* ================================================================
-   WIZARD NEW MUSE — 3 BƯỚC (spec §8, design B.5)
+   WIZARD NEW MUSE — 2 BƯỚC: Info → Keys & instructions
    ================================================================ */
 const wiz = {
   step: 1, busy: false, created: false,
   museId: '', idOk: false, idChecked: '',
-  email: '', password: '', userId: '', projectId: '',
-  tags: [], templates: null, zipBusy: false
+  slugDirty: false,           // user đã sửa tay Muse ID → ngừng auto-slug theo tên
+  tags: [],
+  email: '', password: ''     // login GoTrue của Muse — password chỉ hiện trong B2 + Token modal
 };
 let idCheckTimer = null;
 let delTarget = null;
@@ -2044,27 +2266,31 @@ function genPassword() {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-function buildEnv(tpl, url, anon, caps) {
-  // String-replace đúng quy tắc §4: chỉ đụng 3 dòng bắt đầu cho trước,
-  // MUSE_EMAIL / MUSE_PASSWORD giữ nguyên giá trị trống
-  return tpl.split('\n').map(function (line) {
-    if (line.indexOf('SUPABASE_URL=') === 0) return 'SUPABASE_URL=' + url;
-    if (line.indexOf('SUPABASE_ANON_KEY=') === 0) return 'SUPABASE_ANON_KEY=' + anon;
-    if (line.indexOf('CAPABILITIES=') === 0) return 'CAPABILITIES=' + caps;
-    return line;
-  }).join('\n');
+// Slug Muse ID từ tên: bỏ dấu tiếng Việt (đ + tone marks), lowercase, ký tự lạ → _
+function slugifyMuseId(name) {
+  let s = String(name || '');
+  s = s.replace(/[đĐ]/g, 'd');
+  if (String.prototype.normalize) s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  s = s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  if (s.length > 40) s = s.slice(0, 40).replace(/_+$/, '');
+  return s;
 }
 
 function openWizard() {
   Object.assign(wiz, {
     step: 1, busy: false, created: false,
     museId: '', idOk: false, idChecked: '',
-    email: '', password: '', userId: '', projectId: '',
-    tags: [], templates: null, zipBusy: false
+    slugDirty: false, tags: [],
+    email: '', password: ''
   });
-  wizMuseId.value = '';
   wizName.value = '';
+  wizMuseId.value = '';
   wizMuseId.classList.remove('err');
+  wizPid.textContent = '—';
+  wizPub.textContent = '—';
+  wizEmail.textContent = '—';
+  wizPass.textContent = '—';
+  instrBox.value = '';
   tagChat.checked = true;
   tagImage.checked = false;
   tagVideo.checked = false;
@@ -2072,7 +2298,7 @@ function openWizard() {
   setStep(1);
   validateIdNow();
   showModal(modalWizard);
-  wizMuseId.focus();
+  wizName.focus();
 }
 
 function setDot(dotEl, stepEl, mode, num) {
@@ -2082,21 +2308,17 @@ function setDot(dotEl, stepEl, mode, num) {
 
 function setStep(n) {
   wiz.step = n;
-  wizTitle.textContent = 'Wizard: New Muse — Bước ' + n + '/3';
+  wizTitle.textContent = 'New Muse — Step ' + n + '/2';
   step1.hidden = n !== 1;
   step2.hidden = n !== 2;
-  step3.hidden = n !== 3;
   setDot(sd1, sd1, n === 1 ? 'active' : (n > 1 ? 'done' : ''), 1);
-  setDot(sd2, sd2, n === 2 ? 'active' : (n > 2 ? 'done' : ''), 2);
-  setDot(sd3, sd3, n === 3 ? 'active' : '', 3);
+  setDot(sd2, sd2, n === 2 ? 'active' : '', 2);
   sc1.className = 'connector' + (n >= 2 ? ' done' : '');
-  sc2.className = 'connector' + (n >= 3 ? ' done' : '');
   btnWizCancel.hidden = n !== 1;
   btnWizBack.hidden = n !== 2;
-  btnWizNext.hidden = n === 3;
-  btnWizDone.hidden = n !== 3;
+  btnWizNext.hidden = n === 2;
+  btnWizDone.hidden = n !== 2;
   updateWizNext();
-  if (n === 3) enterStep3();
 }
 
 function setWizLock(b) {
@@ -2104,12 +2326,10 @@ function setWizLock(b) {
   btnWizCancel.disabled = b;
   btnWizBack.disabled = b;
   btnWizDone.disabled = b;
-  btnZip.disabled = b || !wiz.templates;
 }
 
 function updateWizNext() {
   if (wiz.step === 1) btnWizNext.disabled = wiz.busy || !wiz.idOk || !wizName.value.trim();
-  else if (wiz.step === 2) btnWizNext.disabled = wiz.busy;
 }
 
 function showFb(kind, msg) {
@@ -2130,7 +2350,7 @@ function validateIdNow() {
     return;
   }
   if (!RE_MUSE_ID.test(v)) {
-    showFb('bad', '✕ Chỉ [a-z0-9_], dài 3–40 ký tự');
+    showFb('bad', '✕ Only [a-z0-9_], 3–40 characters');
     wiz.idOk = false;
     wizMuseId.classList.add('err');
     updateWizNext();
@@ -2138,11 +2358,11 @@ function validateIdNow() {
   }
   wizMuseId.classList.remove('err');
   if (v === wiz.idChecked && wiz.idOk) {
-    showFb('ok', '✓ Không trùng — khả dụng');
+    showFb('ok', '✓ Not taken — available');
     updateWizNext();
     return;
   }
-  showFb('check', 'Đang kiểm tra…');
+  showFb('check', 'Checking…');
   wiz.idOk = false;
   updateWizNext();
   idCheckTimer = setTimeout(checkIdLive, 400);
@@ -2156,17 +2376,17 @@ async function checkIdLive() {
     if (wiz.museId !== v) return; // đã đổi giá trị trong lúc chờ
     wiz.idChecked = v;
     if (rows && rows.length) {
-      showFb('bad', '✕ muse_id đã tồn tại');
+      showFb('bad', '✕ muse_id already taken');
       wiz.idOk = false;
       wizMuseId.classList.add('err');
     } else {
-      showFb('ok', '✓ Không trùng — khả dụng');
+      showFb('ok', '✓ Not taken — available');
       wiz.idOk = true;
       wizMuseId.classList.remove('err');
     }
   } catch (e) {
     if (wiz.museId !== v) return;
-    showFb('bad', '✕ Không kiểm tra được — ' + errText(e));
+    showFb('bad', '✕ Could not check — ' + errText(e));
     wiz.idOk = false;
   }
   updateWizNext();
@@ -2182,6 +2402,45 @@ function syncTagChips() {
   }
 }
 
+// Khung instruction tiếng Anh dán vào chat của Muse — email công khai, password qua secure form
+function buildInstruction() {
+  const pid = state.settings.projectId;
+  const pub = state.settings.publishable || '[PASTE YOUR PUBLISHABLE KEY HERE]';
+  return [
+    'Hi, please set up Muse Relay for me. Please download the zip file at link below. I am not technical, so please do everything for me — I will only type the relay password into the secure form when you show it.',
+    '',
+    'My Supabase project (my own project):',
+    'Setup ZIP link: ' + SETUP_ZIP_URL,
+    'Project ID: ' + pid,
+    'Publishable Key: ' + pub,
+    'Muse Email: ' + wiz.email,
+    '',
+    'Please do this for me, in order:',
+    '',
+    'Unzip the file and read the instructions inside it.',
+    'Put my Project ID, Publishable Key and Muse Email into config.json yourself. I will not do this by hand.',
+    'Show me the secure form called "Muse Relay password" so I can type the password there. Do NOT ask me to paste the password in chat.',
+    'Log in with the Muse Email + that password and read my project — I should see exactly one project (mine). If you see none or more than one, tell me in simple words and show the form again.',
+    'Start the daemon that checks for new messages every few seconds and sends my replies back.',
+    'Set up the automatic checks for me: one every 3 minutes to make sure the daemon is still running, and one every 10 seconds to wake you up when a new message arrives.',
+    'When it is done, tell me in one simple sentence that it works. Do not show me code or logs.',
+    '',
+    'Important:',
+    '',
+    'My relay password is secret. Never write it in a file, never show it, never ask for it in chat.',
+    'This is my own Supabase project. Do not use anyone else\'s project or keys.',
+    'Messages sent through Supabase are text only. If I need to send a photo or file through Supabase, upload it to Dropbox first and send only the link. In normal chat here, send files directly as usual.'
+  ].join('\n');
+}
+
+function renderStep2() {
+  wizPid.textContent = state.settings.projectId;
+  wizPub.textContent = state.settings.publishable || '—';
+  wizEmail.textContent = wiz.email;
+  wizPass.textContent = wiz.password;
+  instrBox.value = buildInstruction();
+}
+
 async function createMuse() {
   if (wiz.busy) return;
   if (wiz.created) { setStep(2); return; } // đã tạo rồi (quay lại) — không POST lần 2
@@ -2190,108 +2449,45 @@ async function createMuse() {
   if (!RE_MUSE_ID.test(museId) || !wiz.idOk || !name) { validateIdNow(); return; }
   wiz.busy = true;
   setWizLock(true);
-  btnBusy(btnWizNext, true, 'Đang tạo…');
-  const pw = genPassword();
-  const email = museId + '@muserelay.local';
+  btnBusy(btnWizNext, true, 'Creating…');
+  let userId = null;
   try {
+    // 1) auth user = danh tính GoTrue của Muse — RLS sẽ khóa nó vào đúng project này
+    const pw = genPassword();
+    const email = museId + '@muserelay.local';
     const u = await adminReq('/auth/v1/admin/users', {
       body: { email: email, password: pw, email_confirm: true }
     });
-    wiz.userId = u && u.id;
+    userId = u && u.id;
+    // 2) project row — secret lưu password login của Muse (Token modal xem lại được)
     const rows = await rest('/rest/v1/projects', {
       method: 'POST',
       prefer: 'return=representation',
-      body: { muse_id: museId, name: name, tags: wiz.tags, user_id: wiz.userId, email: email, secret: pw }
+      body: { muse_id: museId, name: name, tags: wiz.tags, user_id: userId, email: email, secret: pw }
     });
     const p = Array.isArray(rows) && rows[0] ? rows[0] : null;
-    wiz.projectId = p && p.id;
+    if (p) {
+      state.projects.push(p);
+      renderSidebar();
+      renderHeader();
+      renderChat();
+    }
     wiz.email = email;
     wiz.password = pw;
     wiz.created = true;
-    wizEmail.textContent = email;
-    wizPass.textContent = pw;
+    renderStep2();
     setStep(2);
   } catch (e) {
-    toastErrNoAuth('Không tạo được Muse', e); // giữ nguyên B1 theo A6
+    toastErrNoAuth('Could not create Muse', e); // giữ nguyên B1 theo A6
+    // Dọn nửa vời: auth user đã tạo nhưng project row chưa xong → xóa user, không để rác
+    if (userId && !wiz.created) {
+      adminReq('/auth/v1/admin/users/' + userId, { method: 'DELETE' }).catch(function () { /* best effort */ });
+    }
   } finally {
     wiz.busy = false;
     setWizLock(false);
     btnBusy(btnWizNext, false);
     updateWizNext();
-  }
-}
-
-async function enterStep3() {
-  zipName.textContent = 'muse_' + wiz.museId + '_setup.zip';
-  guideBox.value = wiz.templates ? wiz.templates['setup_guide.txt'] : '';
-  if (wiz.templates) {
-    zipErr.hidden = true;
-    zipSub.textContent = '7 file · đóng gói bằng JSZip';
-    btnZip.disabled = typeof JSZip === 'undefined';
-    return;
-  }
-  btnZip.disabled = true;
-  zipErr.hidden = true;
-  zipSub.textContent = 'Đang đọc templates…';
-  try {
-    const pairs = await Promise.all(TEMPLATE_FILES.map(async function (n) {
-      const r = await fetch('templates/' + n); // path tương đối — phải chạy qua http.server
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + n);
-      return [n, await r.text()];
-    }));
-    wiz.templates = {};
-    for (const pr of pairs) wiz.templates[pr[0]] = pr[1];
-    zipErr.hidden = true;
-    guideBox.value = wiz.templates['setup_guide.txt'];
-    if (typeof JSZip === 'undefined') {
-      zipSub.textContent = 'JSZip chưa tải được từ CDN — không thể đóng gói.';
-      toastOnce('jszip', 60000, { kind: 'warn', title: 'Không tải được JSZip từ CDN', detail: 'Không thể tạo zip — kiểm tra mạng rồi mở lại wizard.' });
-    } else {
-      zipSub.textContent = '7 file · đóng gói bằng JSZip';
-      btnZip.disabled = false;
-    }
-  } catch (e) {
-    wiz.templates = null;
-    zipErr.hidden = false;
-    zipSub.textContent = 'Không đọc được templates.';
-    toastOnce('tpl', 60000, {
-      kind: 'warn',
-      title: 'Không đọc được templates',
-      detail: 'Nếu mở qua file:// hãy chạy `python -m http.server` trong thư mục web/ rồi mở lại.'
-    });
-  }
-}
-
-async function downloadZip() {
-  if (wiz.zipBusy || !wiz.templates || typeof JSZip === 'undefined') return;
-  wiz.zipBusy = true;
-  btnBusy(btnZip, true, 'Đang đóng gói…');
-  try {
-    const t = wiz.templates;
-    // CAPABILITIES theo tag; tags rỗng → client mặc định chat (design B.5)
-    const caps = wiz.tags.length ? wiz.tags.join(',') : 'chat';
-    const zip = new JSZip();
-    zip.file('muse_client.py', t['muse_client.py']);
-    zip.file('AGENTS.md', t['AGENTS.md']);
-    zip.file('setup_guide.txt', t['setup_guide.txt']);
-    zip.file('.env', buildEnv(t['env.template'], state.settings.url, state.settings.anonKey, caps));
-    zip.file('requirements.txt', t['requirements.txt']);
-    zip.file('run.sh', t['run.sh']);
-    zip.file('run.bat', t['run.bat']);
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'muse_' + wiz.museId + '_setup.zip';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-  } catch (e) {
-    toastError('Không đóng gói được zip', e);
-  } finally {
-    wiz.zipBusy = false;
-    btnBusy(btnZip, false);
   }
 }
 
@@ -2307,14 +2503,27 @@ btnWizDone.addEventListener('click', closeWizard);
 btnWizBack.addEventListener('click', function () { setStep(1); });
 btnWizNext.addEventListener('click', function () {
   if (wiz.step === 1) createMuse();
-  else if (wiz.step === 2) setStep(3);
 });
-btnZip.addEventListener('click', downloadZip);
-wizMuseId.addEventListener('input', validateIdNow);
-wizName.addEventListener('input', updateWizNext);
+// Muse Name → auto-slug Muse ID (dừng khi user đã sửa tay)
+wizName.addEventListener('input', function () {
+  if (!wiz.slugDirty) wizMuseId.value = slugifyMuseId(wizName.value);
+  validateIdNow();
+});
+wizMuseId.addEventListener('input', function () {
+  wiz.slugDirty = wizMuseId.value !== slugifyMuseId(wizName.value);
+  validateIdNow();
+});
 tagChat.addEventListener('change', syncTagChips);
 tagImage.addEventListener('change', syncTagChips);
 tagVideo.addEventListener('change', syncTagChips);
+E('cpyPid').addEventListener('click', function () { copyText(wizPid.textContent, E('cpyPid')); });
+E('cpyPub').addEventListener('click', function () { copyText(state.settings.publishable, E('cpyPub')); });
+E('cpyEmail').addEventListener('click', function () { copyText(wiz.email, E('cpyEmail')); });
+E('cpyPass').addEventListener('click', function () { copyText(wiz.password, E('cpyPass')); });
+E('cpyInstr').addEventListener('click', function () { copyText(instrBox.value, E('cpyInstr')); });
+wizName.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && !wiz.busy && !btnWizNext.disabled) { e.preventDefault(); btnWizNext.click(); }
+});
 wizMuseId.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !wiz.busy && !btnWizNext.disabled) { e.preventDefault(); btnWizNext.click(); }
 });
@@ -2332,14 +2541,14 @@ async function openToken(pid) {
   try {
     const rows = await rest('/rest/v1/projects?id=eq.' + pid + '&select=id,muse_id,name,email,secret');
     const p = rows && rows[0];
-    if (!p) throw { message: 'Không tìm thấy project này (đã bị xóa?)' };
+    if (!p) throw { message: 'Project not found (deleted?)' };
     tokName.textContent = (p.name || '') + ' — @' + (p.muse_id || '');
     tokEmail.textContent = p.email || '';
     tokSecret.textContent = p.secret || '';
     tokSkeleton.hidden = true;
     tokRows.hidden = false;
   } catch (e) {
-    toastErrNoAuth('Không tải được token', e);
+    toastErrNoAuth('Could not load token', e);
     hideModal(modalToken);
   }
 }
@@ -2356,7 +2565,7 @@ function openDelete(p) {
   const s = document.createElement('strong');
   s.textContent = (p.name || p.muse_id) + ' (@' + (p.muse_id || '') + ')';
   delText.appendChild(s);
-  delText.appendChild(document.createTextNode(' sẽ bị xóa vĩnh viễn: account đăng nhập của Muse, project, toàn bộ threads và tin nhắn. Không thể hoàn tác.'));
+  delText.appendChild(document.createTextNode(' will be deleted permanently: the Muse\'s login account, the project, and all of its threads and messages. This cannot be undone.'));
   showModal(modalDelete);
   btnDelConfirm.focus();
 }
@@ -2365,7 +2574,7 @@ async function confirmDelete() {
   if (state.deleting || !delTarget) return;
   const p = delTarget;
   state.deleting = true;
-  btnBusy(btnDelConfirm, true, 'Đang xóa…');
+  btnBusy(btnDelConfirm, true, 'Deleting…');
   btnDelCancel.disabled = true;
   let userErr = null;
   try {
@@ -2376,7 +2585,7 @@ async function confirmDelete() {
   try {
     await rest('/rest/v1/projects?id=eq.' + p.id, { method: 'DELETE' });
   } catch (e) {
-    toastErrNoAuth('Không xóa được project', e);
+    toastErrNoAuth('Could not delete the project', e);
     state.deleting = false;
     btnBusy(btnDelConfirm, false);
     btnDelCancel.disabled = false;
@@ -2391,8 +2600,8 @@ async function confirmDelete() {
   renderAll();
   toast({
     kind: 'success',
-    title: 'Đã xóa @' + (p.muse_id || ''),
-    detail: userErr ? 'Đã xóa project, nhưng không xóa được user auth — xóa tay trong Supabase Auth.' : ''
+    title: 'Deleted @' + (p.muse_id || ''),
+    detail: userErr ? 'Project deleted, but the auth user could not be removed — delete it manually in Supabase Auth.' : ''
   });
   hideModal(modalDelete);
   delTarget = null;
@@ -2406,7 +2615,7 @@ btnDelCancel.addEventListener('click', function () {
 btnDelConfirm.addEventListener('click', confirmDelete);
 
 /* ================================================================
-   SỰ KIỆN COMPOSER + SEARCH + GEAR
+   COMPOSER + SEARCH + GEAR + SIDEBAR COLLAPSE + MODAL MỚI
    ================================================================ */
 inputMsg.addEventListener('input', function () { resizeInput(); updateSendState(); });
 inputMsg.addEventListener('keydown', function (e) {
@@ -2414,8 +2623,58 @@ inputMsg.addEventListener('keydown', function (e) {
 });
 btnSend.addEventListener('click', sendMessage);
 searchInput.addEventListener('input', renderSidebar);
-btnGear.addEventListener('click', function () { openSettings('gear'); });
-btnNewThread.addEventListener('click', newThread);
+
+/* Thu gọn / mở rộng sidebar — nhớ trạng thái qua localStorage */
+function applyCollapsed() {
+  sidebarEl.classList.toggle('collapsed', state.collapsed);
+  btnCollapse.textContent = state.collapsed ? '»' : '«';
+  const lbl = state.collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  btnCollapse.setAttribute('aria-label', lbl);
+  btnCollapse.title = lbl;
+}
+btnCollapse.addEventListener('click', function () {
+  state.collapsed = !state.collapsed;
+  try { localStorage.setItem(LS_KEYS.sidebar, state.collapsed ? '1' : '0'); } catch (e) { /* bỏ qua */ }
+  applyCollapsed();
+});
+applyCollapsed();
+
+/* Rename thread */
+btnRenSave.addEventListener('click', saveRenameThread);
+btnRenCancel.addEventListener('click', function () { if (!state.renamingThread) { renThread = null; hideModal(modalRenameThread); } });
+renClose.addEventListener('click', function () { if (!state.renamingThread) { renThread = null; hideModal(modalRenameThread); } });
+renInput.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && !btnRenSave.disabled) { e.preventDefault(); saveRenameThread(); }
+});
+
+/* Delete thread */
+btnDelThrConfirm.addEventListener('click', confirmDeleteThread);
+btnDelThrCancel.addEventListener('click', function () {
+  if (!state.deletingThread) { delThrTarget = null; hideModal(modalDelThread); }
+});
+
+/* Muse config */
+btnCfgSave.addEventListener('click', saveMuseCfg);
+btnCfgCancel.addEventListener('click', function () { if (!state.savingCfg) { cfgProject = null; hideModal(modalMuseCfg); } });
+cfgClose.addEventListener('click', function () { if (!state.savingCfg) { cfgProject = null; hideModal(modalMuseCfg); } });
+cfgTags.addEventListener('change', syncCfgChips);
+cfgName.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && !state.savingCfg) { e.preventDefault(); saveMuseCfg(); }
+});
+btnCfgToken.addEventListener('click', function () {
+  const p = cfgProject;
+  if (!p || state.savingCfg) return;
+  cfgProject = null;
+  hideModal(modalMuseCfg);
+  openToken(p.id);
+});
+btnCfgDelete.addEventListener('click', function () {
+  const p = cfgProject;
+  if (!p || state.savingCfg) return;
+  cfgProject = null;
+  hideModal(modalMuseCfg);
+  openDelete(p);
+});
 
 /* Esc: đóng menu → modal (kể cả khi đang busy thì chặn) → settings (nếu mở từ gear) */
 document.addEventListener('keydown', function (e) {
@@ -2424,17 +2683,15 @@ document.addEventListener('keydown', function (e) {
   if (!modalWizard.hidden) { if (!wiz.busy) closeWizard(); return; }
   if (!modalToken.hidden) { hideModal(modalToken); return; }
   if (!modalDelete.hidden) { if (!state.deleting) { delTarget = null; hideModal(modalDelete); } return; }
-  if (!settingsLayer.hidden && settingsMode === 'gear') { settingsLayer.hidden = true; return; }
+  if (!modalRenameThread.hidden) { if (!state.renamingThread) { renThread = null; hideModal(modalRenameThread); } return; }
+  if (!modalDelThread.hidden) { if (!state.deletingThread) { delThrTarget = null; hideModal(modalDelThread); } return; }
+  if (!modalMuseCfg.hidden) { if (!state.savingCfg) { cfgProject = null; hideModal(modalMuseCfg); } return; }
 });
 
 /* ================================================================
    KHỞI ĐỘNG — có đủ 3 key thì vào thẳng app, thiếu thì mở Settings
    ================================================================ */
-if (state.settings.url && state.settings.anonKey && state.settings.serviceKey) {
-  boot();
-} else {
-  openSettings('first');
-}
+initApp();
 
 })();
 </script>

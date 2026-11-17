@@ -1,6 +1,27 @@
+# ---- Python ----
 .venv/
 __pycache__/
+*.pyc
+
+# ---- keys & secrets (KHÔNG BAO GIỜ commit) ----
+.env
+.env.*
+!.env.example
+
+# ---- dữ liệu chạy local ----
 data/
 .cache/
 *.log
+nohup.out
 muse_cursor.json
+.scratch/
+
+# ---- Supabase CLI ----
+supabase/.temp/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- agent workspace ----
+.zcode/
