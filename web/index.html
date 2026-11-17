@@ -607,6 +607,32 @@ input, textarea { caret-color: var(--caret-color); }
 .send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 #composerHint { text-align: right; font-size: 11px; color: var(--text-muted); margin-top: 6px; }
 
+/* Usage bar — below the composer: this thread's live context usage. Data comes
+   from the Muse itself: ⟳ sends a '/status' request, the Muse answers with a
+   '<<<STATUS>>>…' row (AGENTS.md §2) which is parsed here, never rendered in chat. */
+#usageBar {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-top: 6px; padding: 5px 8px 5px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+#usageText {
+  flex: 1; min-width: 0;
+  font-size: 11px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#usageText.has-data { color: var(--text-secondary); }
+#usageMeter {
+  position: relative; flex-shrink: 0;
+  width: 72px; height: 6px;
+  background: var(--bg-hover);
+  border-radius: 3px; overflow: hidden;
+}
+#usageFill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width var(--dur-slow) var(--ease-out); }
+#btnStatus { color: var(--text-muted); }
+#btnStatus:hover { color: var(--accent-text); }
+
 /* Setup gate banner — shown above the composer while the open Muse has not ponged */
 .setup-banner {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -885,7 +911,7 @@ input, textarea { caret-color: var(--caret-color); }
 <!-- ===================== MAIN FRAME: SIDEBAR (tree) + MAIN ===================== -->
 <div id="app" hidden>
   <aside id="sidebar">
-    <div class="brand-row">
+    <div class="brand-row" title="Built with ZCode">
       <span class="brand-glyph" aria-hidden="true">✦</span>
       <span class="brand-name">Muse Relay</span>
       <button type="button" id="btnCollapse" class="icon-btn" aria-label="Collapse sidebar" title="Collapse sidebar">«</button>
@@ -933,6 +959,11 @@ input, textarea { caret-color: var(--caret-color); }
         </button>
       </div>
       <div id="composerHint">Enter to send · Shift+Enter for a new line</div>
+      <div id="usageBar" hidden>
+        <div id="usageMeter" hidden aria-hidden="true"><div id="usageFill"></div></div>
+        <span id="usageText" class="mono">No status yet — ⟳ asks this Muse for its /status.</span>
+        <button type="button" id="btnStatus" class="icon-btn small" aria-label="Ask this Muse for /status (usage + context)">⟳</button>
+      </div>
     </div>
   </section>
 </div>
@@ -1184,8 +1215,12 @@ const THREADS_PAGE = 5; // each "Show more" click reveals 5 more threads
 // Daemon plumbing signals — role='muse' rows whose text matches EXACTLY:
 const SIGNAL_TYPING = '...';  // typing indicator, posted right after the daemon receives a message
 const SIGNAL_PONG = 'pong';   // setup done — unlocks the Muse's threads in the UI
+const SIGNAL_STATUS = '/status';            // user request — the Muse answers with its runtime status
+const STATUS_WRAP_OPEN = '<<<STATUS>>>';    // muse reply wrapper (AGENTS.md §2) — raw /status output inside
+const STATUS_WRAP_CLOSE = '<<<END_STATUS>>>';
 const TYPING_TTL_MS = 120000; // typing state auto-expires after 120s without a follow-up row
 const SETUP_POLL_MS = 3000;   // wizard Step 2 — how often to query for the setup pong
+const STATUS_TIMEOUT_MS = 90000; // /status request — give up waiting after 90s
 
 /* ================================================================
    TRẠNG THÁI CLIENT (theo architecture A5)
@@ -1250,6 +1285,8 @@ const state = {
   sessionSentIds: new Set(), // real user-row ids sent this session — only these carry status chips
   maxMuseId: new Map(),      // Map<threadId, highest muse row id> — drives the 'received' chip
   typing: new Map(),         // Map<threadId, timestamp ms> — armed by the daemon '...' signal
+  statusByThread: new Map(), // Map<threadId, {text, at, msgId}> — latest parsed <<<STATUS>>> reply per thread
+  statusPending: new Map(),  // Map<threadId, true> — a /status request is in flight for this thread
   typingTimer: null
 };
 
@@ -1271,6 +1308,11 @@ const rtLabel = E('rtLabel');
 const chatArea = E('chatArea');
 const inputMsg = E('inputMsg');
 const btnSend = E('btnSend');
+const usageBar = E('usageBar');
+const usageMeter = E('usageMeter');
+const usageFill = E('usageFill');
+const usageText = E('usageText');
+const btnStatus = E('btnStatus');
 const setupBanner = E('setupBanner');
 const modalWizard = E('modalWizard'), wizTitle = E('wizTitle'), wizClose = E('wizClose');
 const sd1 = E('sd1'), sd2 = E('sd2'), sc1 = E('sc1');
@@ -1563,8 +1605,8 @@ async function loadData() {
         if (m.id > mx) state.maxMuseId.set(m.thread_id, m.id);
       }
     }
-    // Typing rows are daemon plumbing — never stored for rendering (spec §3)
-    state.msgs200 = state.msgs200.filter(function (m) { return !isTypingRow(m); });
+    // Typing + status rows are daemon plumbing — never stored for rendering (spec §3)
+    state.msgs200 = state.msgs200.filter(function (m) { return !isTypingRow(m) && !isStatusRow(m); });
     state.messagesByThread = new Map();
     recomputeMeta();
     reconcilePending(state.msgs200);
@@ -1616,9 +1658,17 @@ function recomputeMeta() {
    DAEMON SIGNALS — plumbing rows posted by the Muse's daemon as ordinary
    role='muse' messages: text '...' arms the typing indicator (never
    rendered), text 'pong' marks the Muse ready and unlocks its threads.
+   The usage bar adds two more plumbing rows: the user's '/status' request
+   and the Muse's '<<<STATUS>>>…' reply — parsed, never rendered in chat.
    ================================================================ */
 function isTypingRow(m) { return !!m && m.role === 'muse' && m.text === SIGNAL_TYPING; }
 function isSetupThread(t) { return !!t && (t.title || '') === 'setup'; }
+/* '/status' request (role='user') + the wrapped reply (role='muse') — both plumbing */
+function isStatusRow(m) {
+  if (!m || typeof m.text !== 'string') return false;
+  if (m.role === 'user') return m.text === SIGNAL_STATUS;
+  return m.role === 'muse' && m.text.indexOf(STATUS_WRAP_OPEN) === 0;
+}
 
 /* Process signal-bearing rows. opts.fresh=false for re-delivered (poll) and
    load-seeded rows — only a genuinely new row arms typing, or the 30s poll
@@ -1626,6 +1676,12 @@ function isSetupThread(t) { return !!t && (t.title || '') === 'setup'; }
 function applyMessageSignals(m, opts) {
   opts = opts || {};
   if (!m || typeof m.id !== 'number' || m.role !== 'muse') return;
+  // A '<<<STATUS>>>' reply is plumbing — store it for the usage bar and stop here:
+  // it must NOT watermark '✓✓ received' nor clear the typing state.
+  if (m.role === 'muse' && m.text.indexOf(STATUS_WRAP_OPEN) === 0) {
+    storeStatusReply(m);
+    return;
+  }
   // Highest muse id per thread — the '✓✓ received' chip uses it as the watermark
   const mx = state.maxMuseId.get(m.thread_id) || 0;
   if (m.id > mx) state.maxMuseId.set(m.thread_id, m.id);
@@ -1709,7 +1765,7 @@ function ingestMessage(m, opts) {
     }
   }
   let added = false;
-  if (!isTypingRow(m)) {
+  if (!isTypingRow(m) && !isStatusRow(m)) {
     const cache = state.messagesByThread.get(m.thread_id);
     if (cache && !cache.some(function (x) { return x.id === m.id; })) {
       cache.push(m);
@@ -2223,9 +2279,9 @@ async function openThread(tid) {
       return null;
     });
   if (raw) {
-    // Seed the muse watermark from older rows too, then strip typing plumbing
+    // Seed the muse watermark + stored statuses from older rows, then strip plumbing
     for (const m of raw) applyMessageSignals(m, { fresh: false });
-    const rows = raw.filter(function (m) { return !isTypingRow(m); });
+    const rows = raw.filter(function (m) { return !isTypingRow(m) && !isStatusRow(m); });
     state.messagesByThread.set(tid, rows);
     reconcilePending(rows);
     renderChat();
@@ -2259,6 +2315,7 @@ function updateSendState() {
   btnSend.disabled = sending || gated || !inputMsg.value.trim() || state.activeThreadId == null;
   inputMsg.disabled = gated;
   setupBanner.hidden = !gated;
+  renderUsageBar(); // the usage bar follows the same visibility rules as the composer
 }
 
 function resizeInput() {
@@ -2286,6 +2343,14 @@ async function sendMessage() {
   if (!text || sending || state.activeThreadId == null) return;
   const p = activeProject();
   if (!p) return;
+  // '/status' is plumbing — route it to the usage bar instead of the chat
+  if (text === SIGNAL_STATUS) {
+    inputMsg.value = '';
+    resizeInput();
+    updateSendState();
+    requestStatus();
+    return;
+  }
   const entry = {
     key: newPendingKey(),
     thread_id: state.activeThreadId,
@@ -2354,6 +2419,97 @@ async function retryPending(key) {
     updateSendState();
     inputMsg.focus();
   }
+}
+
+/* ================================================================
+   USAGE BAR — below the composer. ⟳ sends a '/status' request into the open
+   thread (a plumbing row, hidden from chat); the Muse answers with its
+   runtime status wrapped in '<<<STATUS>>>…<<<END_STATUS>>>' (AGENTS.md §2).
+   The latest reply per thread is parsed here and shown with a context meter
+   when the output contains a percentage.
+   ================================================================ */
+function storeStatusReply(m) {
+  let text = m.text.slice(STATUS_WRAP_OPEN.length);
+  const end = text.lastIndexOf(STATUS_WRAP_CLOSE);
+  if (end !== -1) text = text.slice(0, end);
+  text = text.replace(/^\s*\n/, '').replace(/\s+$/, '').trim();
+  if (!text) text = '(empty /status output)';
+  state.statusByThread.set(m.thread_id, { text: text, at: Date.now(), msgId: m.id });
+  state.statusPending.delete(m.thread_id); // arrived while we were waiting
+  if (state.activeThreadId === m.thread_id) renderUsageBar();
+}
+
+/* Send the '/status' request — posted directly (no pending bubble): the row is
+   plumbing and the real answer is the <<<STATUS>>> reply, not an echo. */
+async function requestStatus() {
+  const tid = state.activeThreadId;
+  if (tid == null || state.statusPending.get(tid)) return;
+  const p = activeProject();
+  if (!p || !projectReady(p.id)) return; // gated Muses have no daemon yet
+  state.statusPending.set(tid, true);
+  renderUsageBar();
+  try {
+    await rest('/rest/v1/messages', {
+      method: 'POST',
+      prefer: 'return=representation',
+      body: { thread_id: tid, project_id: p.id, role: 'user', text: SIGNAL_STATUS }
+    });
+  } catch (e) {
+    state.statusPending.delete(tid);
+    renderUsageBar();
+    toastErrNoAuth('Could not request /status', e);
+    return;
+  }
+  // The reply comes back through SSE/poll; give up loudly if it never does
+  setTimeout(function () {
+    if (!state.statusPending.get(tid)) return;
+    state.statusPending.delete(tid);
+    if (state.activeThreadId === tid) renderUsageBar();
+    toastOnce('statusTimeout', 10000, {
+      kind: 'warn',
+      title: 'No /status reply',
+      detail: 'The Muse did not answer in 90s — is its daemon running and its client zip up to date?'
+    });
+  }, STATUS_TIMEOUT_MS);
+}
+
+/* First percentage in the /status output drives the little context meter */
+function statusPercentOf(text) {
+  const m = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(text);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  return isFinite(v) && v >= 0 && v <= 100 ? v : null;
+}
+
+function renderUsageBar() {
+  const show = state.activeThreadId != null && state.activeProjectId != null &&
+               projectReady(state.activeProjectId);
+  usageBar.hidden = !show;
+  if (!show) return;
+  const tid = state.activeThreadId;
+  const st = state.statusByThread.get(tid);
+  if (state.statusPending.get(tid)) {
+    usageMeter.hidden = true;
+    usageText.textContent = 'Asking this Muse for /status… (its daemon forwards the request; answer in a few seconds)';
+    usageText.title = '';
+    usageText.classList.remove('has-data');
+    btnStatus.disabled = true;
+    return;
+  }
+  btnStatus.disabled = false;
+  if (!st) {
+    usageMeter.hidden = true;
+    usageText.textContent = 'No status yet — ⟳ asks this Muse for its /status (usage + context).';
+    usageText.title = '';
+    usageText.classList.remove('has-data');
+    return;
+  }
+  const pct = statusPercentOf(st.text);
+  usageMeter.hidden = pct === null;
+  if (pct !== null) usageFill.style.width = pct + '%';
+  usageText.textContent = st.text;
+  usageText.title = st.text + '  (updated ' + new Date(st.at).toLocaleTimeString('en-GB') + ')';
+  usageText.classList.add('has-data');
 }
 
 async function newThreadFor(p) {
@@ -2576,10 +2732,12 @@ async function confirmDeleteThread() {
     await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'DELETE' });
     state.threads = state.threads.filter(function (x) { return x.id !== t.id; });
     state.messagesByThread.delete(t.id);
-    // Drop any pending sends bound to the deleted thread
+    // Drop any pending sends + stored status bound to the deleted thread
     for (const [k, pe] of state.pendingSends) {
       if (pe.thread_id === t.id) state.pendingSends.delete(k);
     }
+    state.statusByThread.delete(t.id);
+    state.statusPending.delete(t.id);
     const pi = state.pins.indexOf(t.id);
     if (pi !== -1) { state.pins.splice(pi, 1); savePins(); }
     if (state.activeThreadId === t.id) state.activeThreadId = null;
@@ -2983,6 +3141,7 @@ function closeWizard() {
 btnNew.addEventListener('click', openWizard);
 // Sign out — serve.py clears the mr_session cookie and redirects to /login
 btnSignout.addEventListener('click', function () { window.location.href = '/logout'; });
+btnStatus.addEventListener('click', requestStatus);
 wizClose.addEventListener('click', closeWizard);
 btnWizCancel.addEventListener('click', closeWizard);
 btnWizDone.addEventListener('click', closeWizard);
@@ -3082,11 +3241,17 @@ async function confirmDelete() {
     state.activeProjectId = null;
     state.activeThreadId = null;
   }
-  // Clean up gating + pending state bound to the deleted Muse
+  // Clean up gating + pending + status state bound to the deleted Muse
   state.ready.delete(p.id);
   saveReady();
   for (const [k, pe] of state.pendingSends) {
     if (pe.project_id === p.id) state.pendingSends.delete(k);
+  }
+  for (const t of state.threads) {
+    if (t.project_id === p.id) {
+      state.statusByThread.delete(t.id);
+      state.statusPending.delete(t.id);
+    }
   }
   recomputeMeta();
   renderAll();

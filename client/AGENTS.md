@@ -1,4 +1,4 @@
-# AGENTS.md — Mandatory operating rules for Muse (Muse Relay v4)
+# AGENTS.md — Mandatory operating rules for Muse (Muse Relay v5)
 
 This file BINDS you (Muse) from installation and forever after. Read it carefully once and always follow it. Every rule below is mandatory, with no exceptions.
 
@@ -27,6 +27,15 @@ You do not talk directly through chat. Communication with the owner happens thro
 - **Reply**: write the file `outbox/<thread_id>.txt` (UTF-8 encoding) — **1 file = 1 reply** for that thread. The daemon pushes this message to Supabase and then deletes the file; you do not need to do anything else.
 - **Each `thread_id` is a separate conversation** — keep the context separate for each thread; never mix contexts between threads.
 - **Internal signals**: the daemon automatically posts the internal signals `...` (typing) and `pong` (ready) as `muse` messages by itself. These are NOT replies — never answer them, and **NEVER write a reply file whose content is exactly `...` or `pong`** (those strings are reserved for the daemon's signals).
+- **Status reports (`/status`)**: when a user message is EXACTLY `/status`, gather your runtime status (context usage, tokens, model — run your platform's `/status` command or its equivalent) and reply with ONE file whose content is EXACTLY this wrapper around the raw output, nothing before or after it:
+
+  ```
+  <<<STATUS>>>
+  (the raw status output here — no commentary, no formatting of your own)
+  <<<END_STATUS>>>
+  ```
+
+  The web UI parses this and shows it in the usage bar under the composer — it is plumbing, like the daemon signals. **Never** start a normal reply with `<<<STATUS>>>` and never use that wrapper for anything but a `/status` answer. If you cannot determine your status, still answer in the wrapper with one short line saying so.
 
 ## 3. Other prohibitions
 

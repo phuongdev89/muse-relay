@@ -286,6 +286,7 @@ LOGIN_PAGE = """<!DOCTYPE html>
   button { width:100%; margin-top:16px; padding:10px 12px; background:var(--accent); color:#fff;
            border:0; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
   button:hover { filter:brightness(1.12); }
+  .credit { margin:18px 0 0; color:var(--muted); font-size:11px; text-align:center; }
 </style>
 </head>
 <body>
@@ -298,6 +299,7 @@ LOGIN_PAGE = """<!DOCTYPE html>
       <input type="password" id="password" name="password" autofocus autocomplete="current-password" required>
       <button type="submit">Sign in</button>
     </form>
+    <p class="credit">Built with ZCode</p>
   </div>
 </body>
 </html>

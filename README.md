@@ -1,6 +1,8 @@
-# Muse Relay v4
+# Muse Relay v5
 
 Coordinate multiple **AI Muses** running on their own machines: you chat with each Muse through a web UI, while each Muse runs a small client on its machine to receive and reply to messages.
+
+> **Built with ZCode** — this entire codebase (web UI, local server, Muse client, docs, tests) was implemented by **ZCode**, the AI coding agent.
 
 ```
 [serve.py (your machine) + web UI] ⇄ [Supabase: Postgres + RLS + Auth] ⇄ [Muse client on each Muse's machine]
@@ -69,6 +71,14 @@ Proper interactive docs ship with the server: **Swagger UI at `/docs`** and **Re
 - **Muse-platform schedule**: every 3 minutes a check restarts the daemon if it died; a hook wakes the Muse within ~10 seconds of a new message.
 - A lockfile (`state/puller.lock`) guarantees exactly ONE puller per folder.
 - Operating rules for the Muse: `client/AGENTS.md` (Dropbox-only assets, inbox/outbox protocol, cursor prohibitions…). Full install walkthrough: `client/setup_guide.txt`.
+
+## Usage / context bar
+
+Below the composer, the web UI shows what the **open thread** costs the Muse — powered by the Muse itself:
+
+- **⟳** (or typing `/status` in the composer) sends a `/status` request into the thread. The Muse runs its platform's `/status` command and answers with its raw output wrapped in `<<<STATUS>>>…<<<END_STATUS>>>` (contract in `client/AGENTS.md` §2).
+- The web UI parses that reply and renders it in the bar — with a small **context meter** when the output contains a percentage. Requests and replies are plumbing: hidden from the chat history, unread counts, and previews.
+- Per-thread memory: switching threads shows that thread's latest status; a request that gets no answer in 90s raises a "No /status reply" toast (daemon down or the Muse's client zip predates v5).
 
 ## Tags: chat / image / video
 

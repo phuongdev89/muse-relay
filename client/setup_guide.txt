@@ -129,3 +129,9 @@ ADDITIONAL NOTES
 3) What can this Muse see?
 - Only its own project's data. Every request is RLS-scoped by its own
   login: messages for other Muses are INVISIBLE to this client.
+
+4) The /status command
+- The owner can send "/status" in any thread. Muse must answer it in the
+  EXACT wrapper format from AGENTS.md section 2 (<<<STATUS>>> …
+  <<<END_STATUS>>>) with the raw output of its platform's /status — the
+  web UI shows the result in the usage bar under the composer.
