@@ -8,7 +8,7 @@ __pycache__/
 .env.*
 !.env.example
 
-# ---- dữ liệu chạy local ----
+# ---- local runtime data ----
 data/
 .cache/
 *.log
