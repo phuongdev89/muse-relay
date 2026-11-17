@@ -1,14 +1,17 @@
 """Shared Supabase auth + REST helpers for Muse Relay (GoTrue + RLS).
 
-Auth model (v4): each Muse logs in with its OWN email/password (GoTrue).
-Supabase RLS locks every request to that Muse's own project — a Muse can
-never read another Muse's data, even with full access to this code.
+Auth model (v6): each Muse holds its OWN long-lived GoTrue session — the
+"Relay Session" value the owner hands over as ordinary config. Supabase RLS
+locks every request to that Muse's own project — a Muse can never read
+another Muse's data, even with full access to this code.
 
-- Non-secret values live in config.json: Project ID, Publishable Key, URL, Muse Email.
-- The ONLY secret is the relay password: MUSE_PASSWORD environment variable
-  (entered by the owner in the secure form; never written to disk).
-- After the first login, a refresh token is kept in state/session.json (chmod 600)
-  so background daemons can keep the session alive forever without the password.
+- Everything lives in config.json as plain values: Project ID, Publishable Key,
+  URL, Muse Email and RELAY_SESSION (the Muse's session — minted by the
+  owner's web UI, ⚙ → Token).
+- RELAY_SESSION renews itself: every refresh issues a new one, and the client
+  keeps the live value in state/session.json (chmod 600) so background daemons
+  survive restarts. If the value ever dies, the owner mints a fresh one and
+  updates config.json.
 """
 import json
 import os
@@ -42,33 +45,18 @@ def read_config(path):
 
 # ---------- login / session ----------
 
-def _login_password(cfg):
-    """Password grant — needs MUSE_PASSWORD in the environment."""
-    pw = os.environ.get("MUSE_PASSWORD", "")
-    if not pw:
-        raise AuthError(
-            "MUSE_PASSWORD is missing from the environment — show the secure form "
-            "'Muse Relay password' to the owner, then start again")
-    r = requests.post(
-        f"{cfg['url']}/auth/v1/token?grant_type=password",
-        headers={"apikey": cfg["publishable"], "Content-Type": "application/json"},
-        data=json.dumps({"email": cfg["email"], "password": pw}), timeout=TIMEOUT,
-    )
-    if r.status_code != 200:
-        raise AuthError(f"login failed (HTTP {r.status_code}) — check Muse Email / relay password")
-    j = r.json()
-    return {"access_token": j["access_token"], "refresh_token": j["refresh_token"],
-            "expires_at": time.time() + int(j.get("expires_in", 3600)) - 120}
-
-
 def _refresh_session(cfg, refresh_token):
+    """Exchange a refresh token for a live session (also the seed path:
+    the Relay Session value in config.json IS a refresh token)."""
     r = requests.post(
         f"{cfg['url']}/auth/v1/token?grant_type=refresh_token",
         headers={"apikey": cfg["publishable"], "Content-Type": "application/json"},
         data=json.dumps({"refresh_token": refresh_token}), timeout=TIMEOUT,
     )
     if r.status_code != 200:
-        raise AuthError("session refresh failed — the relay password may have been rotated")
+        raise AuthError(
+            "session refresh failed — this Relay Session is dead or rotated: mint a fresh "
+            "value in the owner's web UI (⚙ → Token) and update RELAY_SESSION in config.json")
     j = r.json()
     return {"access_token": j["access_token"], "refresh_token": j["refresh_token"],
             "expires_at": time.time() + int(j.get("expires_in", 3600)) - 120}
@@ -79,7 +67,8 @@ def _session_path(state_dir):
 
 
 def get_session(cfg):
-    """A valid session: refresh-token file first, then password login from env. Saves on success."""
+    """A valid session: the saved refresh-token file first, then the Relay
+    Session from config.json. Saves the live (rotated) token on success."""
     sp = _session_path(cfg["state_dir"])
     try:
         saved = json.loads(sp.read_text(encoding="utf-8"))
@@ -90,8 +79,12 @@ def get_session(cfg):
     except AuthError:
         raise
     except Exception:
-        pass  # missing/corrupt/stale session — fall through to password login
-    sess = _login_password(cfg)
+        pass  # missing/corrupt/stale session — fall through to the Relay Session
+    if not cfg.get("session_ref"):
+        raise AuthError(
+            "no saved session and no RELAY_SESSION in config.json — ask the owner to mint "
+            "a fresh value (web UI → ⚙ → Token) and put it in config.json")
+    sess = _refresh_session(cfg, cfg["session_ref"])
     _save_session(sp, sess, cfg["email"])
     return sess
 
@@ -258,6 +251,7 @@ def build_cfg(config_path, state_dir, outbox_dir):
         "url": url,
         "publishable": str(cfg_file.get("SUPABASE_PUBLISHABLE_KEY", "") or os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")),
         "email": str(cfg_file.get("MUSE_EMAIL", "") or os.environ.get("MUSE_EMAIL", "")).strip().lower(),
+        "session_ref": str(cfg_file.get("RELAY_SESSION", "") or os.environ.get("RELAY_SESSION", "")).strip(),
         "state_dir": Path(state_dir),
         "outbox_dir": Path(outbox_dir),
         "session": None,
@@ -268,4 +262,8 @@ def build_cfg(config_path, state_dir, outbox_dir):
         raise AuthError("SUPABASE_PUBLISHABLE_KEY missing from config.json")
     if not cfg["email"]:
         raise AuthError("MUSE_EMAIL missing from config.json")
+    if not cfg["session_ref"]:
+        raise AuthError(
+            "RELAY_SESSION missing from config.json — mint a value in the owner's web UI "
+            "(⚙ → Token) and put it there")
     return cfg

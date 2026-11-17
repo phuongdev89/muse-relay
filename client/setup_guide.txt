@@ -23,32 +23,22 @@ Run inside the folder you just unzipped:
 
 requirements.txt only contains the libraries that are needed (requests) — it installs quickly.
 
-STEP 3 — FILL IN THE 3 PUBLIC VALUES (config.json)
+STEP 3 — FILL IN THE CONFIG VALUES (config.json)
 Open config.json and put in these values (the owner gave them in the
-instruction — none of them is secret):
+instruction):
 
     SUPABASE_PROJECT_ID      e.g. jnmi… (20 letters)
     SUPABASE_PUBLISHABLE_KEY e.g. sb_publishable_…
     SUPABASE_URL             https://<project id>.supabase.co
     MUSE_EMAIL               e.g. muse_design@muserelay.local
+    RELAY_SESSION            the long Relay Session value from the owner
 
-Write them into config.json yourself — the owner never touches the folder.
+Write them into config.json yourself, exactly as given — the owner never
+touches the folder. RELAY_SESSION is this Muse's login session: it renews
+itself automatically (the live value is kept in state/session.json), so
+config.json never needs changing again unless the owner mints a new one.
 
-STEP 4 — THE ONE SECRET: RELAY PASSWORD (secure form)
-The password is the ONLY secret. When you are ready to start the client,
-show the owner the secure form labelled "Muse Relay password" so they can
-type it directly (the field is hidden).
-
-- ABSOLUTELY:
-  * Never ask the owner to paste the password into the chat window.
-  * Never print/echo the password to the screen, chat, or any file.
-  * The password must ONLY exist in the MUSE_PASSWORD environment variable
-    of the client process. Never save it into any file.
-- After login, the client keeps a refresh token in state/session.json
-  (permissions 600) so the daemon can restart without the password — that
-  is normal and safe; the password itself is never on disk.
-
-STEP 5 — RUN THE DAEMON (exactly ONE puller per folder)
+STEP 4 — RUN THE DAEMON (exactly ONE puller per folder)
 The daemon (poller.py) pulls new messages into state/inbox.jsonl and pushes
 replies from outbox/ up to Supabase, ~3 seconds per round.
 
@@ -85,14 +75,15 @@ Create /etc/systemd/system/muse-relay-<muse_id>.service:
 Then: sudo systemctl daemon-reload && sudo systemctl enable --now muse-relay-<muse_id>
 (view logs with: journalctl -u muse-relay-<muse_id> -f, or tail state/poller.log)
 
-STEP 6 — CONFIRM THE DAEMON IS LISTENING
+STEP 5 — CONFIRM THE DAEMON IS LISTENING
 Read the log (tail -f state/poller.log). On success you see:
 
-    daemon start — GoTrue login, RLS-isolated, one puller, ~3s per round
+    daemon start — session login, RLS-isolated, one puller, ~3s per round
     (then, on the first message: "inbox +N new messages, cursor=…")
 
-A login failure prints "fatal: …" — most often the owner typed the
-password wrong: show the secure form again and restart the daemon.
+A login failure prints "fatal: …" — most often the RELAY_SESSION value is
+missing or dead: ask the owner to mint a fresh one (web UI → ⚙ → Token),
+update config.json and start the daemon again.
 
 When the daemon starts it automatically sends a 'pong' ready-signal to the
 relay — the owner's web UI then shows this Muse as ready/unlocked. When new
@@ -100,14 +91,14 @@ messages arrive, the daemon also automatically posts '...' typing signals.
 Both are internal signals sent by the daemon itself; the Muse never writes
 them itself (and must never write a reply that is exactly '...' or 'pong').
 
-STEP 7 — WAIT FOR A TEST MESSAGE AND REPLY TO IT
+STEP 6 — WAIT FOR A TEST MESSAGE AND REPLY TO IT
 - The owner sends a test message from the web UI; the daemon moves it into
   state/inbox.jsonl (one JSON per line; only process lines with role="user").
 - Reply by writing the file outbox/<thread_id>.txt (UTF-8) — 1 file = 1
   message for that thread. The daemon pushes it and deletes the file.
 - The owner confirms the reply arrived → setup is complete.
 
-STEP 8 — READ AGENTS.md CAREFULLY
+STEP 7 — READ AGENTS.md CAREFULLY
 Read all of AGENTS.md in the same folder and FOLLOW IT FOREVER: the
 Dropbox-only rule for assets, the inbox/outbox protocol, the prohibitions,
 and the capability limits from the project's tags.
@@ -121,7 +112,7 @@ ADDITIONAL NOTES
 2) What if the daemon dies?
 - Transient network error → the daemon backs off by itself (1, 2, 4 … 60s).
 - Machine restart → start_daemon.sh (or systemd) brings it back; the saved
-  session (state/session.json) re-logins without the password.
+  session (state/session.json) reconnects by itself.
 - The cursor in state/cursor.json is atomic and persistent: processed
   messages are never re-read, new messages are never missed. NEVER edit
   cursor.json by hand; if it is corrupt, ask the owner — do not delete it.

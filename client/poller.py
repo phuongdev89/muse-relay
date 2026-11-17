@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pull + push daemon for Muse Relay v4 (GoTrue login + RLS isolation).
+"""Pull + push daemon for Muse Relay v6 (session login + RLS isolation).
 
 Same job as muse_client.py but meant to run forever in the background:
 - pulls new user messages into state/inbox.jsonl (paginated, oldest first, own project only — RLS)
@@ -7,10 +7,10 @@ Same job as muse_client.py but meant to run forever in the background:
 - NEVER writes replies itself and never touches MEMORY.md — replies are written by
   Muse's scheduled run / wake hook; this daemon only moves them.
 
-Auth: logs in with the Muse's own email/password. The password comes from the
-MUSE_PASSWORD environment variable (secure form); after the first login the
-refresh token in state/session.json (chmod 600) keeps the daemon alive forever
-across restarts — no password needed to restart it.
+Auth: uses the Muse's own Relay Session value from config.json (long-lived GoTrue
+session); the rotated live token in state/session.json (chmod 600) keeps the
+daemon alive across restarts — config.json never needs changing again unless
+the session is revoked.
 
 A lockfile (state/puller.lock) guarantees exactly ONE puller per folder:
 if muse_client.py is running, this daemon exits immediately (and vice versa).
@@ -112,11 +112,11 @@ def main():
         log(f"cannot start: {e}")
         sys.exit(1)
 
-    log("daemon start — GoTrue login, RLS-isolated, one puller, ~3s per round")
+    log("daemon start — session login, RLS-isolated, one puller, ~3s per round")
     try:
         pr = api(cfg, "GET", "projects?select=id,muse_id,name,tags", "fetching the project").json()
         if not pr:
-            log("no project visible for this login — check Muse Email / relay password with the owner")
+            log("no project visible for this login — check Muse Email / RELAY_SESSION in config.json with the owner")
             return
         cfg["pid"] = pr[0]["id"]
         try:

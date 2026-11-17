@@ -1,4 +1,4 @@
-"""Muse Relay v4 — client on the Muse machine (GoTrue login + RLS isolation).
+"""Muse Relay v6 — client on the Muse machine (session login + RLS isolation).
 
 New messages (role='user') for YOUR project are appended to state/inbox.jsonl —
 Muse reads that file, then writes replies to outbox/<thread_id>.txt; the client
@@ -6,18 +6,19 @@ POSTs each reply back and deletes the file. The cursor lives in state/cursor.jso
 (shared key "last_id" with poller.py; a lockfile state/puller.lock makes sure only
 ONE puller runs at a time).
 
-Auth (v4 — RLS isolation): you log in with the Muse's OWN email/password (GoTrue).
-Every request carries that JWT and Supabase RLS restricts it to this Muse's own
-project — this client physically cannot read another Muse's data.
+Auth (v6 — RLS isolation): the client uses the Muse's own Relay Session value from
+config.json (a long-lived GoTrue session that renews itself on every refresh).
+Every request carries that session's JWT and Supabase RLS restricts it to this
+Muse's own project — this client physically cannot read another Muse's data.
 
 How to run:
     pip install requests
     python3 muse_client.py                # indefinite poll loop (~3s pause)
     python3 muse_client.py --once         # one round + push the outbox, for cron
 
-Only needs (owner decision 2026-11-17 — per-Muse API keys are gone):
-- config.json: SUPABASE_PROJECT_ID, SUPABASE_PUBLISHABLE_KEY (public), SUPABASE_URL, MUSE_EMAIL
-- environment: MUSE_PASSWORD (the ONLY secret — from the owner's secure form, never on disk)
+Only needs (per-Muse API keys and passwords are gone):
+- config.json: SUPABASE_PROJECT_ID, SUPABASE_PUBLISHABLE_KEY (public), SUPABASE_URL,
+  MUSE_EMAIL and RELAY_SESSION (the Muse's session — from the owner's web UI)
 """
 import argparse
 import json
@@ -45,8 +46,8 @@ def fetch_project(cfg):
     r = api(cfg, "GET", "projects?select=id,muse_id,name,tags,email", "fetching the project")
     rows = r.json()
     if not rows:
-        sys.exit("[muse] no project visible for this login — wrong Muse Email/password, "
-                 "or the owner has not created the Muse yet")
+        sys.exit("[muse] no project visible for this login — check Muse Email / RELAY_SESSION "
+                 "in config.json, or the owner has not created the Muse yet")
     if len(rows) > 1:
         print(f"[muse] WARNING: {len(rows)} projects visible — expected 1. Tell the owner.", file=sys.stderr)
     return rows[0]
@@ -128,7 +129,7 @@ def try_pong(cfg):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Muse Relay v4 client — GoTrue login, RLS-isolated")
+    ap = argparse.ArgumentParser(description="Muse Relay v6 client — session login, RLS-isolated")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--once", action="store_true", help="one round + push the outbox, then exit")
     args = ap.parse_args()

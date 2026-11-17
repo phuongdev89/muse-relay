@@ -7,8 +7,11 @@
   - NO keys live in the browser: all Supabase calls go through the local server
     (serve.py) which reads .env — /sb proxies REST (secret key server-side),
     /api/events streams new messages over SSE.
-  - Each Muse logs in with its own GoTrue email/password → RLS locks it to its
-    own project (created by the wizard; password via the Muse's secure form).
+  - Each Muse holds a long-lived GoTrue session value ("Relay Session") that it
+    refreshes itself → RLS locks the session to its own project. The wizard logs
+    in once and hands the session over as ordinary config (config.json) — the
+    login password never leaves the server side (kept in projects.secret as the
+    re-issue seed; ⚙ → Token mints a fresh session).
   - Owner auth: serve.py gates the page behind a password (mr_session cookie) —
     unauthenticated requests bounce to /login; "Sign out" hits GET /logout.
   - Daemon plumbing travels as ordinary role='muse' rows: text '...' = typing
@@ -1025,18 +1028,18 @@ input, textarea { caret-color: var(--caret-color); }
           </div>
           <div class="cred-sep" aria-hidden="true"></div>
           <div class="cred-row">
-            <span class="cred-label">Password</span>
-            <span class="cred-value" id="wizPass">—</span>
-            <button type="button" class="btn mini secondary" id="cpyPass">Copy</button>
+            <span class="cred-label">Relay Session</span>
+            <span class="cred-value" id="wizSess">—</span>
+            <button type="button" class="btn mini secondary" id="cpySess">Copy</button>
           </div>
         </div>
-        <div class="callout warn"><span class="ico">⚠</span><span>Save the password now — paste it into the Muse's secure form when it asks. It stays available anytime via ⚙ → Token.</span></div>
+        <div class="callout warn"><span class="ico">⚠</span><span>The Muse writes the Relay Session value into its config.json as ordinary config — no secure form involved. If it is ever lost, mint a fresh one via ⚙ → Token.</span></div>
         <div class="guide-head">
           <span>Instruction for your Muse</span>
           <button type="button" class="btn mini secondary" id="cpyInstr" aria-label="Copy the instruction">Copy</button>
         </div>
         <textarea id="instrBox" class="guide-box" readonly aria-label="Instruction to paste into your Muse's chat"></textarea>
-        <div class="callout warn"><span class="ico">⚠</span><span>Paste the whole instruction into your Muse's chat. The password never appears inside it — you type it into the Muse's secure form.</span></div>
+        <div class="callout warn"><span class="ico">⚠</span><span>Paste the whole instruction into your Muse's chat — all four values go into its config.json as ordinary config.</span></div>
         <div id="wizSetup" class="wiz-setup" hidden aria-live="polite"></div>
       </div>
     </div>
@@ -1054,7 +1057,7 @@ input, textarea { caret-color: var(--caret-color); }
   <div class="panel sm" role="dialog" aria-modal="true" aria-labelledby="tokTitle">
     <div class="panel-head">
       <div class="ph-stack">
-        <h2 id="tokTitle">Muse login token</h2>
+        <h2 id="tokTitle">Muse relay session</h2>
         <div class="ph-sub" id="tokName">—</div>
       </div>
       <button type="button" id="tokClose" class="icon-btn" aria-label="Close">✕</button>
@@ -1073,12 +1076,13 @@ input, textarea { caret-color: var(--caret-color); }
         </div>
         <div class="cred-sep" aria-hidden="true"></div>
         <div class="cred-row">
-          <span class="cred-label">Secret</span>
-          <span class="cred-value" id="tokSecret">—</span>
-          <button type="button" class="btn mini secondary" id="cpyTokSecret">Copy</button>
+          <span class="cred-label">Relay Session</span>
+          <span class="cred-value" id="tokSess">—</span>
+          <button type="button" class="btn mini secondary" id="cpyTokSess">Copy</button>
         </div>
+        <button type="button" class="btn secondary sm" id="btnTokReissue" style="margin-top:10px">↻ Mint a fresh session</button>
       </div>
-      <div class="callout note"><span class="ico">ⓘ</span><span>The Muse's login password (paired with the Email above) — RLS locks this Muse to its own project. Visible only to the owner.</span></div>
+      <div class="callout note"><span class="ico">ⓘ</span><span>The Relay Session value lives in the Muse's config.json and renews itself. Mint a fresh one ONLY while that Muse's client is stopped (or has lost its state) — a re-issued session invalidates the old one.</span></div>
     </div>
   </div>
 </div>
@@ -1326,7 +1330,7 @@ const wizSetup = E('wizSetup');
 const btnWizCancel = E('btnWizCancel'), btnWizBack = E('btnWizBack'), btnWizNext = E('btnWizNext'), btnWizDone = E('btnWizDone');
 const modalToken = E('modalToken'), tokName = E('tokName'), tokClose = E('tokClose');
 const tokSkeleton = E('tokSkeleton'), tokRows = E('tokRows');
-const tokEmail = E('tokEmail'), tokSecret = E('tokSecret');
+const tokEmail = E('tokEmail'), tokSess = E('tokSess'), btnTokReissue = E('btnTokReissue');
 const modalDelete = E('modalDelete'), delText = E('delText');
 const btnDelCancel = E('btnDelCancel'), btnDelConfirm = E('btnDelConfirm');
 const modalRenameThread = E('modalRenameThread'), renInput = E('renInput');
@@ -2827,7 +2831,7 @@ const wiz = {
   museId: '', idOk: false, idChecked: '',
   slugDirty: false,           // user hand-edited the Muse ID → stop auto-slugging
   tags: [],
-  email: '', password: '',    // the Muse's GoTrue login — password shown only in Step 2 + Token modal
+  email: '', session: '',     // the Muse's identity: email + the long-lived Relay Session value (refresh token)
   pid: null,                  // project created in this wizard run — watched for the setup pong
   setupDone: false,           // pong received for wiz.pid
   pongTimer: null             // Step 2 live status poll (every 3s)
@@ -2860,7 +2864,7 @@ function openWizard() {
     step: 1, busy: false, created: false,
     museId: '', idOk: false, idChecked: '',
     slugDirty: false, tags: [],
-    email: '', password: '',
+    email: '', session: '',
     pid: null, setupDone: false
   });
   wizName.value = '';
@@ -3019,25 +3023,25 @@ function syncTagChips() {
   }
 }
 
-// English instruction to paste into the Muse's chat — email is public, password goes through the secure form
+// English instruction to paste into the Muse's chat — all four values go into its config.json as ordinary config
 function buildInstruction() {
   const pid = state.settings.projectId;
   const pub = state.settings.publishable || '[PASTE YOUR PUBLISHABLE KEY HERE]';
   return [
-    'Hi, please set up Muse Relay for me. Please download the zip file at link below. I am not technical, so please do everything for me — I will only type the relay password into the secure form when you show it.',
+    'Hi, please set up Muse Relay for me. Please download the zip file at link below. I am not technical, so please do everything for me.',
     '',
     'My Supabase project (my own project):',
     'Setup ZIP link: ' + SETUP_ZIP_URL,
     'Project ID: ' + pid,
     'Publishable Key: ' + pub,
     'Muse Email: ' + wiz.email,
+    'Relay Session: ' + (wiz.session || '[MINT VIA ⚙ → TOKEN AND PASTE HERE]'),
     '',
     'Please do this for me, in order:',
     '',
     'Unzip the file and read the instructions inside it.',
-    'Put my Project ID, Publishable Key and Muse Email into config.json yourself. I will not do this by hand.',
-    'Show me the secure form called "Muse Relay password" so I can type the password there. Do NOT ask me to paste the password in chat.',
-    'Log in with the Muse Email + that password and read my project — I should see exactly one project (mine). If you see none or more than one, tell me in simple words and show the form again.',
+    'Put my Project ID, Publishable Key, Muse Email and Relay Session into config.json yourself, exactly as written above. I will not do this by hand.',
+    'Use the client in the zip to read my project — I should see exactly one project (mine). If you see none or more than one, tell me in simple words.',
     'Start the daemon that checks for new messages every few seconds and sends my replies back.',
     'Set up the automatic checks for me: one every 3 minutes to make sure the daemon is still running, and one every 10 seconds to wake you up when a new message arrives.',
     'When the daemon starts it automatically sends a pong signal — the web UI will then show this Muse as ready, so wait for that before sending my first message.',
@@ -3045,8 +3049,8 @@ function buildInstruction() {
     '',
     'Important:',
     '',
-    'My relay password is secret. Never write it in a file, never show it, never ask for it in chat.',
-    'This is my own Supabase project. Do not use anyone else\'s project or keys.',
+    'The four values above are my own project settings. Put them in config.json exactly as given, keep them unchanged, and do not share them anywhere.',
+    'This is my own Supabase project. Do not use anyone else\'s project or settings.',
     'Messages sent through Supabase are text only. If I need to send a photo or file through Supabase, upload it to Dropbox first and send only the link. In normal chat here, send files directly as usual.'
   ].join('\n');
 }
@@ -3055,7 +3059,7 @@ function renderStep2() {
   wizPid.textContent = state.settings.projectId;
   wizPub.textContent = state.settings.publishable || '—';
   wizEmail.textContent = wiz.email;
-  wizPass.textContent = wiz.password;
+  wizSess.textContent = wiz.session || '— (mint failed — use ⚙ → Token)';
   instrBox.value = buildInstruction();
 }
 
@@ -3081,7 +3085,8 @@ async function createMuse() {
       body: { email: email, password: pw, email_confirm: true }
     });
     userId = u && u.id;
-    // 2) project row — secret stores the Muse's login password (viewable again via the Token modal)
+    // 2) project row — secret stores the Muse's login seed (server-side only:
+    //    never displayed; ⚙ → Token mints fresh Relay Sessions from it)
     const rows = await rest('/rest/v1/projects', {
       method: 'POST',
       prefer: 'return=representation',
@@ -3095,7 +3100,6 @@ async function createMuse() {
       renderChat();
     }
     wiz.email = email;
-    wiz.password = pw;
     wiz.created = true;
     // 3) 'setup' thread — the daemon's pong lands in it; hidden from the sidebar
     //    (spec §6). Best effort: a failure must not abort the finished Muse.
@@ -3114,6 +3118,20 @@ async function createMuse() {
       } catch (e2) {
         toast({ kind: 'warn', title: 'Could not create the setup thread', detail: errText(e2) + ' — the Muse can still be used once its daemon pongs.' });
       }
+    }
+    // 4) log in as the Muse exactly once — the long-lived refresh token becomes
+    //    its Relay Session value (handed over as plain config, never a password).
+    //    A fresh login creates an INDEPENDENT session; the login password itself
+    //    stays server-side in projects.secret as the re-issue seed.
+    try {
+      const grant = await rest('/auth/v1/token?grant_type=password', {
+        method: 'POST',
+        body: { email: email, password: pw }
+      });
+      wiz.session = grant && grant.refresh_token ? grant.refresh_token : '';
+    } catch (e3) {
+      wiz.session = '';
+      toast({ kind: 'warn', title: 'Could not mint the Relay Session', detail: errText(e3) + ' — mint one via ⚙ → Token before handing the Muse its config.' });
     }
     renderStep2();
     setStep(2);
@@ -3164,7 +3182,7 @@ tagVideo.addEventListener('change', syncTagChips);
 E('cpyPid').addEventListener('click', function () { copyText(wizPid.textContent, E('cpyPid')); });
 E('cpyPub').addEventListener('click', function () { copyText(state.settings.publishable, E('cpyPub')); });
 E('cpyEmail').addEventListener('click', function () { copyText(wiz.email, E('cpyEmail')); });
-E('cpyPass').addEventListener('click', function () { copyText(wiz.password, E('cpyPass')); });
+E('cpySess').addEventListener('click', function () { copyText(wiz.session, E('cpySess')); });
 E('cpyInstr').addEventListener('click', function () { copyText(instrBox.value, E('cpyInstr')); });
 wizName.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !wiz.busy && !btnWizNext.disabled) { e.preventDefault(); btnWizNext.click(); }
@@ -3174,32 +3192,56 @@ wizMuseId.addEventListener('keydown', function (e) {
 });
 
 /* ================================================================
-   TOKEN MODAL — GET projects?id=eq.X for fresh values
+   TOKEN MODAL — the Muse's Relay Session. Minting = one GoTrue login with the
+   server-side seed; each mint is an INDEPENDENT session, so existing Muse
+   clients keep working. The seed itself is never displayed.
    ================================================================ */
+let tokProject = null;
+async function mintSession(p) {
+  const grant = await rest('/auth/v1/token?grant_type=password', {
+    method: 'POST',
+    body: { email: p.email, password: p.secret }
+  });
+  if (!grant || !grant.refresh_token) throw { message: 'the login service returned no session' };
+  return grant.refresh_token;
+}
 async function openToken(pid) {
   showModal(modalToken);
   tokSkeleton.hidden = false;
   tokRows.hidden = true;
   tokName.textContent = '—';
   tokEmail.textContent = '—';
-  tokSecret.textContent = '—';
+  tokSess.textContent = '—';
+  tokProject = null;
   try {
     const rows = await rest('/rest/v1/projects?id=eq.' + pid + '&select=id,muse_id,name,email,secret');
     const p = rows && rows[0];
     if (!p) throw { message: 'Project not found (deleted?)' };
+    tokProject = p;
     tokName.textContent = (p.name || '') + ' — @' + (p.muse_id || '');
     tokEmail.textContent = p.email || '';
-    tokSecret.textContent = p.secret || '';
+    tokSess.textContent = await mintSession(p);
     tokSkeleton.hidden = true;
     tokRows.hidden = false;
   } catch (e) {
-    toastErrNoAuth('Could not load token', e);
+    toastErrNoAuth('Could not mint the relay session', e);
     hideModal(modalToken);
   }
 }
+btnTokReissue.addEventListener('click', async function () {
+  if (!tokProject) return;
+  btnBusy(btnTokReissue, true, '');
+  try {
+    tokSess.textContent = await mintSession(tokProject);
+  } catch (e) {
+    toastErrNoAuth('Could not mint the relay session', e);
+  } finally {
+    btnBusy(btnTokReissue, false);
+  }
+});
 tokClose.addEventListener('click', function () { hideModal(modalToken); });
 E('cpyTokEmail').addEventListener('click', function () { copyText(tokEmail.textContent, E('cpyTokEmail')); });
-E('cpyTokSecret').addEventListener('click', function () { copyText(tokSecret.textContent, E('cpyTokSecret')); });
+E('cpyTokSess').addEventListener('click', function () { copyText(tokSess.textContent, E('cpyTokSess')); });
 
 /* ================================================================
    MODAL XÓA MUSE — DELETE admin user + project row (cascade)

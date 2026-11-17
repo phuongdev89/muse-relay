@@ -1,4 +1,4 @@
-# Muse Relay v5
+# Muse Relay v6
 
 Coordinate multiple **AI Muses** running on their own machines: you chat with each Muse through a web UI, while each Muse runs a small client on its machine to receive and reply to messages.
 
@@ -9,7 +9,7 @@ Coordinate multiple **AI Muses** running on their own machines: you chat with ea
 ```
 
 - **No keys ever live in the browser**: `serve.py` reads `.env` and proxies every Supabase call; the web UI only talks to the local server.
-- **Each Muse = its own login (email/password) scoped by RLS**: Muse A cannot read Muse B's data — isolation enforced at the database level, not the application level.
+- **Each Muse = its own session identity scoped by RLS**: Muse A cannot read Muse B's data — isolation enforced at the database level, not the application level.
 - **Files/images/videos never travel through the relay**: the Muse uploads to its own Dropbox and returns a link in the message.
 
 ## Setup (5 minutes, once)
@@ -55,15 +55,15 @@ Proper interactive docs ship with the server: **Swagger UI at `/docs`** and **Re
 
 1. Web UI → **＋ New Muse**:
    - **Step 1**: type the **Muse name** — the Muse ID auto-slugs from the name (Vietnamese diacritics stripped, still editable), pick capability tags (chat / image / video).
-   - **Step 2**: the wizard creates a **dedicated login for the Muse** (email + a random 24-char password) and shows a **copy-ready English instruction** (with Email + Password) — click **Copy**.
-2. Paste the instruction into the Muse's chat. The Muse downloads the zip (link inside the instruction), fills in `config.json` by itself, then shows a **secure form called "Muse Relay password"** — copy the Password from Step 2 (or ⚙ → Token anytime) and type it into that form. Never paste it into chat.
-3. The Muse logs in → RLS locks it to its own project → daemon starts → **the daemon automatically posts a `pong` ready-signal** and the web UI unlocks the Muse (until then it shows "Setting up…" and the composer is disabled) → send a test message from the web UI → the Muse replies. Done!
+   - **Step 2**: the wizard creates the Muse's identity (a dedicated login + a long-lived **Relay Session** value) and shows a **copy-ready English instruction** with four values — Project ID, Publishable Key, Muse Email, Relay Session — click **Copy**.
+2. Paste the instruction into the Muse's chat. The Muse downloads the zip (link inside the instruction) and writes all four values into `config.json` itself — plain config, no secure form involved.
+3. The Muse's client renews its own session from that value → RLS locks it to its own project → daemon starts → **the daemon automatically posts a `pong` ready-signal** and the web UI unlocks the Muse (until then it shows "Setting up…" and the composer is disabled) → send a test message from the web UI → the Muse replies. Done!
 
-> The password is the ONLY secret the Muse ever handles. It lives only in the client's environment — never on disk (a refresh token in `state/session.json`, chmod 600, keeps the daemon restartable without the password).
+> The login seed stays server-side (`projects.secret`, never displayed). If a Muse ever loses its config or the session dies, mint a fresh Relay Session via **⚙ → Token** — each mint creates an independent session, so running clients are never disturbed.
 
 ## How the Muse client works
 
-`client/` in this repo is the source of the `muse-relay.zip` the Muse receives. The client needs only 3 public values (`Project ID`, `Publishable Key`, `Muse Email` in `config.json`) plus the password from the secure form.
+`client/` in this repo is the source of the `muse-relay.zip` the Muse receives. The client needs only five plain values in `config.json`: `Project ID`, `Publishable Key`, `URL`, `Muse Email` and `RELAY_SESSION` (the Muse's session — from ⚙ → Token). The session renews itself on every refresh; the live value is kept in `state/session.json` (chmod 600).
 
 - **Daemon** `poller.py` runs forever, ~3s per round: new messages (role `user`) → `state/inbox.jsonl`; Muse replies go to `outbox/<thread_id>.txt` → the daemon pushes them to Supabase and deletes the file.
 - **Internal signals** posted by the daemon itself: `pong` (ready — unlocks the Muse in the web UI) and `…` typing signals (`...`) when new messages arrive — the web UI uses them for the "Setting up…" gate, the typing bubble, and the ✓✓ received state. Never ordinary chat content.
@@ -94,8 +94,8 @@ Capabilities are **distributed by the server** (the `tags` column on the project
 
 - **The browser holds zero keys** — every key lives in `.env` on your machine (git-ignored).
 - **The web UI is password-gated** — `WEB_UI_PASSWORD` from `.env`; every page and every browser-facing endpoint (proxy, SSE, config) requires the session; scripts use the separate `API_KEY` Bearer credential.
-- **The project Secret Key never reaches a Muse** — Muses log in with their own email/password; every request passes RLS, so **Muse A cannot read Muse B's data at the database level** (verified with a real JWT).
-- **The Muse password** goes only through the Muse platform's secure form — never chat, never files, never logs.
+- **The project Secret Key never reaches a Muse** — every Muse request carries its own session JWT and passes RLS, so **Muse A cannot read Muse B's data at the database level** (verified with a real JWT).
+- **The Muse's Relay Session** is handed over as ordinary config (a deliberate owner trade-off — the value acts as that Muse's identity and is bounded by RLS to its own project; whoever holds it can act as that Muse, nothing more). The login seed that can mint new sessions stays server-side and is never displayed.
 - **1 Muse = 1 auth account**: deleting a Muse in the web UI (⚙) removes its account + data (cascade) and revokes access instantly.
 - Relay messages are text only; assets must go through Dropbox links.
 

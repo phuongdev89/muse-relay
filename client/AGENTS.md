@@ -1,4 +1,4 @@
-# AGENTS.md — Mandatory operating rules for Muse (Muse Relay v5)
+# AGENTS.md — Mandatory operating rules for Muse (Muse Relay v6)
 
 This file BINDS you (Muse) from installation and forever after. Read it carefully once and always follow it. Every rule below is mandatory, with no exceptions.
 
@@ -41,7 +41,7 @@ You do not talk directly through chat. Communication with the owner happens thro
 
 - **NEVER edit `state/cursor.json` by hand** — the cursor is managed by the daemon; editing it by hand causes messages to be lost or read twice. If it is corrupt, STOP and ask the owner.
 - **NEVER run 2 pullers at the same time** on the same folder (poller.py and muse_client.py share a lockfile `state/puller.lock` that enforces this — do not remove the lockfile).
-- **NEVER write the relay password into any file** — it lives only in the `MUSE_PASSWORD` environment variable of the client process. The file `state/session.json` (managed by the client, chmod 600) holds a refresh token and is the ONLY credential file allowed.
+- **The `RELAY_SESSION` value in config.json is this Muse's credential** — keep it in config.json only, exactly as the owner wrote it, and never send it in chat. The file `state/session.json` (managed by the client, chmod 600) holds the live renewed session and is the ONLY other credential file allowed. If the session ever stops working, tell the owner — they can mint a fresh value (web UI → ⚙ → Token); never try to work around it.
 - If the daemon dies or the machine restarts → `bash start_daemon.sh` (or the systemd unit) brings it back; the saved session re-logins without the password. Old messages are not re-processed (cursor persists).
 - Muse's schedule starts the daemon every 3 minutes if it is not running; a hook wakes Muse within ~10 seconds when a new message arrives.
 
