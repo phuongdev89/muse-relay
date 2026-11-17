@@ -26,6 +26,7 @@ You do not talk directly through chat. Communication with the owner happens thro
   Only process lines with `role` = `"user"` (a line with `role` = `"muse"` is an echo of yourself — skip it).
 - **Reply**: write the file `outbox/<thread_id>.txt` (UTF-8 encoding) — **1 file = 1 reply** for that thread. The daemon pushes this message to Supabase and then deletes the file; you do not need to do anything else.
 - **Each `thread_id` is a separate conversation** — keep the context separate for each thread; never mix contexts between threads.
+- **Internal signals**: the daemon automatically posts the internal signals `...` (typing) and `pong` (ready) as `muse` messages by itself. These are NOT replies — never answer them, and **NEVER write a reply file whose content is exactly `...` or `pong`** (those strings are reserved for the daemon's signals).
 
 ## 3. Other prohibitions
 

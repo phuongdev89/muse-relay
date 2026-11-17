@@ -25,8 +25,8 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from relay_auth import (  # noqa: E402
-    AuthError, TransientError, acquire_lock, api, build_cfg,
-    read_cursor, release_lock, write_cursor,
+    AuthError, TransientError, acquire_lock, api, build_cfg, init_cursor,
+    read_cursor, release_lock, send_pong_if_needed, signal_typing, write_cursor,
 )
 
 BASE = Path(__file__).resolve().parent
@@ -43,6 +43,15 @@ def log(msg):
     except Exception:
         pass
     print(line, end="", flush=True)
+
+
+def try_pong(cfg):
+    """Attempt the ready signal — non-fatal; retried each round until it succeeds."""
+    try:
+        return send_pong_if_needed(cfg, log=log)
+    except AuthError as e:
+        log(f"ready signal not sent: {e} — will retry")
+        return False
 
 
 def fetch(cfg, cursor):
@@ -110,16 +119,30 @@ def main():
             log("no project visible for this login — check Muse Email / relay password with the owner")
             return
         cfg["pid"] = pr[0]["id"]
+        try:
+            init_cursor(cfg)  # first run only: start at the newest id, never replay history
+        except TransientError as e:
+            log(f"cannot initialize the cursor: {e} — restart the daemon to retry")
+            return
         cfg["cursor"] = read_cursor(cfg["state_dir"])
+        pong_ok = try_pong(cfg)
         backoff = 1
         while True:
             try:
+                if not pong_ok:
+                    pong_ok = try_pong(cfg)
                 msgs = fetch(cfg, cfg["cursor"])
                 new = [m for m in msgs if m.get("role") == "user"]
                 if new:
                     with open(BASE / "state" / "inbox.jsonl", "a", encoding="utf-8") as f:
                         for m in new:
                             f.write(json.dumps(m, ensure_ascii=False) + "\n")
+                    # one '...' typing signal per affected thread — best-effort, never breaks the pull
+                    for tid in sorted({m["thread_id"] for m in new}):
+                        try:
+                            signal_typing(cfg, tid)
+                        except AuthError as e:
+                            log(f"typing signal skipped thread={tid}: {e}")
                     cfg["cursor"] = max(m["id"] for m in msgs)
                     write_cursor(cfg["state_dir"], cfg["cursor"])
                     log(f"inbox +{len(new)} new messages, cursor={cfg['cursor']}")

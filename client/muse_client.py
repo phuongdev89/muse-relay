@@ -27,8 +27,8 @@ import sys
 import time
 
 from relay_auth import (
-    AuthError, TransientError, acquire_lock, api, build_cfg,
-    read_cursor, release_lock, write_cursor,
+    AuthError, TransientError, acquire_lock, api, build_cfg, init_cursor,
+    read_cursor, release_lock, send_pong_if_needed, signal_typing, write_cursor,
 )
 
 POLL_PAUSE = 3.0
@@ -73,6 +73,12 @@ def fetch_messages(cfg):
                         {"id": m["id"], "thread_id": m["thread_id"], "role": "user",
                          "text": m["text"], "created_at": m["created_at"]},
                         ensure_ascii=False) + "\n")
+        # one '...' typing signal per affected thread — best-effort, never breaks the pull
+        for tid in sorted({m["thread_id"] for m in page if m.get("role") == "user"}):
+            try:
+                signal_typing(cfg, tid)
+            except AuthError as e:
+                print(f"[muse] typing signal skipped (thread {tid}): {e}", file=sys.stderr)
         cfg["cursor"] = max(cfg["cursor"], max(m["id"] for m in page))
         write_cursor(cfg["state_dir"], cfg["cursor"])
         received += sum(1 for m in page if m.get("role") == "user")
@@ -112,6 +118,15 @@ def cycle(cfg):
     cfg["backoff"] = 1
 
 
+def try_pong(cfg):
+    """Attempt the ready signal — non-fatal; retried each cycle until it succeeds."""
+    try:
+        return send_pong_if_needed(cfg)
+    except AuthError as e:
+        print(f"[muse] ready signal not sent: {e}", file=sys.stderr)
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser(description="Muse Relay v4 client — GoTrue login, RLS-isolated")
     ap.add_argument("--config", default="config.json")
@@ -128,10 +143,17 @@ def main():
         try:
             pr = fetch_project(cfg)
             cfg["pid"] = pr["id"]
+            try:
+                init_cursor(cfg)  # first run only: start at the newest id, never replay history
+            except TransientError as e:
+                sys.exit(f"[muse] cannot initialize the cursor: {e} — start again to retry")
             cfg["cursor"] = read_cursor(cfg["state_dir"])
             tags = ",".join(pr.get("tags") or [])
             print(f"[#{pr['id']}] {pr['muse_id']} ({pr['name']}) is listening — tags={tags} — cursor={cfg['cursor']}")
+            pong_ok = try_pong(cfg)
             while True:
+                if not pong_ok:
+                    pong_ok = try_pong(cfg)
                 cycle(cfg)
                 if args.once:
                     print("[muse] --once: one round done — exiting")

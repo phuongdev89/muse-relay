@@ -1,0 +1,460 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Muse Relay API",
+    "version": "1.0.0",
+    "description": "REST API for sending messages to Muses through the Muse Relay. Muse Relay is a local server that relays messages between an owner and several Muse AI agents; this API lets programmatic clients list Muses, manage their threads, and post or read messages.\n\nAuthentication: every request needs an `Authorization: Bearer <API_KEY>` header, where API_KEY is the value set in the server's `.env` file (missing or wrong key returns 401; if API_KEY is not configured at all, the whole API returns 503 `api_disabled`). This API is independent of the browser login — the web session cookie does not grant access here.\n\nBase URL: this local Muse Relay server itself (default `http://127.0.0.1:8080`), so the same host that serves the web UI. Try it interactively at `/docs` (Swagger UI) or `/redoc`."
+  },
+  "servers": [
+    { "url": "/" }
+  ],
+  "tags": [
+    { "name": "Muses", "description": "The Muse AI agents registered in this relay (Supabase `projects`)." },
+    { "name": "Threads", "description": "Conversation threads, each belonging to one Muse (Supabase `threads`)." },
+    { "name": "Messages", "description": "Chat messages inside a thread; this API posts as role `user` (Supabase `messages`)." }
+  ],
+  "security": [
+    { "bearerAuth": [] }
+  ],
+  "paths": {
+    "/api/v1/muses": {
+      "get": {
+        "tags": ["Muses"],
+        "summary": "List Muses",
+        "operationId": "listMuses",
+        "description": "Returns all Muses (projects), ordered by id ascending.",
+        "responses": {
+          "200": {
+            "description": "List of Muses (possibly empty).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MuseList" },
+                "examples": {
+                  "twoMuses": {
+                    "summary": "Two registered Muses",
+                    "value": {
+                      "data": [
+                        {
+                          "id": 1,
+                          "muse_id": "nova",
+                          "name": "Nova",
+                          "tags": ["chat"],
+                          "email": "nova@muserelay.local",
+                          "created_at": "2026-11-01T08:00:00Z"
+                        },
+                        {
+                          "id": 2,
+                          "muse_id": "pixel",
+                          "name": "Pixel",
+                          "tags": ["image", "video"],
+                          "email": "pixel@muserelay.local",
+                          "created_at": "2026-11-03T10:30:00Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/ApiDisabled" }
+        }
+      }
+    },
+    "/api/v1/threads": {
+      "get": {
+        "tags": ["Threads"],
+        "summary": "List threads of a Muse",
+        "operationId": "listThreads",
+        "description": "Returns the threads of one Muse, ordered by id ascending.",
+        "parameters": [
+          {
+            "name": "muse_id",
+            "in": "query",
+            "required": true,
+            "description": "Id of the Muse (project) whose threads to list.",
+            "schema": { "type": "integer", "minimum": 1 },
+            "example": 1
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of threads for the Muse (possibly empty).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ThreadList" },
+                "examples": {
+                  "threads": {
+                    "summary": "Two threads",
+                    "value": {
+                      "data": [
+                        { "id": 12, "project_id": 1, "title": "Weekly planning", "created_at": "2026-11-10T09:00:00Z" },
+                        { "id": 15, "project_id": 1, "title": "Blog draft", "created_at": "2026-11-12T14:20:00Z" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/MuseNotFound" },
+          "503": { "$ref": "#/components/responses/ApiDisabled" }
+        }
+      },
+      "post": {
+        "tags": ["Threads"],
+        "summary": "Create a thread",
+        "operationId": "createThread",
+        "description": "Creates a new thread for the given Muse and returns the created row.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ThreadCreate" },
+              "examples": {
+                "newThread": {
+                  "summary": "New thread for muse 1",
+                  "value": { "muse_id": 1, "title": "Weekly planning" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Thread created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ThreadSingle" },
+                "examples": {
+                  "created": {
+                    "summary": "Created thread",
+                    "value": {
+                      "data": { "id": 16, "project_id": 1, "title": "Weekly planning", "created_at": "2026-11-17T09:15:00Z" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/MuseNotFound" },
+          "503": { "$ref": "#/components/responses/ApiDisabled" }
+        }
+      }
+    },
+    "/api/v1/messages": {
+      "get": {
+        "tags": ["Messages"],
+        "summary": "List messages in a thread",
+        "operationId": "listMessages",
+        "description": "Returns messages of one thread ordered by id ascending. Use `after_id` for incremental polling (only messages with a larger id) and `limit` to cap the page.",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "query",
+            "required": true,
+            "description": "Id of the thread whose messages to list.",
+            "schema": { "type": "integer", "minimum": 1 },
+            "example": 12
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "description": "If given, only return messages with id greater than this value.",
+            "schema": { "type": "integer", "minimum": 0 },
+            "example": 340
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of messages to return (default 50, max 200).",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 },
+            "example": 50
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of messages (possibly empty).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageList" },
+                "examples": {
+                  "conversation": {
+                    "summary": "A user message and the Muse's reply",
+                    "value": {
+                      "data": [
+                        {
+                          "id": 341,
+                          "thread_id": 12,
+                          "project_id": 1,
+                          "role": "user",
+                          "text": "Draft the weekly update for the team.",
+                          "created_at": "2026-11-15T08:05:00Z"
+                        },
+                        {
+                          "id": 342,
+                          "thread_id": 12,
+                          "project_id": 1,
+                          "role": "muse",
+                          "text": "Here is a draft covering this week's progress…",
+                          "created_at": "2026-11-15T08:06:10Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/ThreadNotFound" },
+          "503": { "$ref": "#/components/responses/ApiDisabled" }
+        }
+      },
+      "post": {
+        "tags": ["Messages"],
+        "summary": "Send a message to a Muse",
+        "operationId": "createMessage",
+        "description": "Posts a message as role `user` into the thread; the Muse picks it up on its next poll and replies through the relay. Returns the full created row.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MessageCreate" },
+              "examples": {
+                "newMessage": {
+                  "summary": "Ask the Muse to draft something",
+                  "value": { "thread_id": 12, "text": "Draft the weekly update for the team." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Message created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageSingle" },
+                "examples": {
+                  "created": {
+                    "summary": "Created message",
+                    "value": {
+                      "data": {
+                        "id": 343,
+                        "thread_id": 12,
+                        "project_id": 1,
+                        "role": "user",
+                        "text": "Draft the weekly update for the team.",
+                        "created_at": "2026-11-17T09:20:00Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/ThreadNotFound" },
+          "503": { "$ref": "#/components/responses/ApiDisabled" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API_KEY from the server's .env file, sent as `Authorization: Bearer <API_KEY>`."
+      }
+    },
+    "schemas": {
+      "Muse": {
+        "type": "object",
+        "description": "A Muse AI agent (Supabase `projects` row).",
+        "properties": {
+          "id": { "type": "integer", "description": "Numeric id — use as `muse_id` in the Threads endpoints." },
+          "muse_id": { "type": "string", "description": "Stable slug of the Muse, e.g. `nova`." },
+          "name": { "type": "string", "description": "Display name." },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["chat", "image", "video"] },
+            "description": "Capabilities of this Muse."
+          },
+          "email": { "type": "string", "description": "Internal login identity of the Muse (`<muse_id>@muserelay.local`)." },
+          "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp (UTC)." }
+        },
+        "required": ["id", "muse_id", "name", "tags", "email", "created_at"]
+      },
+      "Thread": {
+        "type": "object",
+        "description": "A conversation thread belonging to one Muse (Supabase `threads` row).",
+        "properties": {
+          "id": { "type": "integer", "description": "Numeric id — use as `thread_id` in the Messages endpoints." },
+          "project_id": { "type": "integer", "description": "Id of the Muse (project) this thread belongs to." },
+          "title": { "type": "string", "description": "Thread title." },
+          "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp (UTC)." }
+        },
+        "required": ["id", "project_id", "title", "created_at"]
+      },
+      "Message": {
+        "type": "object",
+        "description": "A chat message inside a thread (Supabase `messages` row).",
+        "properties": {
+          "id": { "type": "integer", "description": "Numeric id — monotonic per insert; use with `after_id`." },
+          "thread_id": { "type": "integer", "description": "Id of the thread this message belongs to." },
+          "project_id": { "type": "integer", "description": "Id of the Muse (project) this message belongs to." },
+          "role": { "type": "string", "enum": ["user", "muse"], "description": "`user` for owner messages, `muse` for the agent's replies." },
+          "text": { "type": "string", "maxLength": 20000, "description": "Message body (at most 20000 characters)." },
+          "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp (UTC)." }
+        },
+        "required": ["id", "thread_id", "project_id", "role", "text", "created_at"]
+      },
+      "MuseList": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/Muse" } }
+        },
+        "required": ["data"]
+      },
+      "ThreadList": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/Thread" } }
+        },
+        "required": ["data"]
+      },
+      "ThreadSingle": {
+        "type": "object",
+        "properties": {
+          "data": { "$ref": "#/components/schemas/Thread" }
+        },
+        "required": ["data"]
+      },
+      "MessageList": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } }
+        },
+        "required": ["data"]
+      },
+      "MessageSingle": {
+        "type": "object",
+        "properties": {
+          "data": { "$ref": "#/components/schemas/Message" }
+        },
+        "required": ["data"]
+      },
+      "ThreadCreate": {
+        "type": "object",
+        "description": "Request body for creating a thread.",
+        "properties": {
+          "muse_id": { "type": "integer", "minimum": 1, "description": "Id of the Muse (project) to create the thread for." },
+          "title": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Title of the new thread." }
+        },
+        "required": ["muse_id", "title"]
+      },
+      "MessageCreate": {
+        "type": "object",
+        "description": "Request body for sending a message as the owner (role `user`).",
+        "properties": {
+          "thread_id": { "type": "integer", "minimum": 1, "description": "Id of the thread to post into." },
+          "text": { "type": "string", "minLength": 1, "maxLength": 20000, "description": "Message body (at most 20000 characters)." }
+        },
+        "required": ["thread_id", "text"]
+      },
+      "Error": {
+        "type": "object",
+        "description": "Uniform error envelope returned by the API.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string", "description": "Stable machine-readable error code.", "examples": ["unauthorized", "invalid_request", "muse_not_found", "thread_not_found", "api_disabled"] },
+              "message": { "type": "string", "description": "Human-readable explanation." }
+            },
+            "required": ["code", "message"]
+          }
+        },
+        "required": ["error"]
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Validation failed — a parameter is missing, malformed, or out of range.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "examples": {
+              "badRequest": {
+                "value": { "error": { "code": "invalid_request", "message": "missing required query parameter 'thread_id'" } }
+              }
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing or wrong `Authorization: Bearer <API_KEY>` header.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "examples": {
+              "unauthorized": {
+                "value": { "error": { "code": "unauthorized", "message": "missing or invalid Authorization header — expected 'Bearer <API_KEY>'" } }
+              }
+            }
+          }
+        }
+      },
+      "MuseNotFound": {
+        "description": "No Muse (project) with the given id exists.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "examples": {
+              "museNotFound": {
+                "value": { "error": { "code": "muse_not_found", "message": "no muse with id 42" } }
+              }
+            }
+          }
+        }
+      },
+      "ThreadNotFound": {
+        "description": "No thread with the given id exists.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "examples": {
+              "threadNotFound": {
+                "value": { "error": { "code": "thread_not_found", "message": "no thread with id 42" } }
+              }
+            }
+          }
+        }
+      },
+      "ApiDisabled": {
+        "description": "The REST API is disabled because API_KEY is not set in the server's .env.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "examples": {
+              "apiDisabled": {
+                "value": { "error": { "code": "api_disabled", "message": "API_KEY not set in .env" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

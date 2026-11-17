@@ -94,6 +94,12 @@ Read the log (tail -f state/poller.log). On success you see:
 A login failure prints "fatal: …" — most often the owner typed the
 password wrong: show the secure form again and restart the daemon.
 
+When the daemon starts it automatically sends a 'pong' ready-signal to the
+relay — the owner's web UI then shows this Muse as ready/unlocked. When new
+messages arrive, the daemon also automatically posts '...' typing signals.
+Both are internal signals sent by the daemon itself; the Muse never writes
+them itself (and must never write a reply that is exactly '...' or 'pong').
+
 STEP 7 — WAIT FOR A TEST MESSAGE AND REPLY TO IT
 - The owner sends a test message from the web UI; the daemon moves it into
   state/inbox.jsonl (one JSON per line; only process lines with role="user").

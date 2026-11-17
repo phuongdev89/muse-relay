@@ -12,6 +12,7 @@ never read another Muse's data, even with full access to this code.
 """
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -181,6 +182,68 @@ def write_cursor(state_dir, n):
     tmp = Path(state_dir) / "cursor.json.tmp"
     tmp.write_text(json.dumps({"last_id": n}), encoding="utf-8")
     os.replace(tmp, Path(state_dir) / "cursor.json")
+
+
+def init_cursor(cfg):
+    """First run only: start the cursor at the newest existing message id (RLS scopes the query).
+
+    Never touches an existing cursor file — a corrupt one stays fatal (see read_cursor);
+    without this, the first run would replay the entire history.
+    Needs a session — call it only after the project has been fetched.
+    """
+    f = Path(cfg["state_dir"]) / "cursor.json"
+    if f.exists():
+        return
+    r = api(cfg, "GET", "messages?select=id&order=id.desc&limit=1", "initializing the cursor")
+    rows = r.json()
+    write_cursor(cfg["state_dir"], rows[0]["id"] if rows else 0)
+
+
+# ---------- internal signals ('...' typing, 'pong' ready) ----------
+
+def signal_typing(cfg, thread_id):
+    """Best-effort '...' typing signal (role='muse') — one per thread that got new user messages."""
+    try:
+        api(cfg, "POST", "messages", "sending the typing signal",
+            extra_headers={"Prefer": "return=minimal", "Content-Type": "application/json"},
+            data=json.dumps({"thread_id": int(thread_id), "project_id": cfg["pid"], "role": "muse",
+                             "text": "..."}, ensure_ascii=False).encode("utf-8"),
+            expect=(201,))
+    except TransientError as e:
+        # the signal is optional — the reply matters more, so note it and move on
+        print(f"typing signal for thread {thread_id} not sent: {e}", file=sys.stderr)
+
+
+def send_pong_if_needed(cfg, log=print):
+    """Ready signal: one 'pong' (role='muse') so the web UI unlocks this Muse.
+
+    Target: the thread titled 'setup', else the project's lowest-id thread; with no
+    threads at all, stay silent and let the caller retry later. Skipped when the
+    target thread already contains a muse 'pong'. Returns True when a pong exists
+    (pre-existing or just sent), False when there is nothing to pong into yet
+    (TransientError included — retry on a later cycle).
+    """
+    try:
+        r = api(cfg, "GET", f"threads?select=id,title&project_id=eq.{cfg['pid']}&order=id.asc",
+                "fetching threads for the ready signal")
+        threads = r.json()
+        if not threads:
+            return False
+        target = next((t for t in threads if t.get("title") == "setup"), threads[0])
+        r = api(cfg, "GET",
+                f"messages?select=id&thread_id=eq.{target['id']}&role=eq.muse&text=eq.pong&limit=1",
+                "checking for an existing ready signal")
+        if r.json():
+            return True
+        api(cfg, "POST", "messages", "sending the ready signal",
+            extra_headers={"Prefer": "return=minimal", "Content-Type": "application/json"},
+            data=json.dumps({"thread_id": target["id"], "project_id": cfg["pid"], "role": "muse",
+                             "text": "pong"}, ensure_ascii=False).encode("utf-8"),
+            expect=(201,))
+        log("[muse] pong sent — told the relay this Muse is ready")
+        return True
+    except TransientError:
+        return False
 
 
 def build_cfg(config_path, state_dir, outbox_dir):

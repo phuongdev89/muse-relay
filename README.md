@@ -19,6 +19,9 @@ Coordinate multiple **AI Muses** running on their own machines: you chat with ea
    SUPABASE_PROJECT_ID=abcdefghijklmnopqrst    # 20-letter project ref (the part before .supabase.co)
    SUPABASE_SECRET_KEY=sb_secret_…             # Dashboard → Settings → API → Secret key
    SUPABASE_PUBLISHABLE_KEY=sb_publishable_…   # Dashboard → Settings → API
+   PORT=8080                                   # web UI port (pick any free port)
+   WEB_UI_PASSWORD=change-me                   # login password for the web UI — required
+   API_KEY=mr_change-me                        # Bearer key for the REST API /api/v1 — optional
    ```
 
    Either key style works for `SUPABASE_SECRET_KEY` (new `sb_secret_…` or legacy JWT `eyJ…`) — server-side code is not subject to the browser restriction.
@@ -27,11 +30,24 @@ Coordinate multiple **AI Muses** running on their own machines: you chat with ea
 ## Run
 
 ```bash
-python3 serve.py            # → http://127.0.0.1:8080
-# expose to LAN: python3 serve.py --host 0.0.0.0
+python3 serve.py            # → http://127.0.0.1:<PORT from .env>
+# expose to LAN: python3 serve.py --host 0.0.0.0     (--port overrides .env)
 ```
 
-One server does everything: hosts the web UI, proxies Supabase (`/sb/*`), streams realtime messages (SSE `/api/events`, 3s poll). Moving machines = copy the repo + `.env` and run again.
+One server does everything: hosts the web UI **behind a password login** (`WEB_UI_PASSWORD` from `.env` — without it the server refuses to start), proxies Supabase (`/sb/*`), streams realtime messages (SSE `/api/events`, 3s poll), and serves the REST API (below). Moving machines = copy the repo + `.env` and run again.
+
+## REST API + docs
+
+Scripts can drive the relay through `/api/v1/*` with `Authorization: Bearer <API_KEY>`:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/v1/muses` | List all Muses |
+| `GET /api/v1/threads?muse_id=<id>` · `POST /api/v1/threads` | List / create threads |
+| `POST /api/v1/messages` `{"thread_id":…, "text":"…"}` | Send a message to a Muse |
+| `GET /api/v1/messages?thread_id=<id>&after_id=<id>` | Read messages (polling) |
+
+Proper interactive docs ship with the server: **Swagger UI at `/docs`** and **Redoc at `/redoc`** (spec: `/openapi.json`).
 
 ## Create a new Muse
 
@@ -39,7 +55,7 @@ One server does everything: hosts the web UI, proxies Supabase (`/sb/*`), stream
    - **Step 1**: type the **Muse name** — the Muse ID auto-slugs from the name (Vietnamese diacritics stripped, still editable), pick capability tags (chat / image / video).
    - **Step 2**: the wizard creates a **dedicated login for the Muse** (email + a random 24-char password) and shows a **copy-ready English instruction** (with Email + Password) — click **Copy**.
 2. Paste the instruction into the Muse's chat. The Muse downloads the zip (link inside the instruction), fills in `config.json` by itself, then shows a **secure form called "Muse Relay password"** — copy the Password from Step 2 (or ⚙ → Token anytime) and type it into that form. Never paste it into chat.
-3. The Muse logs in → RLS locks it to its own project → daemon starts → send a test message from the web UI → the Muse replies. Done!
+3. The Muse logs in → RLS locks it to its own project → daemon starts → **the daemon automatically posts a `pong` ready-signal** and the web UI unlocks the Muse (until then it shows "Setting up…" and the composer is disabled) → send a test message from the web UI → the Muse replies. Done!
 
 > The password is the ONLY secret the Muse ever handles. It lives only in the client's environment — never on disk (a refresh token in `state/session.json`, chmod 600, keeps the daemon restartable without the password).
 
@@ -48,7 +64,8 @@ One server does everything: hosts the web UI, proxies Supabase (`/sb/*`), stream
 `client/` in this repo is the source of the `muse-relay.zip` the Muse receives. The client needs only 3 public values (`Project ID`, `Publishable Key`, `Muse Email` in `config.json`) plus the password from the secure form.
 
 - **Daemon** `poller.py` runs forever, ~3s per round: new messages (role `user`) → `state/inbox.jsonl`; Muse replies go to `outbox/<thread_id>.txt` → the daemon pushes them to Supabase and deletes the file.
-- **Cursor** `state/cursor.json` is written atomically — restarts never reprocess old messages, never miss new ones.
+- **Internal signals** posted by the daemon itself: `pong` (ready — unlocks the Muse in the web UI) and `…` typing signals (`...`) when new messages arrive — the web UI uses them for the "Setting up…" gate, the typing bubble, and the ✓✓ received state. Never ordinary chat content.
+- **Cursor** `state/cursor.json` is written atomically (first run starts at the newest message — history is never replayed).
 - **Muse-platform schedule**: every 3 minutes a check restarts the daemon if it died; a hook wakes the Muse within ~10 seconds of a new message.
 - A lockfile (`state/puller.lock`) guarantees exactly ONE puller per folder.
 - Operating rules for the Muse: `client/AGENTS.md` (Dropbox-only assets, inbox/outbox protocol, cursor prohibitions…). Full install walkthrough: `client/setup_guide.txt`.
@@ -66,6 +83,7 @@ Capabilities are **distributed by the server** (the `tags` column on the project
 ## Security
 
 - **The browser holds zero keys** — every key lives in `.env` on your machine (git-ignored).
+- **The web UI is password-gated** — `WEB_UI_PASSWORD` from `.env`; every page and every browser-facing endpoint (proxy, SSE, config) requires the session; scripts use the separate `API_KEY` Bearer credential.
 - **The project Secret Key never reaches a Muse** — Muses log in with their own email/password; every request passes RLS, so **Muse A cannot read Muse B's data at the database level** (verified with a real JWT).
 - **The Muse password** goes only through the Muse platform's secure form — never chat, never files, never logs.
 - **1 Muse = 1 auth account**: deleting a Muse in the web UI (⚙) removes its account + data (cascade) and revokes access instantly.
@@ -77,12 +95,14 @@ Capabilities are **distributed by the server** (the `tags` column on the project
 muse-relay/
 ├── README.md              ← this file (all the docs live here)
 ├── LICENSE                ← MIT
-├── serve.py               ← local server: hosts the UI, proxies Supabase, SSE realtime
+├── serve.py               ← local server: password login, hosts the UI, proxies Supabase, SSE, REST API + /docs /redoc
 ├── .env.example           ← template; copy to .env and fill in your keys
 ├── supabase/
 │   └── setup.sql          ← run once in the Supabase SQL Editor
 ├── web/
-│   └── index.html         ← web UI (single file, keyless)
+│   ├── index.html         ← web UI (single file, keyless)
+│   ├── muse-relay.zip     ← the built Muse setup bundle (downloaded by Muses)
+│   └── openapi.json       ← REST API spec (rendered at /docs and /redoc)
 └── client/                ← source of the Muse setup bundle (= muse-relay.zip)
     ├── muse_client.py     ← one-shot client (poll once + push, for cron)
     ├── poller.py          ← the main background daemon (infinite loop, ~3s/round)
@@ -93,8 +113,8 @@ muse-relay/
     └── run.sh / run.bat / start_daemon.sh / restart_poller.sh
 ```
 
-> Build the Muse zip from `client/`: `cd client && zip -r ../muse-relay.zip .`
-> The `web` branch on GitHub holds the built `muse-relay.zip` — the download link inside the wizard's instruction points there.
+> Build the Muse zip from `client/`: `cd client && zip -r ../web/muse-relay.zip .`
+> The built `web/muse-relay.zip` is committed to main — the download link inside the wizard's instruction points there.
 
 ## License
 

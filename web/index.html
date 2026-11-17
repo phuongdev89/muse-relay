@@ -9,6 +9,11 @@
     /api/events streams new messages over SSE.
   - Each Muse logs in with its own GoTrue email/password → RLS locks it to its
     own project (created by the wizard; password via the Muse's secure form).
+  - Owner auth: serve.py gates the page behind a password (mr_session cookie) —
+    unauthenticated requests bounce to /login; "Sign out" hits GET /logout.
+  - Daemon plumbing travels as ordinary role='muse' rows: text '...' = typing
+    signal (never rendered), text 'pong' = setup done (unlocks the Muse's
+    threads — until then the sidebar shows "Setting up…").
   - Run: python3 serve.py  →  http://127.0.0.1:8080
 -->
 <html lang="en">
@@ -133,6 +138,7 @@
   --callout-warn-bd:    rgba(210, 153, 34, 0.40);
   --callout-danger-bd:  rgba(218, 54, 51, 0.40);
   --ring-danger:        rgba(218, 54, 51, 0.25);
+  --msgstate-received-fg: #bcd2ff;
 }
 
 /* ================================================================
@@ -351,6 +357,26 @@ input, textarea { caret-color: var(--caret-color); }
 }
 .show-more:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+/* "Setting up…" badge — shown on a Muse group until its daemon posts the pong */
+.setup-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex-shrink: 0;
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-chip);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.setup-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--warning-text);
+  animation: pulse 1.2s var(--ease-in-out) infinite;
+  flex-shrink: 0;
+}
+
 /* PINNED section — pinned threads from every Muse gather at the top, prefixed with the Muse name */
 .pinned-label {
   display: flex; align-items: center; gap: 6px;
@@ -456,6 +482,47 @@ input, textarea { caret-color: var(--caret-color); }
 .bubble.new { animation: bubbleIn var(--dur-base) var(--ease-out); }
 @keyframes bubbleIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
+/* Send-state chips on messages sent this session (placeholder + real rows):
+   'sending' → '✓ sent' → '✓✓ received' (blue-ish) / '✗ failed' (red) */
+.msg-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 6px;
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+.bubble.user .msg-status { color: var(--attach-user-sub); }
+.bubble.user .msg-status.received { color: var(--msgstate-received-fg); }
+.bubble.user .msg-status.fail { color: var(--danger-text); }
+.msg-status .spin { width: 11px; height: 11px; }
+.msg-error { font-size: 11px; margin-top: 6px; color: var(--danger-text); }
+.msg-retry {
+  appearance: none;
+  display: inline-flex; align-items: center;
+  margin-top: 6px; padding: 3px 10px;
+  border-radius: var(--radius-chip);
+  border: 1px solid var(--attach-user-icon-bg);
+  background: var(--attach-user-bg);
+  color: var(--text-on-accent);
+  font: 600 11px/1 var(--font-sans);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.msg-retry:hover { background: var(--attach-user-icon-bg); border-color: var(--attach-user-sub); }
+
+/* Typing indicator — three pulsing dots in a muse-style bubble */
+.bubble.typing { padding: 12px var(--sp-4); }
+.typing-dots { display: inline-flex; align-items: center; gap: 5px; }
+.typing-dots .tdot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--bubble-muse-time);
+  animation: typingDot 1.2s var(--ease-in-out) infinite;
+}
+.typing-dots .tdot:nth-child(2) { animation-delay: 150ms; }
+.typing-dots .tdot:nth-child(3) { animation-delay: 300ms; }
+@keyframes typingDot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
 /* Dropbox attachment card */
 .attach {
   display: flex; gap: 10px; align-items: center;
@@ -539,6 +606,17 @@ input, textarea { caret-color: var(--caret-color); }
 .send-btn:hover { background: var(--accent-hover); }
 .send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 #composerHint { text-align: right; font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+/* Setup gate banner — shown above the composer while the open Muse has not ponged */
+.setup-banner {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-input);
+  font-size: 12.5px; color: var(--text-secondary);
+}
 
 /* ================================================================
    I. FORMS (labels, inputs, feedback — shared by wizard + config modals)
@@ -630,6 +708,11 @@ input, textarea { caret-color: var(--caret-color); }
 .step-dot.done .lbl { color: var(--text-secondary); }
 .connector { width: 72px; height: 2px; border-radius: var(--radius-chip); background: var(--border-default); margin: 0 var(--sp-2); }
 .connector.done { background: var(--accent-45); }
+
+/* Wizard Step 2 — live setup pong status line */
+.wiz-setup { display: flex; align-items: center; gap: var(--sp-2); font-size: 12.5px; color: var(--text-muted); }
+.wiz-setup .ok { color: var(--success-text); font-weight: 600; }
+.wiz-setup .spin { flex-shrink: 0; }
 
 /* Step 1 — toggle chips for tags (real checkboxes hidden via .vh) */
 .step { display: flex; flex-direction: column; gap: var(--sp-4); }
@@ -829,6 +912,7 @@ input, textarea { caret-color: var(--caret-color); }
         <span id="hdrThread" class="trunc" hidden></span>
       </div>
       <div id="hdrRight">
+        <button type="button" id="btnSignout" class="btn secondary sm">Sign out</button>
         <button type="button" id="btnNew" class="btn primary sm">＋ New Muse</button>
       </div>
     </header>
@@ -836,6 +920,10 @@ input, textarea { caret-color: var(--caret-color); }
     <div id="chatArea" aria-live="polite"></div>
 
     <div id="composer">
+      <div id="setupBanner" class="setup-banner" hidden>
+        <span class="setup-dot" aria-hidden="true"></span>
+        <span>This Muse is still setting up — waiting for its pong.</span>
+      </div>
       <div class="composer-row">
         <div class="composer-box">
           <textarea id="inputMsg" rows="1" placeholder="Message your Muse…" aria-label="Message your Muse"></textarea>
@@ -918,6 +1006,7 @@ input, textarea { caret-color: var(--caret-color); }
         </div>
         <textarea id="instrBox" class="guide-box" readonly aria-label="Instruction to paste into your Muse's chat"></textarea>
         <div class="callout warn"><span class="ico">⚠</span><span>Paste the whole instruction into your Muse's chat. The password never appears inside it — you type it into the Muse's secure form.</span></div>
+        <div id="wizSetup" class="wiz-setup" hidden aria-live="polite"></div>
       </div>
     </div>
     <div class="panel-foot">
@@ -1079,10 +1168,10 @@ function el(tag, cls, text) {
 /* ================================================================
    HẰNG SỐ
    ================================================================ */
-const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed' };
+const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed', ready: 'mr_ready_muses' };
 const RE_MUSE_ID = /^[a-z0-9_]{3,40}$/;
-// Static zip hosted on the `web` branch — raw link so the Muse can download it directly
-const SETUP_ZIP_URL = 'https://raw.githubusercontent.com/phuongdev89/muse-relay/web/muse-relay.zip';
+// The built Muse bundle, committed at web/muse-relay.zip on main
+const SETUP_ZIP_URL = 'https://raw.githubusercontent.com/phuongdev89/muse-relay/main/web/muse-relay.zip';
 // Dropbox link recognition per spec §3: dropbox.com (incl. www) or dl.dropboxusercontent.com
 const RE_DROPBOX = /https:\/\/(www\.)?dropbox\.com\/\S+|https:\/\/dl\.dropboxusercontent\.com\/\S+/g;
 const RE_DB_A = /^https:\/\/(www\.)?dropbox\.com\/\S+$/;
@@ -1092,6 +1181,11 @@ const POLL_FALLBACK_MS = 30000;
 const COMPOSER_MAX_H = 160;
 const MSG_BATCH_LIMIT = 200;
 const THREADS_PAGE = 5; // each "Show more" click reveals 5 more threads
+// Daemon plumbing signals — role='muse' rows whose text matches EXACTLY:
+const SIGNAL_TYPING = '...';  // typing indicator, posted right after the daemon receives a message
+const SIGNAL_PONG = 'pong';   // setup done — unlocks the Muse's threads in the UI
+const TYPING_TTL_MS = 120000; // typing state auto-expires after 120s without a follow-up row
+const SETUP_POLL_MS = 3000;   // wizard Step 2 — how often to query for the setup pong
 
 /* ================================================================
    TRẠNG THÁI CLIENT (theo architecture A5)
@@ -1110,6 +1204,18 @@ function savePins() {
   try { localStorage.setItem(LS_KEYS.pin, JSON.stringify(state.pins)); } catch (e) { /* storage full/unavailable — ignore */ }
 }
 
+/* Ready Muses (mr_ready_muses): JSON array of project ids whose daemon has
+   posted the setup pong. Persisted on every change so a reload stays unlocked. */
+function loadReadyMuses() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_KEYS.ready) || '[]');
+    return Array.isArray(v) ? v.filter(function (x) { return typeof x === 'number'; }) : [];
+  } catch (e) { return []; }
+}
+function saveReady() {
+  try { localStorage.setItem(LS_KEYS.ready, JSON.stringify(Array.from(state.ready.keys()))); } catch (e) { /* ignore */ }
+}
+
 const state = {
   settings: { projectId: '', publishable: '' },  // from /config — public key only, no secret
   projects: [],          // [{id, muse_id, name, tags[], email, secret, user_id}]
@@ -1118,6 +1224,7 @@ const state = {
   messagesByThread: new Map(),  // Map<threadId, Message[]>
   preview: new Map(),    // Map<projectId, latest message>
   unread: new Map(),     // Map<projectId, int>
+  ready: new Map(loadReadyMuses().map(function (id) { return [id, true]; })), // Map<projectId, true> — Muses whose daemon ponged
   pins: loadPins(),      // [threadId] — pin order
   groupOpen: new Map(),  // Map<projectId, bool> — groups start open
   groupVisible: new Map(), // Map<projectId, int> — how many threads are visible per group
@@ -1135,7 +1242,15 @@ const state = {
   renamingThread: false,
   deletingThread: false,
   savingCfg: false,
-  sending: false
+  sending: false,
+  /* Messages sent this session — placeholder bubbles with a live status chip
+     (sending → ✓ sent → ✓✓ received / ✗ failed + Retry). The placeholder is
+     dropped when the real row (id === realId) arrives through ingest. */
+  pendingSends: new Map(),   // Map<key, {key, thread_id, project_id, text, status, error, realId}>
+  sessionSentIds: new Set(), // real user-row ids sent this session — only these carry status chips
+  maxMuseId: new Map(),      // Map<threadId, highest muse row id> — drives the 'received' chip
+  typing: new Map(),         // Map<threadId, timestamp ms> — armed by the daemon '...' signal
+  typingTimer: null
 };
 
 /* ================================================================
@@ -1147,6 +1262,7 @@ const projList = E('projList');
 const searchInput = E('searchInput');
 const btnCollapse = E('btnCollapse');
 const btnNew = E('btnNew');
+const btnSignout = E('btnSignout');
 const hdrName = E('hdrName');
 const hdrMuseId = E('hdrMuseId');
 const hdrChips = E('hdrChips');
@@ -1155,6 +1271,7 @@ const rtLabel = E('rtLabel');
 const chatArea = E('chatArea');
 const inputMsg = E('inputMsg');
 const btnSend = E('btnSend');
+const setupBanner = E('setupBanner');
 const modalWizard = E('modalWizard'), wizTitle = E('wizTitle'), wizClose = E('wizClose');
 const sd1 = E('sd1'), sd2 = E('sd2'), sc1 = E('sc1');
 const step1 = E('step1'), step2 = E('step2');
@@ -1163,6 +1280,7 @@ const tagChat = E('tagChat'), tagImage = E('tagImage'), tagVideo = E('tagVideo')
 const wizPid = E('wizPid'), wizPub = E('wizPub');
 const wizEmail = E('wizEmail'), wizPass = E('wizPass');
 const instrBox = E('instrBox');
+const wizSetup = E('wizSetup');
 const btnWizCancel = E('btnWizCancel'), btnWizBack = E('btnWizBack'), btnWizNext = E('btnWizNext'), btnWizDone = E('btnWizDone');
 const modalToken = E('modalToken'), tokName = E('tokName'), tokClose = E('tokClose');
 const tokSkeleton = E('tokSkeleton'), tokRows = E('tokRows');
@@ -1313,6 +1431,15 @@ function baseUrl() {
   return '/sb';
 }
 
+/* Session auth (serve.py password login): an unauthenticated 401 means the
+   mr_session cookie is missing or expired — bounce to /login exactly once. */
+let authRedirectDone = false;
+function redirectIfAuthExpired(status) {
+  if (status !== 401 || authRedirectDone) return;
+  authRedirectDone = true;
+  window.location.href = '/login';
+}
+
 async function rest(path, opts) {
   opts = opts || {};
   const headers = {};
@@ -1329,8 +1456,9 @@ async function rest(path, opts) {
     throw { network: true, message: 'Could not reach serve.py — is the local server still running?' };
   }
   if (res.status === 401 || res.status === 403) {
-    toastAuth(res.status);
-    throw { status: res.status, message: 'SECRET_KEY rejected' };
+    if (res.status === 401) redirectIfAuthExpired(401); // session expired → login page (no toast)
+    else toastAuth(res.status); // 403 = the secret key was rejected server-side
+    throw { status: res.status, message: res.status === 401 ? 'Not signed in' : 'SECRET_KEY rejected' };
   }
   if (!res.ok && res.status !== 204) {
     let msg = 'HTTP ' + res.status;
@@ -1361,8 +1489,9 @@ async function adminReq(path, opts) {
     throw { network: true, message: 'Could not reach Supabase.' };
   }
   if (res.status === 401 || res.status === 403) {
-    toastAuth(res.status);
-    throw { status: res.status, message: 'SECRET_KEY rejected' };
+    if (res.status === 401) redirectIfAuthExpired(401);
+    else toastAuth(res.status);
+    throw { status: res.status, message: res.status === 401 ? 'Not signed in' : 'SECRET_KEY rejected' };
   }
   if (!res.ok && res.status !== 204 && res.status !== 404) {
     let msg = 'HTTP ' + res.status;
@@ -1389,14 +1518,17 @@ function boot() {
   state.chatError = null;
   app.hidden = false;
   ensurePoll();
+  if (state.typingTimer === null) state.typingTimer = setInterval(sweepTyping, 5000); // typing auto-expiry
   loadData();
   setupRealtime();
 }
 
-/* Startup: fetch the project id from serve.py, then boot. Errors = server down / .env missing. */
+/* Startup: fetch the project id from serve.py, then boot. Errors = server down / .env missing.
+   A 401 means the owner is not signed in — serve.py's login page takes over. */
 async function initApp() {
   try {
     const r = await fetch('/config');
+    if (r.status === 401) { window.location.href = '/login'; return; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const cfg = await r.json();
     state.settings.projectId = cfg.project_id || '';
@@ -1424,10 +1556,21 @@ async function loadData() {
     state.projects = results[0] || [];
     state.threads = results[1] || [];
     state.msgs200 = results[2] || [];
+    // Seed the per-thread muse watermark (drives '✓✓ received') from the loaded rows
+    for (const m of state.msgs200) {
+      if (m.role === 'muse') {
+        const mx = state.maxMuseId.get(m.thread_id) || 0;
+        if (m.id > mx) state.maxMuseId.set(m.thread_id, m.id);
+      }
+    }
+    // Typing rows are daemon plumbing — never stored for rendering (spec §3)
+    state.msgs200 = state.msgs200.filter(function (m) { return !isTypingRow(m); });
     state.messagesByThread = new Map();
     recomputeMeta();
+    reconcilePending(state.msgs200);
     state.loading = false;
     renderAll();
+    checkPongPending(); // unlock Muses whose pong is older than the latest-200 window
   } catch (e) {
     state.loading = false;
     state.chatError = errText(e);
@@ -1442,12 +1585,17 @@ function recomputeMeta() {
   const prev = new Map();
   const unread = new Map();
   for (const p of state.projects) unread.set(p.id, 0);
+  // 'setup' threads are server-side plumbing — excluded from previews and counts (spec §6)
+  const setupTids = new Set();
+  for (const t of state.threads) { if (isSetupThread(t)) setupTids.add(t.id); }
   for (const m of state.msgs200) {
+    if (setupTids.has(m.thread_id)) continue;
     if (!prev.has(m.project_id)) prev.set(m.project_id, m);
   }
   const lastRead = new Map();
   for (const t of state.threads) lastRead.set(t.id, t.last_read_id || 0);
   for (const m of state.msgs200) {
+    if (setupTids.has(m.thread_id)) continue;
     const lr = lastRead.get(m.thread_id);
     if (lr !== undefined && m.id > lr) {
       unread.set(m.project_id, (unread.get(m.project_id) || 0) + 1);
@@ -1455,27 +1603,137 @@ function recomputeMeta() {
   }
   state.preview = prev;
   state.unread = unread;
+  // A thread that is typing shows "typing…" as its sidebar preview instead of the last message
+  const now = Date.now();
+  for (const [tid, ts] of state.typing) {
+    if (now - ts > TYPING_TTL_MS) continue;
+    const th = state.threads.find(function (t) { return t.id === tid; });
+    if (th) state.preview.set(th.project_id, { text: 'typing…', role: 'muse', thread_id: tid, project_id: th.project_id });
+  }
 }
 
-/* Ingest one message (realtime / poll / our own POST) — de-duplicated by id */
+/* ================================================================
+   DAEMON SIGNALS — plumbing rows posted by the Muse's daemon as ordinary
+   role='muse' messages: text '...' arms the typing indicator (never
+   rendered), text 'pong' marks the Muse ready and unlocks its threads.
+   ================================================================ */
+function isTypingRow(m) { return !!m && m.role === 'muse' && m.text === SIGNAL_TYPING; }
+function isSetupThread(t) { return !!t && (t.title || '') === 'setup'; }
+
+/* Process signal-bearing rows. opts.fresh=false for re-delivered (poll) and
+   load-seeded rows — only a genuinely new row arms typing, or the 30s poll
+   would keep re-arming stale '...' rows forever. */
+function applyMessageSignals(m, opts) {
+  opts = opts || {};
+  if (!m || typeof m.id !== 'number' || m.role !== 'muse') return;
+  // Highest muse id per thread — the '✓✓ received' chip uses it as the watermark
+  const mx = state.maxMuseId.get(m.thread_id) || 0;
+  if (m.id > mx) state.maxMuseId.set(m.thread_id, m.id);
+  if (m.text === SIGNAL_TYPING) {
+    if (opts.fresh) state.typing.set(m.thread_id, Date.now());
+    return;
+  }
+  state.typing.delete(m.thread_id); // any other muse row ends the typing state
+  if (m.text === SIGNAL_PONG) markProjectReady(m.project_id);
+}
+
+/* Typing state auto-expires (checked lazily on render + by a sweep interval) */
+function typingFresh(tid) {
+  const ts = state.typing.get(tid);
+  if (ts === undefined) return false;
+  if (Date.now() - ts > TYPING_TTL_MS) { state.typing.delete(tid); return false; }
+  return true;
+}
+
+function sweepTyping() {
+  const now = Date.now();
+  let expired = false;
+  for (const [tid, ts] of state.typing) {
+    if (now - ts > TYPING_TTL_MS) { state.typing.delete(tid); expired = true; }
+  }
+  if (expired) {
+    recomputeMeta(); // restore the real sidebar preview after the "typing…" one
+    renderSidebar();
+    if (state.activeThreadId != null) renderChat();
+  }
+}
+
+/* A Muse is READY only once its daemon posted a 'pong' row in its project */
+function projectReady(pid) {
+  return pid != null && state.ready.get(pid) === true;
+}
+
+function markProjectReady(pid, opts) {
+  opts = opts || {};
+  if (!pid || state.ready.get(pid) === true) return;
+  state.ready.set(pid, true);
+  saveReady();
+  const p = projectById(pid);
+  if (!opts.quiet) {
+    toast({
+      kind: 'success',
+      title: (p ? (p.name || p.muse_id) : 'Muse') + ' is ready',
+      detail: 'Setup pong received — threads are unlocked.'
+    });
+  }
+  renderSidebar();
+  updateSendState(); // re-enable the composer if this gated Muse was open
+  // Live feedback while the wizard's Step 2 is watching for the pong
+  if (wiz.pid === pid) { wiz.setupDone = true; renderWizSetup(true); stopSetupWatch(); }
+}
+
+/* Ask the server which not-ready Muses already have a pong row (covers pongs
+   older than the latest-200 window). Quiet on load; poll ticks retry the
+   projects that are still locked. */
+async function checkPongPending() {
+  const locked = state.projects.filter(function (p) { return state.ready.get(p.id) !== true; });
+  for (const p of locked) {
+    try {
+      const rows = await rest('/rest/v1/messages?select=id&project_id=eq.' + p.id + '&role=eq.muse&text=eq.pong&limit=1');
+      if (rows && rows.length) markProjectReady(p.id, { quiet: true });
+    } catch (e) { /* keep waiting — retried on the next poll tick */ }
+  }
+}
+
+/* Ingest one message (realtime / poll / our own POST) — de-duplicated by id.
+   Daemon signal rows are processed here; typing rows never enter the caches. */
 function ingestMessage(m, opts) {
   opts = opts || {};
   if (!m || typeof m.id !== 'number') return false;
-  let added = false;
-  const cache = state.messagesByThread.get(m.thread_id);
-  if (cache && !cache.some(function (x) { return x.id === m.id; })) {
-    cache.push(m);
-    cache.sort(function (a, b) { return a.id - b.id; });
-    added = true;
+  const fresh = !state.msgs200.some(function (x) { return x.id === m.id; });
+  applyMessageSignals(m, { fresh: fresh });
+  // A real user row matching a pending send replaces its placeholder bubble
+  if (m.role === 'user') {
+    for (const [k, pe] of state.pendingSends) {
+      if (pe.realId === m.id) { state.pendingSends.delete(k); break; }
+    }
   }
-  if (!state.msgs200.some(function (x) { return x.id === m.id; })) {
-    state.msgs200.push(m);
-    state.msgs200.sort(function (a, b) { return b.id - a.id; });
-    if (state.msgs200.length > MSG_BATCH_LIMIT) state.msgs200.length = MSG_BATCH_LIMIT;
+  let added = false;
+  if (!isTypingRow(m)) {
+    const cache = state.messagesByThread.get(m.thread_id);
+    if (cache && !cache.some(function (x) { return x.id === m.id; })) {
+      cache.push(m);
+      cache.sort(function (a, b) { return a.id - b.id; });
+      added = true;
+    }
+    if (fresh) {
+      state.msgs200.push(m);
+      state.msgs200.sort(function (a, b) { return b.id - a.id; });
+      if (state.msgs200.length > MSG_BATCH_LIMIT) state.msgs200.length = MSG_BATCH_LIMIT;
+    }
   }
   recomputeMeta();
   if (!opts.deferRender) renderSidebar();
   return added;
+}
+
+/* Drop pending sends whose real row is present in a freshly loaded set */
+function reconcilePending(rows) {
+  if (!state.pendingSends.size) return;
+  const ids = new Set(rows.map(function (m) { return m.id; }));
+  for (const [k, pe] of state.pendingSends) {
+    if (pe.realId !== null && ids.has(pe.realId)) state.pendingSends.delete(k);
+  }
 }
 
 /* ================================================================
@@ -1509,8 +1767,9 @@ function toggleGroup(pid) {
 
 function threadsOfProject(pid) {
   // Exclude pinned threads (they live in the Pinned section at the top)
+  // and 'setup' plumbing threads (hidden everywhere in the sidebar — spec §6)
   const list = state.threads.filter(function (t) {
-    return t.project_id === pid && state.pins.indexOf(t.id) === -1;
+    return t.project_id === pid && !isSetupThread(t) && state.pins.indexOf(t.id) === -1;
   });
   list.sort(function (a, b) { return a.id - b.id; });
   return list;
@@ -1520,6 +1779,7 @@ function threadRow(t, pinnedRow) {
   const row = el('div', 'thread-row' + (t.id === state.activeThreadId ? ' selected' : ''));
   row.setAttribute('role', 'button');
   row.tabIndex = 0;
+  const gated = !projectReady(t.project_id); // setup gating — threads locked until the pong
   const ico = el('span', 't-ico', pinnedRow ? '📌' : '·');
   ico.setAttribute('aria-hidden', 'true');
   row.appendChild(ico);
@@ -1545,9 +1805,16 @@ function threadRow(t, pinnedRow) {
     openThreadMenu(t, mb);
   });
   row.appendChild(mb);
-  row.addEventListener('click', function () { openThread(t.id); });
+  function tryOpen() {
+    if (gated) {
+      toastOnce('setupgate', 2000, { kind: 'info', title: 'This Muse is still setting up — waiting for pong' });
+      return;
+    }
+    openThread(t.id);
+  }
+  row.addEventListener('click', tryOpen);
   row.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openThread(t.id); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tryOpen(); }
   });
   return row;
 }
@@ -1555,6 +1822,7 @@ function threadRow(t, pinnedRow) {
 function museGroup(p, q) {
   const g = el('div', 'muse-group');
   const open = groupIsOpen(p.id);
+  const ready = projectReady(p.id);
 
   const head = el('div', 'group-head' + (p.id === state.activeProjectId ? ' selected' : ''));
   head.setAttribute('role', 'button');
@@ -1569,10 +1837,20 @@ function museGroup(p, q) {
   nm.title = '@' + (p.muse_id || '');
   head.appendChild(caret);
   head.appendChild(nm);
+  // Setup gating — a pulsing "Setting up…" badge until the daemon's pong arrives
+  if (!ready) {
+    const sc = el('span', 'setup-chip');
+    sc.title = 'Waiting for the setup pong from this Muse\'s daemon';
+    const dot = el('span', 'setup-dot');
+    dot.setAttribute('aria-hidden', 'true');
+    sc.appendChild(dot);
+    sc.appendChild(document.createTextNode('Setting up…'));
+    head.appendChild(sc);
+  }
   const u = state.unread.get(p.id) || 0;
   if (u > 0) head.appendChild(el('span', 'badge', u > 99 ? '99+' : String(u)));
 
-  // Hover group: plus = new thread, gear = Muse config (rename, capability tags)
+  // Hover group: plus = new thread (hidden while setting up), gear = Muse config
   const act = el('span', 'group-actions');
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
@@ -1588,7 +1866,7 @@ function museGroup(p, q) {
   cfgBtn.setAttribute('aria-label', 'Muse settings: ' + (p.name || p.muse_id));
   cfgBtn.title = 'Muse settings';
   cfgBtn.addEventListener('click', function (e) { e.stopPropagation(); openMuseCfg(p); });
-  act.appendChild(addBtn);
+  if (ready) act.appendChild(addBtn); // no new threads until the pong lands
   act.appendChild(cfgBtn);
   head.appendChild(act);
 
@@ -1604,7 +1882,7 @@ function museGroup(p, q) {
   const all = threadsOfProject(p.id);
   const list = q ? all.filter(function (t) { return (t.title || '').toLowerCase().indexOf(q) !== -1; }) : all;
   if (!list.length) {
-    body.appendChild(el('div', 'thread-empty', q ? 'No matching thread' : 'No threads yet — hover and press ＋'));
+    body.appendChild(el('div', 'thread-empty', q ? 'No matching thread' : (ready ? 'No threads yet — hover and press ＋' : 'No threads yet — this Muse is still setting up.')));
   } else {
     // At most 5 threads at a time; each Show more click reveals 5 more until exhausted.
     const vis = state.groupVisible.get(p.id) || THREADS_PAGE;
@@ -1641,9 +1919,11 @@ function renderSidebar() {
   const q = searchInput.value.trim().toLowerCase();
 
   // Pinned section — pinned threads from ANY Muse gather at the top, prefixed with the Muse name
+  // ('setup' plumbing threads are never shown, pinned or not — spec §6)
   const pinnedThreads = state.pins
     .map(function (id) { return state.threads.find(function (t) { return t.id === id; }); })
     .filter(Boolean)
+    .filter(function (t) { return !isSetupThread(t); })
     .filter(function (t) {
       if (!q) return true;
       const p = projectById(t.project_id);
@@ -1659,7 +1939,7 @@ function renderSidebar() {
     if (!q) return true;
     if ((p.name + ' ' + p.muse_id).toLowerCase().indexOf(q) !== -1) return true;
     return state.threads.some(function (t) {
-      return t.project_id === p.id && (t.title || '').toLowerCase().indexOf(q) !== -1;
+      return t.project_id === p.id && !isSetupThread(t) && (t.title || '').toLowerCase().indexOf(q) !== -1;
     });
   });
   if (!filtered.length && !pinnedThreads.length) {
@@ -1751,6 +2031,72 @@ function attachEl(link, isUser) {
   return a;
 }
 
+/* Status chip for messages sent this session: sending → ✓ sent → ✓✓ received / ✗ failed */
+function sendChipEl(status) {
+  const st = el('span', 'msg-status ' + status);
+  if (status === 'sending') {
+    st.innerHTML = spinnerSvg();
+    st.appendChild(document.createTextNode('sending'));
+  } else if (status === 'received') {
+    st.textContent = '✓✓ received';
+  } else if (status === 'fail') {
+    st.textContent = '✗ failed';
+  } else {
+    st.textContent = '✓ sent';
+  }
+  return st;
+}
+
+/* A session-sent message counts as received once a later muse row exists in
+   its thread (the daemon posts '...' right after receiving the message) */
+function sendStatusOf(realId, tid) {
+  const mx = state.maxMuseId.get(tid) || 0;
+  return realId < mx ? 'received' : 'sent';
+}
+
+/* Placeholder bubble for a message sent this session — replaced by the real
+   row once it arrives through ingest (SSE/poll) */
+function pendingBubbleEl(pe) {
+  const b = el('div', 'bubble user pending');
+  b.appendChild(el('div', 'bubble-text', pe.text));
+  const st = sendChipEl(pe.status === 'sent' && pe.realId !== null ? sendStatusOf(pe.realId, pe.thread_id) : pe.status);
+  b.appendChild(st);
+  if (pe.status === 'fail') {
+    st.title = pe.error || 'Send failed';
+    b.appendChild(el('div', 'msg-error', pe.error || 'Send failed'));
+    const rb = document.createElement('button');
+    rb.type = 'button';
+    rb.className = 'msg-retry';
+    rb.textContent = 'Retry';
+    rb.addEventListener('click', function () { retryPending(pe.key); });
+    b.appendChild(rb);
+  }
+  return b;
+}
+
+/* Pending sends for one thread, in send order (Map keeps insertion order) */
+function pendingForThread(tid) {
+  const out = [];
+  for (const pe of state.pendingSends.values()) {
+    if (pe.thread_id === tid) out.push(pe);
+  }
+  return out;
+}
+
+/* Typing indicator bubble — three pulsing dots, muse styling */
+function typingBubbleEl() {
+  const b = el('div', 'bubble muse typing');
+  b.setAttribute('aria-label', 'Muse is typing');
+  const wrap = el('span', 'typing-dots');
+  for (let i = 0; i < 3; i++) {
+    const d = el('span', 'tdot');
+    d.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(d);
+  }
+  b.appendChild(wrap);
+  return b;
+}
+
 function bubbleEl(m, animate) {
   const b = el('div', 'bubble ' + (m.role === 'user' ? 'user' : 'muse') + (animate ? ' new' : ''));
   b.appendChild(el('div', 'bubble-text', m.text || ''));
@@ -1762,6 +2108,10 @@ function bubbleEl(m, animate) {
     const t = el('span', 'bubble-time', fmtHM(d));
     t.title = fmtFull(d);
     b.appendChild(t);
+  }
+  // Only messages sent this session carry a send-state chip
+  if (m.role === 'user' && state.sessionSentIds.has(m.id)) {
+    b.appendChild(sendChipEl(sendStatusOf(m.id, m.thread_id)));
   }
   return b;
 }
@@ -1809,7 +2159,8 @@ function renderChat(opts) {
     return;
   }
   const rows = state.messagesByThread.get(state.activeThreadId) || [];
-  if (!rows.length) {
+  const pend = pendingForThread(state.activeThreadId);
+  if (!rows.length && !pend.length) {
     chatArea.appendChild(emptyStateEl(
       'Thread is empty',
       'No messages yet. Send the first note to ' + (p.name || p.muse_id) + ' — the Muse replies from its own machine via its client (a few seconds, depending on POLL_INTERVAL).'
@@ -1817,6 +2168,13 @@ function renderChat(opts) {
     return;
   }
   for (const m of rows) chatArea.appendChild(bubbleEl(m, m.id === opts.animateId));
+  for (const pe of pend) chatArea.appendChild(pendingBubbleEl(pe));
+  // Typing bubble at the end — only while the daemon's '...' is fresh and the
+  // last real message is not already a muse reply
+  const lastM = rows.length ? rows[rows.length - 1] : null;
+  if (typingFresh(state.activeThreadId) && (!lastM || lastM.role !== 'muse')) {
+    chatArea.appendChild(typingBubbleEl());
+  }
   scrollBottom();
 }
 
@@ -1844,6 +2202,10 @@ function selectProject(pid) {
 async function openThread(tid) {
   const t = state.threads.find(function (x) { return x.id === tid; });
   if (!t) return;
+  if (!projectReady(t.project_id)) {
+    toastOnce('setupgate', 2000, { kind: 'info', title: 'This Muse is still setting up — waiting for pong' });
+    return;
+  }
   if (state.activeProjectId !== t.project_id) {
     state.activeProjectId = t.project_id;
     state.groupOpen.set(t.project_id, true); // open the group containing the selected thread
@@ -1853,15 +2215,19 @@ async function openThread(tid) {
   renderSidebar();
   updateSendState();
   state.chatError = null;
-  const rows = await rest('/rest/v1/messages?thread_id=eq.' + tid + '&order=id.asc&limit=500')
+  const raw = await rest('/rest/v1/messages?thread_id=eq.' + tid + '&order=id.asc&limit=500')
     .then(function (r) { return r || []; })
     .catch(function (e) {
       toastErrNoAuth('Could not load thread', e);
       state.chatError = errText(e);
       return null;
     });
-  if (rows) {
+  if (raw) {
+    // Seed the muse watermark from older rows too, then strip typing plumbing
+    for (const m of raw) applyMessageSignals(m, { fresh: false });
+    const rows = raw.filter(function (m) { return !isTypingRow(m); });
     state.messagesByThread.set(tid, rows);
+    reconcilePending(rows);
     renderChat();
     markRead(tid);
   } else {
@@ -1869,12 +2235,9 @@ async function openThread(tid) {
   }
 }
 
-function markRead(tid) {
+function markReadUpTo(tid, maxId) {
   const th = state.threads.find(function (t) { return t.id === tid; });
-  if (!th) return;
-  const rows = state.messagesByThread.get(tid) || [];
-  const maxId = rows.length ? rows[rows.length - 1].id : (th.last_read_id || 0);
-  if (maxId <= (th.last_read_id || 0)) return;
+  if (!th || maxId <= (th.last_read_id || 0)) return;
   th.last_read_id = maxId; // optimistic — an open thread counts as read
   recomputeMeta();
   renderSidebar();
@@ -1884,9 +2247,18 @@ function markRead(tid) {
     });
 }
 
+function markRead(tid) {
+  const rows = state.messagesByThread.get(tid) || [];
+  markReadUpTo(tid, rows.length ? rows[rows.length - 1].id : 0);
+}
+
 let sending = false;
 function updateSendState() {
-  btnSend.disabled = sending || !inputMsg.value.trim() || state.activeThreadId == null;
+  // Setup gating — the whole composer is disabled while the Muse has not ponged
+  const gated = state.activeProjectId != null && !projectReady(state.activeProjectId);
+  btnSend.disabled = sending || gated || !inputMsg.value.trim() || state.activeThreadId == null;
+  inputMsg.disabled = gated;
+  setupBanner.hidden = !gated;
 }
 
 function resizeInput() {
@@ -1896,35 +2268,86 @@ function resizeInput() {
   inputMsg.style.overflowY = inputMsg.scrollHeight > COMPOSER_MAX_H ? 'auto' : 'hidden';
 }
 
+/* ================================================================
+   SEND STATES — messages sent this session get a placeholder bubble with a
+   live status chip: sending → ✓ sent → ✓✓ received, or ✗ failed + Retry.
+   The POST returns the created row (Prefer: return=representation) and only
+   stores its id; the real bubble replaces the placeholder when the row comes
+   back through ingest (SSE/poll), de-duplicated by id.
+   ================================================================ */
+let pendingSeq = 0;
+function newPendingKey() {
+  pendingSeq += 1;
+  return 'p' + pendingSeq + '-' + Date.now();
+}
+
 async function sendMessage() {
   const text = inputMsg.value.trim();
   if (!text || sending || state.activeThreadId == null) return;
-  const tid = state.activeThreadId;
   const p = activeProject();
   if (!p) return;
+  const entry = {
+    key: newPendingKey(),
+    thread_id: state.activeThreadId,
+    project_id: p.id,
+    text: text,
+    status: 'sending',
+    error: null,
+    realId: null
+  };
+  state.pendingSends.set(entry.key, entry);
   sending = true;
   updateSendState();
   btnBusy(btnSend, true, '');
   inputMsg.value = '';
   resizeInput();
+  renderChat(); // show the 'sending' placeholder right away
+  try {
+    await postPendingMessage(entry);
+  } finally {
+    sending = false;
+    btnBusy(btnSend, false);
+    updateSendState();
+    inputMsg.focus();
+  }
+}
+
+/* POST one pending entry — transitions sending → sent / fail and re-renders */
+async function postPendingMessage(entry) {
+  entry.status = 'sending';
+  entry.error = null;
+  if (state.activeThreadId === entry.thread_id) renderChat();
   try {
     const rows = await rest('/rest/v1/messages', {
       method: 'POST',
       prefer: 'return=representation',
-      body: { thread_id: tid, project_id: p.id, role:'user', text: text }
+      body: { thread_id: entry.thread_id, project_id: entry.project_id, role: 'user', text: entry.text }
     });
     const m = Array.isArray(rows) && rows[0] ? rows[0] : null;
-    if (m) {
-      ingestMessage(m);
-      renderChat({ animateId: m.id });
-      markRead(tid);
-    } else {
-      toastOnce('sentquiet', 5000, { kind: 'info', title: 'Sent', detail: 'The message will appear after the next sync (realtime or 30s polling).' });
+    if (m && typeof m.id === 'number') {
+      entry.realId = m.id;
+      state.sessionSentIds.add(m.id);
+      markReadUpTo(entry.thread_id, m.id); // own message counts as read immediately
     }
+    entry.status = 'sent'; // id unknown → still sent; the real row reconciles via ingest
   } catch (e) {
+    entry.status = 'fail';
+    entry.error = errText(e);
     toastErrNoAuth('Could not send message', e);
-    inputMsg.value = text; // restore the text into the composer — never lose content
-    resizeInput();
+  } finally {
+    if (state.activeThreadId === entry.thread_id) renderChat();
+  }
+}
+
+/* Retry a failed send — re-POSTs the same pending entry */
+async function retryPending(key) {
+  const entry = state.pendingSends.get(key);
+  if (!entry || sending) return;
+  sending = true;
+  updateSendState();
+  btnBusy(btnSend, true, '');
+  try {
+    await postPendingMessage(entry);
   } finally {
     sending = false;
     btnBusy(btnSend, false);
@@ -1935,6 +2358,7 @@ async function sendMessage() {
 
 async function newThreadFor(p) {
   if (!p || state.creatingThread) return;
+  if (!projectReady(p.id)) return; // ＋ is hidden while setting up — double guard
   state.creatingThread = true;
   try {
     const rows = await rest('/rest/v1/threads', {
@@ -1988,9 +2412,13 @@ function onRealtimeInsert(payload) {
   const m = payload && payload.new;
   if (!m || typeof m.id !== 'number') return;
   const added = ingestMessage(m);
-  if (added && m.thread_id === state.activeThreadId) {
-    renderChat({ animateId: m.id });
-    markRead(m.thread_id);
+  if (m.thread_id === state.activeThreadId) {
+    if (added) {
+      renderChat({ animateId: m.id });
+      markRead(m.thread_id);
+    } else if (isTypingRow(m)) {
+      renderChat(); // typing signal — the bubble toggles without a new message row
+    }
   }
 }
 
@@ -2005,15 +2433,20 @@ async function pollTick() {
     const ms = await rest('/rest/v1/messages?select=id,project_id,thread_id,role,text,created_at&order=id.desc&limit=200');
     const sorted = (ms || []).slice().sort(function (a, b) { return a.id - b.id; });
     let maxNewActive = null;
+    let typingActive = false;
     for (const m of sorted) {
       const added = ingestMessage(m, { deferRender: true });
       if (added && m.thread_id === state.activeThreadId) maxNewActive = m.id;
+      else if (!added && isTypingRow(m) && m.thread_id === state.activeThreadId) typingActive = true;
     }
     renderSidebar();
     if (maxNewActive !== null) {
       renderChat({ animateId: maxNewActive });
       markRead(state.activeThreadId);
+    } else if (typingActive) {
+      renderChat(); // typing signal picked up by the poll path
     }
+    checkPongPending(); // Muses still locked keep being checked for their pong
     pollFailStreak = 0;
   } catch (e) {
     pollFailStreak++;
@@ -2143,6 +2576,10 @@ async function confirmDeleteThread() {
     await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'DELETE' });
     state.threads = state.threads.filter(function (x) { return x.id !== t.id; });
     state.messagesByThread.delete(t.id);
+    // Drop any pending sends bound to the deleted thread
+    for (const [k, pe] of state.pendingSends) {
+      if (pe.thread_id === t.id) state.pendingSends.delete(k);
+    }
     const pi = state.pins.indexOf(t.id);
     if (pi !== -1) { state.pins.splice(pi, 1); savePins(); }
     if (state.activeThreadId === t.id) state.activeThreadId = null;
@@ -2232,7 +2669,10 @@ const wiz = {
   museId: '', idOk: false, idChecked: '',
   slugDirty: false,           // user hand-edited the Muse ID → stop auto-slugging
   tags: [],
-  email: '', password: ''     // the Muse's GoTrue login — password shown only in Step 2 + Token modal
+  email: '', password: '',    // the Muse's GoTrue login — password shown only in Step 2 + Token modal
+  pid: null,                  // project created in this wizard run — watched for the setup pong
+  setupDone: false,           // pong received for wiz.pid
+  pongTimer: null             // Step 2 live status poll (every 3s)
 };
 let idCheckTimer = null;
 let delTarget = null;
@@ -2257,11 +2697,13 @@ function slugifyMuseId(name) {
 }
 
 function openWizard() {
+  stopSetupWatch();
   Object.assign(wiz, {
     step: 1, busy: false, created: false,
     museId: '', idOk: false, idChecked: '',
     slugDirty: false, tags: [],
-    email: '', password: ''
+    email: '', password: '',
+    pid: null, setupDone: false
   });
   wizName.value = '';
   wizMuseId.value = '';
@@ -2271,6 +2713,8 @@ function openWizard() {
   wizEmail.textContent = '—';
   wizPass.textContent = '—';
   instrBox.value = '';
+  wizSetup.hidden = true;
+  wizSetup.innerHTML = '';
   tagChat.checked = true;
   tagImage.checked = false;
   tagVideo.checked = false;
@@ -2299,6 +2743,41 @@ function setStep(n) {
   btnWizNext.hidden = n === 2;
   btnWizDone.hidden = n !== 2;
   updateWizNext();
+  renderWizSetup(wiz.setupDone); // live setup status lives on Step 2 only
+}
+
+/* ================================================================
+   WIZARD STEP 2 — live setup pong status. The daemon posts a role='muse'
+   'pong' row once it starts; this line polls every 3s until it lands.
+   ================================================================ */
+function renderWizSetup(done) {
+  wizSetup.hidden = wiz.step !== 2 || !wiz.created;
+  if (wizSetup.hidden) return;
+  if (done) {
+    wizSetup.innerHTML = '';
+    wizSetup.appendChild(el('span', 'ok', 'Pong received — Muse is ready ✓'));
+  } else {
+    wizSetup.innerHTML = spinnerSvg() + '<span>Waiting for setup pong…</span>';
+  }
+}
+
+function startSetupWatch(pid) {
+  stopSetupWatch();
+  if (!pid) return;
+  wiz.pid = pid;
+  wiz.setupDone = state.ready.get(pid) === true;
+  renderWizSetup(wiz.setupDone);
+  if (wiz.setupDone) return;
+  wiz.pongTimer = setInterval(async function () {
+    try {
+      const rows = await rest('/rest/v1/messages?select=id&project_id=eq.' + pid + '&role=eq.muse&text=eq.pong&limit=1');
+      if (rows && rows.length) markProjectReady(pid); // hook updates this line + stops the watch
+    } catch (e) { /* transient — retry on the next tick */ }
+  }, SETUP_POLL_MS);
+}
+
+function stopSetupWatch() {
+  if (wiz.pongTimer) { clearInterval(wiz.pongTimer); wiz.pongTimer = null; }
 }
 
 function setWizLock(b) {
@@ -2403,6 +2882,7 @@ function buildInstruction() {
     'Log in with the Muse Email + that password and read my project — I should see exactly one project (mine). If you see none or more than one, tell me in simple words and show the form again.',
     'Start the daemon that checks for new messages every few seconds and sends my replies back.',
     'Set up the automatic checks for me: one every 3 minutes to make sure the daemon is still running, and one every 10 seconds to wake you up when a new message arrives.',
+    'When the daemon starts it automatically sends a pong signal — the web UI will then show this Muse as ready, so wait for that before sending my first message.',
     'When it is done, tell me in one simple sentence that it works. Do not show me code or logs.',
     '',
     'Important:',
@@ -2423,7 +2903,11 @@ function renderStep2() {
 
 async function createMuse() {
   if (wiz.busy) return;
-  if (wiz.created) { setStep(2); return; } // already created (went back) — never POST twice
+  if (wiz.created) {
+    setStep(2);
+    if (wiz.pid && !wiz.setupDone) startSetupWatch(wiz.pid); // resume the pong watch after Back
+    return;
+  } // already created (went back) — never POST twice
   const museId = wiz.museId;
   const name = wizName.value.trim();
   if (!RE_MUSE_ID.test(museId) || !wiz.idOk || !name) { validateIdNow(); return; }
@@ -2455,8 +2939,27 @@ async function createMuse() {
     wiz.email = email;
     wiz.password = pw;
     wiz.created = true;
+    // 3) 'setup' thread — the daemon's pong lands in it; hidden from the sidebar
+    //    (spec §6). Best effort: a failure must not abort the finished Muse.
+    if (p) {
+      try {
+        const srows = await rest('/rest/v1/threads', {
+          method: 'POST',
+          prefer: 'return=representation',
+          body: { project_id: p.id, title: 'setup' }
+        });
+        const st = Array.isArray(srows) && srows[0] ? srows[0] : null;
+        if (st && !state.threads.some(function (x) { return x.id === st.id; })) {
+          state.threads.push(st);
+          recomputeMeta();
+        }
+      } catch (e2) {
+        toast({ kind: 'warn', title: 'Could not create the setup thread', detail: errText(e2) + ' — the Muse can still be used once its daemon pongs.' });
+      }
+    }
     renderStep2();
     setStep(2);
+    startSetupWatch(p ? p.id : null);
   } catch (e) {
     toastErrNoAuth('Could not create Muse', e); // stay on Step 1 per A6
     // Half-done cleanup: auth user created but the project row failed → delete the user, leave no junk
@@ -2472,11 +2975,14 @@ async function createMuse() {
 }
 
 function closeWizard() {
+  stopSetupWatch(); // never keep polling a closed wizard
   hideModal(modalWizard);
   if (wiz.created) loadData(); // the new Muse appears in the sidebar
 }
 
 btnNew.addEventListener('click', openWizard);
+// Sign out — serve.py clears the mr_session cookie and redirects to /login
+btnSignout.addEventListener('click', function () { window.location.href = '/logout'; });
 wizClose.addEventListener('click', closeWizard);
 btnWizCancel.addEventListener('click', closeWizard);
 btnWizDone.addEventListener('click', closeWizard);
@@ -2575,6 +3081,12 @@ async function confirmDelete() {
   if (state.activeProjectId === p.id) {
     state.activeProjectId = null;
     state.activeThreadId = null;
+  }
+  // Clean up gating + pending state bound to the deleted Muse
+  state.ready.delete(p.id);
+  saveReady();
+  for (const [k, pe] of state.pendingSends) {
+    if (pe.project_id === p.id) state.pendingSends.delete(k);
   }
   recomputeMeta();
   renderAll();
