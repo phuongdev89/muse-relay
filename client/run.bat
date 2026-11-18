@@ -7,7 +7,9 @@ rem  Usage: double-click this file, or open CMD and type: run.bat
 rem
 rem  What the script does:
 rem    1. cd into the folder containing this script (where muse_client.py
-rem       and config.json live).
+rem       and config.json live). First run mints a session from
+rem       MUSE_PASSWORD in config.json, saves it to state/session.json,
+rem       and scrubs the password from config.json.
 rem    2. If there is no .venv yet: create a venv and install
 rem       requirements.txt (first run only).
 rem    3. Run muse_client.py in a restart loop: if the client exits or

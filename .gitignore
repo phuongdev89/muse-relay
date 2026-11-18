@@ -25,3 +25,13 @@ Thumbs.db
 
 # ---- agent workspace ----
 .zcode/
+
+# ---- client runtime config (credential thật của từng Muse — KHÔNG commit) ----
+client/config.json
+client/state/
+
+# ---- ZCode Sites deploy stage ----
+.zcode-site/
+
+# ---- gateway config (API key) ----
+.muse/

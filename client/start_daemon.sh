@@ -3,7 +3,7 @@
 # Used by Muse's 3-minute schedule. Works from ANY folder (resolves its own location).
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BASE" || exit 1
-if pgrep -f "poller.py" > /dev/null; then
+if pgrep -f '^python3 poller\.py$' > /dev/null; then
   echo "daemon is already running, not starting it again"
   exit 0
 fi

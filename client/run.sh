@@ -7,8 +7,10 @@
 #
 #  What the script does:
 #    1. cd into the folder containing this script (where muse_client.py
-#       and config.json live). The relay password comes only from the
-#       MUSE_PASSWORD environment variable (secure form) or the saved session.
+#       and config.json live). First run: the client mints a session from
+#       MUSE_PASSWORD in config.json (or env MUSE_PASSWORD), saves it to
+#       state/session.json, and scrubs the password from config.json.
+#       Later runs use the saved session; no password is needed.
 #    2. If there is no .venv yet: create a venv and install
 #       requirements.txt (first run only).
 #    3. Run muse_client.py in a restart loop: if the client exits or

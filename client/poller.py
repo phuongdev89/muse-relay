@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pull + push daemon for Muse Relay v6 (session login + RLS isolation).
+"""Pull + push daemon for Muse Relay v6.2 (session login + RLS isolation).
 
 Same job as muse_client.py but meant to run forever in the background:
 - pulls new user messages into state/inbox.jsonl (paginated, oldest first, own project only — RLS)
@@ -7,9 +7,11 @@ Same job as muse_client.py but meant to run forever in the background:
 - NEVER writes replies itself and never touches MEMORY.md — replies are written by
   Muse's scheduled run / wake hook; this daemon only moves them.
 
-Auth: uses the Muse's own Relay Session value from config.json (long-lived GoTrue
-session); the rotated live token in state/session.json (chmod 600) keeps the
-daemon alive across restarts — config.json never needs changing again unless
+Auth (v6.2): first setup needs ONE of RELAY_SESSION (legacy v6) or
+MUSE_PASSWORD (new — the daemon mints a session once, saves it to
+state/session.json, then removes the password from config.json). The
+rotated live token in state/session.json (chmod 600) keeps the daemon
+alive across restarts — config.json never needs changing again unless
 the session is revoked.
 
 A lockfile (state/puller.lock) guarantees exactly ONE puller per folder:
@@ -112,11 +114,13 @@ def main():
         log(f"cannot start: {e}")
         sys.exit(1)
 
-    log("daemon start — session login, RLS-isolated, one puller, ~3s per round")
+    log("daemon start v6.2 — session login, RLS-isolated, one puller, ~3s per round")
     try:
         pr = api(cfg, "GET", "projects?select=id,muse_id,name,tags", "fetching the project").json()
+        log(f"daemon login OK — auth={cfg.get('auth_source')} email={cfg['email']}")
         if not pr:
-            log("no project visible for this login — check Muse Email / RELAY_SESSION in config.json with the owner")
+            log("no project visible for this login — check MUSE_EMAIL and the credential "
+                "in config.json (RELAY_SESSION or MUSE_PASSWORD) with the owner")
             return
         cfg["pid"] = pr[0]["id"]
         try:

@@ -1,4 +1,4 @@
-"""Muse Relay v6 — client on the Muse machine (session login + RLS isolation).
+"""Muse Relay v6.2 — client on the Muse machine (session login + RLS isolation).
 
 New messages (role='user') for YOUR project are appended to state/inbox.jsonl —
 Muse reads that file, then writes replies to outbox/<thread_id>.txt; the client
@@ -6,19 +6,25 @@ POSTs each reply back and deletes the file. The cursor lives in state/cursor.jso
 (shared key "last_id" with poller.py; a lockfile state/puller.lock makes sure only
 ONE puller runs at a time).
 
-Auth (v6 — RLS isolation): the client uses the Muse's own Relay Session value from
-config.json (a long-lived GoTrue session that renews itself on every refresh).
-Every request carries that session's JWT and Supabase RLS restricts it to this
-Muse's own project — this client physically cannot read another Muse's data.
+Auth (v6.2 — RLS isolation): the client uses the Muse's own long-lived GoTrue
+session, which renews itself on every refresh. First setup needs ONE of:
+RELAY_SESSION (legacy v6, from the owner's web UI) or MUSE_PASSWORD (new in
+v6.2 — the daemon mints a session once, saves it to state/session.json, then
+removes the password from config.json). Every request carries that session's
+JWT and Supabase RLS restricts it to this Muse's own project — this client
+physically cannot read another Muse's data.
 
 How to run:
-    pip install requests
+    pip install -r requirements.txt
     python3 muse_client.py                # indefinite poll loop (~3s pause)
     python3 muse_client.py --once         # one round + push the outbox, for cron
+    python3 relay_auth.py test-login      # check the login without polling
 
-Only needs (per-Muse API keys and passwords are gone):
-- config.json: SUPABASE_PROJECT_ID, SUPABASE_PUBLISHABLE_KEY (public), SUPABASE_URL,
-  MUSE_EMAIL and RELAY_SESSION (the Muse's session — from the owner's web UI)
+Only needs:
+- config.json: SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY (public), MUSE_EMAIL,
+  plus RELAY_SESSION or MUSE_PASSWORD on first setup (see relay_auth.py).
+  SUPABASE_PROJECT_ID is optional.
+- state/session.json: created automatically on first login (chmod 600).
 """
 import argparse
 import json
@@ -46,8 +52,9 @@ def fetch_project(cfg):
     r = api(cfg, "GET", "projects?select=id,muse_id,name,tags,email", "fetching the project")
     rows = r.json()
     if not rows:
-        sys.exit("[muse] no project visible for this login — check Muse Email / RELAY_SESSION "
-                 "in config.json, or the owner has not created the Muse yet")
+        sys.exit("[muse] no project visible for this login — check MUSE_EMAIL and the "
+                 "credential in config.json (RELAY_SESSION or MUSE_PASSWORD), "
+                 "or the owner has not created the Muse yet")
     if len(rows) > 1:
         print(f"[muse] WARNING: {len(rows)} projects visible — expected 1. Tell the owner.", file=sys.stderr)
     return rows[0]
@@ -129,7 +136,7 @@ def try_pong(cfg):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Muse Relay v6 client — session login, RLS-isolated")
+    ap = argparse.ArgumentParser(description="Muse Relay v6.2 client — session login, RLS-isolated")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--once", action="store_true", help="one round + push the outbox, then exit")
     args = ap.parse_args()
@@ -150,7 +157,8 @@ def main():
                 sys.exit(f"[muse] cannot initialize the cursor: {e} — start again to retry")
             cfg["cursor"] = read_cursor(cfg["state_dir"])
             tags = ",".join(pr.get("tags") or [])
-            print(f"[#{pr['id']}] {pr['muse_id']} ({pr['name']}) is listening — tags={tags} — cursor={cfg['cursor']}")
+            print(f"[#{pr['id']}] {pr['muse_id']} ({pr['name']}) is listening — tags={tags} — "
+                  f"cursor={cfg['cursor']} — auth={cfg.get('auth_source')}")
             pong_ok = try_pong(cfg)
             while True:
                 if not pong_ok:

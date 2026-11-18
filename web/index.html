@@ -25,6 +25,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Muse Relay</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f141a">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 /* ================================================================
    A. DESIGN TOKENS — copied verbatim from design-system A.1 + derived
@@ -1012,12 +1017,67 @@ input, textarea { caret-color: var(--caret-color); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; }
 }
+
+/* ================================================================
+   M. MOBILE (≤768px) — sidebar becomes an off-canvas drawer + touch
+   sizing. Desktop (>768px) untouched: #btnMenu/#sbBackdrop stay hidden
+   there and every layout rule below sits inside the media query.
+   ================================================================ */
+#btnMenu { display: none; }
+#sbBackdrop {
+  position: fixed; inset: 0;
+  background: var(--bg-backdrop);
+  z-index: calc(var(--z-dropdown) - 10); /* below modals + dropdown, covers the page */
+}
+@media (max-width: 768px) {
+  #app { height: 100vh; height: 100dvh; }
+  #btnMenu { display: inline-flex; }
+  #btnCollapse { display: none; } /* the drawer replaces the collapse rail */
+  /* Sidebar → fixed off-canvas drawer (open via body.sidebar-open) */
+  #sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0;
+    width: min(84vw, 340px);
+    z-index: calc(var(--z-dropdown) - 5); /* above the backdrop, below modals */
+    transform: translateX(-100%);
+    transition: transform 200ms var(--ease-in-out);
+    overflow-y: auto;
+  }
+  body.sidebar-open #sidebar { transform: translateX(0); }
+  /* The desktop collapse rail must not shrink the touch drawer */
+  #sidebar.collapsed { width: min(84vw, 340px); }
+  #sidebar.collapsed .brand-glyph { display: inline; }
+  #sidebar.collapsed .brand-name { display: inline; }
+  #sidebar.collapsed .side-controls { display: flex; }
+  #sidebar.collapsed .side-divider { display: block; }
+  #sidebar.collapsed #projList { display: block; }
+  #sidebar.collapsed .brand-row { justify-content: flex-start; padding: var(--sp-2) var(--sp-3); }
+  #main { margin-left: 0; width: 100%; }
+  /* Header: let long meta wrap instead of overflowing */
+  #mainHeader { height: auto; min-height: var(--header-h); flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); row-gap: 4px; }
+  #hdrLeft { flex-wrap: wrap; row-gap: 4px; }
+  /* Composer: thumb-reachable + iOS zoom-proof (16px inputs) */
+  #composer { padding: var(--sp-3) var(--sp-3) calc(10px + env(safe-area-inset-bottom)); }
+  #inputMsg { font-size: 16px; min-height: 64px; }
+  .f-input { font-size: 16px; }
+  .send-btn { width: 44px; height: 44px; }
+  /* Overlays: fit small screens; long keys/emails must break */
+  .overlay { padding: var(--sp-3); }
+  .overlay .panel { width: min(94vw, 520px); max-height: 92vh; max-height: 92dvh; }
+  .cred-value { word-break: break-all; }
+  /* Chat bubbles + touch targets */
+  #chatArea { padding: var(--sp-3); }
+  .msg { max-width: min(var(--bubble-max-w), 86%); }
+  .bubble { padding: 8px var(--sp-3); }
+  .thread-row, .group-head { min-height: 44px; }
+  #ctxMenu { font-size: 14px; }
+}
 </style>
 </head>
 <body>
 
 <!-- ===================== MAIN FRAME: SIDEBAR (tree) + MAIN ===================== -->
 <div id="app" hidden>
+  <div id="sbBackdrop" hidden></div>
   <aside id="sidebar">
     <div class="brand-row" title="Built with ZCode">
       <span class="brand-glyph" aria-hidden="true">✦</span>
@@ -1040,6 +1100,7 @@ input, textarea { caret-color: var(--caret-color); }
   <section id="main">
     <header id="mainHeader">
       <div id="hdrLeft">
+        <button type="button" id="btnMenu" class="icon-btn" aria-label="Menu">☰</button>
         <span id="hdrName" class="dim">Muse Relay</span>
         <span id="hdrMuseId" class="mono"></span>
         <span id="hdrChips" class="chips"></span>
@@ -1316,6 +1377,41 @@ input, textarea { caret-color: var(--caret-color); }
   </div>
 </div>
 
+<!-- ===================== CLOUD CONNECT MODAL (static-host mode) ===================== -->
+<div id="modalConnect" class="overlay" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="connTitle">
+    <div class="panel-head">
+      <div class="ph-stack">
+        <h2 id="connTitle">Connect your Muse Relay</h2>
+        <div class="ph-sub">One-time setup — the same page also runs behind serve.py when it is reachable.</div>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="f-group">
+        <label class="f-label" for="connUrl">Supabase URL</label>
+        <input id="connUrl" class="f-input" type="url" placeholder="https://xxxx.supabase.co" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="f-group">
+        <label class="f-label" for="connKey">Publishable key</label>
+        <input id="connKey" class="f-input" type="text" placeholder="sb_publishable_… or eyJ…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="f-group">
+        <label class="f-label" for="connEmail">Email <span class="f-note">(MUSE_EMAIL)</span></label>
+        <input id="connEmail" class="f-input" type="email" autocomplete="off">
+      </div>
+      <div class="f-group">
+        <label class="f-label" for="connPass">Password</label>
+        <input id="connPass" class="f-input" type="password" autocomplete="off">
+      </div>
+      <div class="callout warn"><span class="ico" aria-hidden="true">⚠</span><span>Values come from the message your Muse sent you after setup. Open this page in Safari/Chrome — NOT inside the Zalo/Messenger in-app browser.</span></div>
+      <div id="connFb" class="f-feedback" hidden></div>
+    </div>
+    <div class="panel-foot">
+      <button type="button" class="btn primary" id="btnConnGo">Connect</button>
+    </div>
+  </div>
+</div>
+
 <!-- Shared dropdown menu (thread ⋯ menu) -->
 <div id="ctxMenu" role="menu" hidden></div>
 
@@ -1340,7 +1436,7 @@ function el(tag, cls, text) {
 /* ================================================================
    HẰNG SỐ
    ================================================================ */
-const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed', ready: 'mr_ready_muses', sys: 'mr_sys_show' };
+const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed', ready: 'mr_ready_muses', sys: 'mr_sys_show', cloud: 'mr_cloud' };
 const RE_MUSE_ID = /^[a-z0-9_]{3,40}$/;
 // The built Muse bundle, committed at web/muse-relay.zip on main
 const SETUP_ZIP_URL = 'https://raw.githubusercontent.com/phuongdev89/muse-relay/main/web/muse-relay.zip';
@@ -1427,6 +1523,8 @@ function saveSysShow() {
 }
 
 const state = {
+  mode: 'lan',  // 'lan' (behind serve.py) | 'cloud' (static host, direct to Supabase)
+  cloud: null,  // cloud session {url, key, email, access, refresh, expires_at} — the password is NEVER persisted
   settings: { projectId: '', publishable: '' },  // from /config — public key only, no secret
   projects: [],          // [{id, muse_id, name, tags[], email, secret, user_id}]
   threads: [],           // [{id, project_id, title, last_read_id}]
@@ -1444,6 +1542,10 @@ const state = {
   realtime: { status: 'offline' },
   sse: null,
   pollTimer: null,
+  cloudWs: null,             // cloud mode — Supabase Realtime WebSocket (phoenix protocol)
+  cloudPingTimer: null,      // phoenix heartbeat while the socket is open
+  cloudReconnectTimer: null, // reconnect backoff timer (2s → 8s cap)
+  cloudBackoffMs: 2000,
   loading: false,
   chatError: null,
   checking: false,
@@ -1533,6 +1635,9 @@ const quotaChip = E('quotaChip');
 const modalView = E('modalView'), vwIcon = E('vwIcon'), vwTitle = E('vwTitle');
 const vwBody = E('vwBody'), vwDownload = E('vwDownload');
 const vwClose = E('vwClose'), vwCloseBtn = E('vwCloseBtn');
+const btnMenu = E('btnMenu'), sbBackdrop = E('sbBackdrop');
+const modalConnect = E('modalConnect'), connUrl = E('connUrl'), connKey = E('connKey');
+const connEmail = E('connEmail'), connPass = E('connPass'), connFb = E('connFb'), btnConnGo = E('btnConnGo');
 
 /* ================================================================
    TOAST — the single error channel (architecture A6). Errors auto-dismiss
@@ -1669,37 +1774,157 @@ function fmtThreadTime(d) {
 }
 
 /* ================================================================
-   REST HELPER — every call goes through serve.py (/sb proxy), keys are server-side
+   REST HELPER — LAN: every call goes through serve.py (/sb proxy), keys are
+   server-side. CLOUD (no serve.py answering): the same rest() talks to
+   Supabase directly with the publishable key + the owner's GoTrue token,
+   scoped by user_id=auth.uid() through the v3 RLS policies.
    ================================================================ */
 function baseUrl() {
-  return '/sb';
+  return (state.mode === 'cloud' && state.cloud) ? state.cloud.url : '/sb';
 }
 
 /* Session auth (serve.py password login): an unauthenticated 401 means the
-   mr_session cookie is missing or expired — bounce to /login exactly once. */
+   mr_session cookie is missing or expired — bounce to /login exactly once.
+   Cloud mode has no login page — rest() refreshes the token instead. */
 let authRedirectDone = false;
 function redirectIfAuthExpired(status) {
+  if (state.mode !== 'lan') return;
   if (status !== 401 || authRedirectDone) return;
   authRedirectDone = true;
   window.location.href = '/login';
 }
 
-async function rest(path, opts) {
-  opts = opts || {};
-  const headers = {};
-  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (opts.prefer) headers['Prefer'] = opts.prefer;
+/* ---- Cloud session (localStorage 'mr_cloud') — tokens only, never the
+   password. Kept in one object: {url, key, email, access, refresh, expires_at} */
+let cloudPrefill = null; // last good url/key/email — prefill the connect form
+function loadCloudSession() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_KEYS.cloud) || 'null');
+    if (v && v.url && v.key && v.access && v.refresh) return v;
+  } catch (e) { /* corrupted — treat as signed out */ }
+  return null;
+}
+function saveCloudSession() {
+  try { localStorage.setItem(LS_KEYS.cloud, JSON.stringify(state.cloud)); } catch (e) { /* ignore */ }
+}
+function clearCloudSession() {
+  if (state.cloud) cloudPrefill = { url: state.cloud.url, key: state.cloud.key, email: state.cloud.email };
+  state.cloud = null;
+  try { localStorage.removeItem(LS_KEYS.cloud); } catch (e) { /* ignore */ }
+}
+function cloudAccessTokenValid() {
+  return !!(state.cloud && state.cloud.expires_at && state.cloud.expires_at > Date.now() + 30000);
+}
+
+/* Normalize the Supabase URL from the setup message: trim, strip trailing '/', require https:// */
+function cloudNormalizeUrl(raw) {
+  const u = String(raw || '').trim().replace(/\/+$/, '');
+  return /^https:\/\/[a-z0-9.-]+/i.test(u) ? u : null;
+}
+
+/* Password sign-in against Supabase GoTrue, straight from the browser. */
+async function cloudSignIn(url, key, email, password) {
   let res;
   try {
-    res = await fetch(baseUrl() + path, {
+    res = await fetch(url + '/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { 'apikey': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password })
+    });
+  } catch (e) {
+    throw { network: true, message: 'Blocked — check the URL/key or your connection (CORS)' };
+  }
+  if (res.status === 400 || res.status === 401 || res.status === 422) throw { status: 401, message: 'Wrong email or password' };
+  if (!res.ok) throw { status: res.status, message: 'Sign-in failed (HTTP ' + res.status + ')' };
+  const j = await res.json();
+  if (!j || !j.access_token || !j.refresh_token) throw { status: 500, message: 'Unexpected sign-in response' };
+  return {
+    url: url, key: key, email: email,
+    access: j.access_token, refresh: j.refresh_token,
+    expires_at: Date.now() + (j.expires_in || 3600) * 1000
+  };
+}
+
+/* Rotate an expired access token (Supabase rotates the refresh token too —
+   persist the new pair). Returns true on success. */
+async function cloudRefresh() {
+  if (!state.cloud) return false;
+  let res;
+  try {
+    res = await fetch(state.cloud.url + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      headers: { 'apikey': state.cloud.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: state.cloud.refresh })
+    });
+  } catch (e) {
+    return false;
+  }
+  if (!res.ok) return false;
+  let j = null;
+  try { j = await res.json(); } catch (e2) { return false; }
+  if (!j || !j.access_token || !j.refresh_token) return false;
+  state.cloud.access = j.access_token;
+  state.cloud.refresh = j.refresh_token;
+  state.cloud.expires_at = Date.now() + (j.expires_in || 3600) * 1000;
+  saveCloudSession();
+  cloudSendAccessToken(); // realtime socket re-authenticates after every refresh
+  return true;
+}
+
+/* Cloud mode hides the LAN-only controls (wizard + admin ops + API docs);
+   everything else runs through rest() under the v3 owner RLS policies. */
+function applyCloud() {
+  state.mode = 'cloud';
+  btnNew.hidden = true;
+  E('btnDocs').hidden = true;
+  btnCfgToken.hidden = true;  // Token re-issue needs the server-side secret — LAN only
+  btnCfgDelete.hidden = true; // Delete needs the GoTrue admin API — LAN only
+}
+
+async function rest(path, opts) {
+  opts = opts || {};
+  const doFetch = function () {
+    const headers = {};
+    if (state.mode === 'cloud' && state.cloud) {
+      headers['apikey'] = state.cloud.key;
+      headers['Authorization'] = 'Bearer ' + state.cloud.access;
+    }
+    if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (opts.prefer) headers['Prefer'] = opts.prefer;
+    return fetch(baseUrl() + path, {
       method: opts.method || 'GET',
       headers: headers,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal
     });
+  };
+  const netErr = function () {
+    return { network: true, message: state.mode === 'cloud'
+      ? 'Could not reach Supabase — check the URL/key in Settings.'
+      : 'Could not reach serve.py — is the local server still running?' };
+  };
+  let res;
+  try {
+    res = await doFetch();
   } catch (e) {
     if (e && e.name === 'AbortError') throw { aborted: true, message: 'Aborted by the user' };
-    throw { network: true, message: 'Could not reach serve.py — is the local server still running?' };
+    throw netErr();
+  }
+  if (res.status === 401 && state.mode === 'cloud') {
+    // Access token expired → ONE refresh + ONE retry, then back to the connect screen
+    let refreshed = false;
+    try { refreshed = await cloudRefresh(); } catch (e1) { refreshed = false; }
+    if (refreshed) {
+      try { res = await doFetch(); } catch (e2) {
+        if (e2 && e2.name === 'AbortError') throw { aborted: true, message: 'Aborted by the user' };
+        throw netErr();
+      }
+    }
+    if (res.status === 401) {
+      clearCloudSession();
+      showConnect();
+      throw { status: 401, message: 'Session expired — connect again' };
+    }
   }
   if (res.status === 401 || res.status === 403) {
     if (res.status === 401) redirectIfAuthExpired(401); // session expired → login page (no toast)
@@ -1721,6 +1946,7 @@ async function rest(path, opts) {
 
 /* GoTrue admin (create/delete the Muse's implicit auth user) — via the /sb proxy */
 async function adminReq(path, opts) {
+  if (state.mode === 'cloud') throw { status: 403, message: 'Not available in Cloud mode' }; // GoTrue admin needs the server-side secret
   opts = opts || {};
   const headers = {};
   if (opts.body) headers['Content-Type'] = 'application/json';
@@ -1768,10 +1994,13 @@ function boot() {
   startSysSchedule(); // background ping + /status quota jobs
   loadData();
   setupRealtime();
+  registerServiceWorker();
 }
 
-/* Startup: fetch the project id from serve.py, then boot. Errors = server down / .env missing.
-   A 401 means the owner is not signed in — serve.py's login page takes over. */
+/* Startup: fetch the project id from serve.py, then boot. A 401 means the owner
+   is not signed in — serve.py's login page takes over. A 404 / network error
+   means there is no server: the SAME file keeps working as a pure static site
+   in Cloud mode (persisted session → boot, else the connect screen). */
 async function initApp() {
   try {
     const r = await fetch('/config');
@@ -1782,10 +2011,42 @@ async function initApp() {
     state.settings.publishable = cfg.publishable_key || '';
     boot();
   } catch (e) {
-    app.hidden = false;
-    state.chatError = 'serve.py is not reachable — start it with `python3 serve.py` and make sure .env has SUPABASE_PROJECT_ID + SUPABASE_SECRET_KEY.';
-    renderChat();
+    await initCloud();
   }
+}
+
+/* Cloud path: no serve.py answered /config. Restore a persisted session
+   (valid access token → boot; refresh token → rotate then boot) or show the
+   connect screen. */
+async function initCloud() {
+  const saved = loadCloudSession();
+  if (saved) {
+    state.cloud = saved;
+    if (cloudAccessTokenValid()) {
+      applyCloud();
+      boot();
+      return;
+    }
+    if (await cloudRefresh()) {
+      applyCloud();
+      boot();
+      return;
+    }
+    clearCloudSession();
+  }
+  showConnect();
+}
+
+/* PWA: register the offline shell — only on https: or localhost/127.0.0.1
+   (plain http on a LAN IP or file:// would throw; silently skip those). */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const host = location.hostname;
+  const secure = location.protocol === 'https:' || host === 'localhost' || host === '127.0.0.1';
+  if (!secure) return;
+  try {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* shell is optional */ });
+  } catch (e) { /* ignore */ }
 }
 
 async function loadData() {
@@ -3209,6 +3470,7 @@ function renderAll() {
 }
 
 function selectProject(pid) {
+  closeDrawer(); // mobile drawer — no-op on desktop
   if (state.activeProjectId === pid) return;
   state.activeProjectId = pid;
   state.activeThreadId = null;
@@ -3234,6 +3496,7 @@ async function openThread(tid) {
     state.groupOpen.set(t.project_id, true); // open the group containing the selected thread
   }
   state.activeThreadId = tid;
+  closeDrawer(); // mobile drawer — no-op on desktop
   if (state.replyTo && state.replyTo.thread_id !== tid) cancelReply(); // quotes don't survive a thread switch
   renderHeader();
   renderSidebar();
@@ -3490,7 +3753,11 @@ function setRealtime(s) {
 }
 
 function setupRealtime() {
-  if (state.sse) { try { state.sse.close(); } catch (e) { /* ignore */ } }
+  if (state.sse) { try { state.sse.close(); } catch (e) { /* ignore */ } state.sse = null; }
+  if (state.cloudWs) { try { state.cloudWs.close(); } catch (e) { /* ignore */ } state.cloudWs = null; }
+  if (state.cloudPingTimer !== null) { clearInterval(state.cloudPingTimer); state.cloudPingTimer = null; }
+  if (state.cloudReconnectTimer !== null) { clearTimeout(state.cloudReconnectTimer); state.cloudReconnectTimer = null; }
+  if (state.mode === 'cloud') { setupCloudRealtime(); return; }
   try {
     state.sse = new EventSource('/api/events');
     state.sse.onopen = function () { setRealtime('connected'); };
@@ -3504,6 +3771,74 @@ function setupRealtime() {
   } catch (e) {
     setRealtime('offline'); // the 30s polling still runs
   }
+}
+
+/* ---- Cloud realtime — minimal Supabase Realtime (phoenix protocol) WebSocket
+   client for public.messages INSERTs. LAN keeps EventSource('/api/events');
+   cloud joins wss://<project>/realtime/v1/websocket, sends the access token
+   after every refresh, and reconnects with a 2s→8s backoff on abnormal close.
+   The 30s pollTick fallback still covers everything in both modes. */
+function cloudSendAccessToken() {
+  const ws = state.cloudWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(JSON.stringify({ topic: 'phoenix', event: 'access_token', payload: { token: state.cloud ? state.cloud.access : '' } }));
+  } catch (e) { /* socket dies → onclose reconnects */ }
+}
+function setupCloudRealtime() {
+  if (!state.cloud) return;
+  setRealtime('offline');
+  if (state.cloudPingTimer !== null) { clearInterval(state.cloudPingTimer); state.cloudPingTimer = null; }
+  const topic = 'realtime:public:messages';
+  let ws;
+  try {
+    ws = new WebSocket(state.cloud.url.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + encodeURIComponent(state.cloud.key));
+  } catch (e) {
+    scheduleCloudReconnect();
+    return;
+  }
+  state.cloudWs = ws;
+  ws.onopen = function () {
+    ws.send(JSON.stringify({
+      topic: topic, event: 'phx_join', ref: '1',
+      payload: { config: { postgres_changes: [{ event: 'INSERT', schema: 'public', table: 'messages' }] } }
+    }));
+    cloudSendAccessToken();
+    // Phoenix heartbeat — without it Supabase drops idle sockets after ~60s
+    state.cloudPingTimer = setInterval(function () {
+      if (!state.cloudWs || state.cloudWs.readyState !== WebSocket.OPEN) return;
+      try { state.cloudWs.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {} })); } catch (e) { /* ignore */ }
+    }, 25000);
+  };
+  ws.onmessage = function (ev) {
+    let d;
+    try { d = JSON.parse(ev.data); } catch (e) { return; }
+    if (d && d.event === 'phx_reply' && d.payload && d.payload.status === 'ok') {
+      if (d.topic === topic) { setRealtime('connected'); state.cloudBackoffMs = 2000; } // join accepted → reset backoff
+      return;
+    }
+    // INSERT events: defensively inspect both shapes Supabase has used
+    const rec = d && d.payload && d.payload.data && d.payload.data.record;
+    if (rec && (d.event === 'postgres_changes' || d.event === 'INSERT')) {
+      onRealtimeInsert({ new: rec });
+    }
+  };
+  ws.onclose = function () {
+    if (state.cloudWs !== ws) return; // superseded by a newer socket
+    state.cloudWs = null;
+    setRealtime('offline');
+    scheduleCloudReconnect();
+  };
+  ws.onerror = function () { try { ws.close(); } catch (e) { /* onclose follows */ } };
+}
+function scheduleCloudReconnect() {
+  if (state.mode !== 'cloud' || state.cloudReconnectTimer !== null) return;
+  const delay = state.cloudBackoffMs; // 2s → 4s → 8s cap
+  state.cloudReconnectTimer = setTimeout(function () {
+    state.cloudReconnectTimer = null;
+    state.cloudBackoffMs = Math.min(delay * 2, 8000);
+    setupCloudRealtime();
+  }, delay);
 }
 
 function onRealtimeInsert(payload) {
@@ -4111,7 +4446,10 @@ function closeWizard() {
 btnNew.addEventListener('click', openWizard);
 // API Docs — plain link to serve.py's Swagger UI (Redoc lives at /redoc)
 // Sign out — serve.py clears the mr_session cookie and redirects to /login
-btnSignout.addEventListener('click', function () { window.location.href = '/logout'; });
+btnSignout.addEventListener('click', function () {
+  if (state.mode === 'cloud') { clearCloudSession(); window.location.reload(); return; }
+  window.location.href = '/logout';
+});
 wizClose.addEventListener('click', closeWizard);
 btnWizCancel.addEventListener('click', closeWizard);
 btnWizDone.addEventListener('click', closeWizard);
@@ -4286,6 +4624,19 @@ btnCollapse.addEventListener('click', function () {
 });
 applyCollapsed();
 
+/* Mobile drawer — #btnMenu toggles the off-canvas sidebar (≤768px); selecting
+   a thread/project or tapping the backdrop closes it. Desktop: inert. */
+function closeDrawer() {
+  document.body.classList.remove('sidebar-open');
+  sbBackdrop.hidden = true;
+}
+btnMenu.addEventListener('click', function () {
+  const open = !document.body.classList.contains('sidebar-open');
+  document.body.classList.toggle('sidebar-open', open);
+  sbBackdrop.hidden = !open;
+});
+sbBackdrop.addEventListener('click', closeDrawer);
+
 /* Rename thread */
 btnRenSave.addEventListener('click', saveRenameThread);
 btnRenCancel.addEventListener('click', function () { if (!state.renamingThread) { renThread = null; hideModal(modalRenameThread); } });
@@ -4338,7 +4689,59 @@ document.addEventListener('keydown', function (e) {
 });
 
 /* ================================================================
-   STARTUP — fetch /config from serve.py, then boot
+   CLOUD CONNECT — the connect screen for static-host mode. Signs in to
+   Supabase GoTrue from the browser and boots in cloud mode. Only reachable
+   when no serve.py answered /config.
+   ================================================================ */
+function showConnect() {
+  app.hidden = false; // the overlay must be visible over the main frame
+  const pre = cloudPrefill || {};
+  if (pre.url) connUrl.value = pre.url;
+  if (pre.key) connKey.value = pre.key;
+  if (pre.email) connEmail.value = pre.email;
+  connPass.value = '';
+  connFb.hidden = true;
+  connFb.textContent = '';
+  connFb.className = 'f-feedback';
+  showModal(modalConnect);
+}
+
+async function connectGo() {
+  const url = cloudNormalizeUrl(connUrl.value);
+  const key = connKey.value.trim();
+  const email = connEmail.value.trim();
+  const password = connPass.value;
+  connFb.className = 'f-feedback';
+  connFb.hidden = false;
+  if (!url) { connFb.classList.add('bad'); connFb.textContent = 'SUPABASE_URL must start with https:// (no trailing slash).'; return; }
+  if (!key || !email || !password) { connFb.classList.add('bad'); connFb.textContent = 'Fill in all 4 values from the setup message your Muse sent you.'; return; }
+  connFb.classList.add('check');
+  connFb.textContent = 'Signing in…';
+  btnBusy(btnConnGo, true, 'Connecting…');
+  try {
+    const sess = await cloudSignIn(url, key, email, password);
+    state.cloud = sess;
+    saveCloudSession();
+    cloudPrefill = { url: url, key: key, email: email };
+    hideModal(modalConnect);
+    applyCloud();
+    boot();
+  } catch (e) {
+    connFb.classList.remove('check');
+    connFb.classList.add('bad');
+    connFb.textContent = (e && e.status === 401) ? e.message : errText(e); // 401 → 'Wrong email or password'
+  } finally {
+    btnBusy(btnConnGo, false);
+  }
+}
+btnConnGo.addEventListener('click', connectGo);
+connPass.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && !btnConnGo.disabled) { e.preventDefault(); connectGo(); }
+});
+
+/* ================================================================
+   STARTUP — LAN: fetch /config from serve.py, then boot.
+   Cloud: no /config → persisted session or the connect screen.
    ================================================================ */
 initApp();
 
