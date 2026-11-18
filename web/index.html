@@ -70,7 +70,6 @@
   /* ===== 6. BUBBLE ===== */
   --bubble-user:      #2f6fed;
   --bubble-user-text: #ffffff;
-  --bubble-user-time: #ffffff;
   --bubble-muse:      #243244;
   --bubble-muse-text: #e8eef5;
   --bubble-muse-time: #8b9bb0;
@@ -122,7 +121,7 @@
   --sidebar-w:      300px;
   --header-h:       52px;
   --bubble-max-w:   680px;
-  --composer-max-h: 160px;
+  --composer-max-h: 260px;
   --modal-w:        560px;
   --modal-sm-w:     420px;
   --z-dropdown: 100;
@@ -136,7 +135,6 @@
   --attach-user-bg:     rgba(255, 255, 255, 0.12);
   --attach-user-icon-bg: rgba(255, 255, 255, 0.16);
   --attach-user-sub:    rgba(255, 255, 255, 0.85);
-  --attach-muse-hover:  #232d3b;
   --step-done-bd:       rgba(63, 185, 80, 0.40);
   --callout-warn-bd:    rgba(210, 153, 34, 0.40);
   --callout-danger-bd:  rgba(218, 54, 51, 0.40);
@@ -197,6 +195,7 @@ input, textarea { caret-color: var(--caret-color); }
   font: 600 13px/1 var(--font-sans);
   color: var(--text-primary);
   background: transparent;
+  text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
   transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
@@ -228,7 +227,7 @@ input, textarea { caret-color: var(--caret-color); }
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .icon-btn.small { width: 24px; height: 24px; font-size: 13px; }
-.icon-btn.xsmall { width: 20px; height: 20px; font-size: 11px; }
+.icon-btn.xsmall { width: 22px; height: 22px; font-size: 13px; }
 
 .spin { animation: rot 700ms linear infinite; display: inline-block; }
 .spin-lg { width: 20px; height: 20px; }
@@ -337,12 +336,20 @@ input, textarea { caret-color: var(--caret-color); }
 .thread-row.selected { background: var(--bg-selected); color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
 .thread-row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .thread-row .t-ico { width: 14px; flex-shrink: 0; text-align: center; font-size: 10px; color: var(--text-muted); }
-.thread-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Read-state icon at the head of every thread row: ● (accent) = the latest
+   Muse reply is unread, ✓ (muted) = everything is read */
+.thread-row .read-ico { width: 14px; flex-shrink: 0; text-align: center; font-size: 10px; line-height: 1; color: var(--text-muted); }
+.thread-row .read-ico.unread { color: var(--accent-text); font-size: 9px; }
+.thread-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; }
+/* Long thread names scroll (marquee) instead of truncating — the inner span
+   slides by the overflow distance and back, eased, with a pause at both ends */
+.thread-name .tn-text { display: inline-block; }
+.thread-name.marquee .tn-text { animation: threadMarquee 9s var(--ease-in-out) infinite alternate; }
+@keyframes threadMarquee { 0%, 12% { transform: translateX(0); } 88%, 100% { transform: translateX(calc(-1 * var(--mq-dist, 30px))); } }
+/* Last-updated time at the right end of each thread row (ZCode-style) */
+.thread-time { flex-shrink: 0; font-size: 10px; line-height: 1; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
 .thread-menu { display: none; flex-shrink: 0; }
 .thread-row:hover .thread-menu, .thread-row:focus-within .thread-menu { display: inline-flex; }
-/* Pinned thread (lives in the Pinned section at the top): prefixed with the Muse name */
-.thread-row .pm { flex-shrink: 0; color: var(--text-muted); font-size: 12px; }
-.thread-row .pm strong { color: var(--text-secondary); font-weight: 600; }
 
 .thread-empty { margin: 1px 0 0 var(--sp-4); padding: 3px var(--sp-2); font-size: 12px; color: var(--text-muted); }
 
@@ -380,7 +387,7 @@ input, textarea { caret-color: var(--caret-color); }
   flex-shrink: 0;
 }
 
-/* PINNED section — pinned threads from every Muse gather at the top, prefixed with the Muse name */
+/* PINNED section — pinned threads from every Muse gather at the top */
 .pinned-label {
   display: flex; align-items: center; gap: 6px;
   height: 24px;
@@ -458,64 +465,126 @@ input, textarea { caret-color: var(--caret-color); }
    G. VÙNG CHAT (B.3)
    ================================================================ */
 #chatArea { flex: 1; overflow-y: auto; padding: var(--sp-4) var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-3); }
-.bubble {
+/* Each message is a row: the bubble on top, actions + time + send-state on a
+   meta line BELOW the bubble (outside it, on the page background). Owner
+   messages sit on the RIGHT (agent-app style), Muse replies on the LEFT;
+   the meta line is always right-aligned. */
+.msg {
+  display: flex; flex-direction: column;
   max-width: min(var(--bubble-max-w), 72%);
+}
+.msg.user { align-self: flex-end; align-items: flex-end; }
+.msg.muse { align-self: flex-start; align-items: flex-start; }
+.msg.new { animation: bubbleIn var(--dur-base) var(--ease-out); }
+@keyframes bubbleIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.bubble {
+  max-width: 100%;
   padding: 10px var(--sp-4);
   font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
   cursor: default;
 }
 .bubble.user {
-  align-self: flex-end;
   background: var(--bubble-user);
   color: var(--bubble-user-text);
   border-radius: var(--radius-bubble) var(--radius-bubble) 4px var(--radius-bubble);
   box-shadow: var(--shadow-bubble-user);
 }
 .bubble.muse {
-  align-self: flex-start;
   background: var(--bubble-muse);
   color: var(--bubble-muse-text);
   border: 1px solid var(--bubble-muse-bd);
   border-radius: var(--radius-bubble) var(--radius-bubble) var(--radius-bubble) 4px;
 }
-.bubble-time { display: block; font-size: 11px; margin-top: 6px; }
-.bubble.user .bubble-time { color: var(--bubble-user-time); text-align: right; }
-.bubble.muse .bubble-time { color: var(--bubble-muse-time); text-align: left; }
-.bubble.new { animation: bubbleIn var(--dur-base) var(--ease-out); }
-@keyframes bubbleIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* Meta line under the bubble — actions + time + (own messages) the chip,
+   always right-aligned no matter which side the bubble is on */
+.msg-meta {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 4px;
+  font-size: 11px; line-height: 1.2;
+  color: var(--text-muted);
+  align-self: flex-end;
+}
+.bubble-time { color: var(--text-muted); }
 
 /* Send-state chips on messages sent this session (placeholder + real rows):
-   'sending' → '✓ sent' → '✓✓ received' (blue-ish) / '✗ failed' (red) */
+   'sending' → '✓ sent' → '✓✓ delivered' (the daemon pulled it — typing
+   started) → '✓✓ received' (blue-ish, the Muse replied) / '✗ failed' (red) */
 .msg-status {
   display: inline-flex; align-items: center; gap: 5px;
-  margin-top: 6px;
   font-size: 10.5px; font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  line-height: 1.2;
+  color: var(--text-muted);
 }
-.bubble.user .msg-status { color: var(--attach-user-sub); }
-.bubble.user .msg-status.received { color: var(--msgstate-received-fg); }
-.bubble.user .msg-status.fail { color: var(--danger-text); }
+.msg-status.delivered { color: var(--text-secondary); }
+.msg-status.received { color: var(--msgstate-received-fg); }
+.msg-status.fail { color: var(--danger-text); }
 .msg-status .spin { width: 11px; height: 11px; }
-.msg-error { font-size: 11px; margin-top: 6px; color: var(--danger-text); }
+.msg-error { font-size: 11px; color: var(--danger-text); }
 .msg-retry {
   appearance: none;
   display: inline-flex; align-items: center;
-  margin-top: 6px; padding: 3px 10px;
+  padding: 3px 10px;
   border-radius: var(--radius-chip);
-  border: 1px solid var(--attach-user-icon-bg);
-  background: var(--attach-user-bg);
-  color: var(--text-on-accent);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   font: 600 11px/1 var(--font-sans);
   cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.msg-retry:hover { background: var(--attach-user-icon-bg); border-color: var(--attach-user-sub); }
+.msg-retry:hover { border-color: var(--accent-text); color: var(--accent-text); }
 
-/* Typing indicator — three pulsing dots in a muse-style bubble */
-.bubble.typing { padding: 12px var(--sp-4); }
+/* Per-message actions on the meta line — always visible */
+.msg-actions { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.msg-act {
+  appearance: none;
+  width: 20px; height: 20px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.msg-act:hover { color: var(--text-primary); background: var(--bg-hover); }
+.msg-act.copied { color: var(--success-text); }
+
+/* Quoted block inside a bubble — lines starting with '> ' */
+.bubble-text { white-space: normal; }
+.bubble-text > span { display: block; white-space: pre-wrap; word-break: break-word; }
+.quote-line {
+  margin: 2px 0; padding: 3px 8px;
+  border-left: 2px solid rgba(255, 255, 255, 0.45);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 12.5px; line-height: 1.5;
+  color: rgba(255, 255, 255, 0.88);
+}
+.bubble.muse .quote-line {
+  border-left-color: var(--border-strong);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-secondary);
+}
+
+/* Reply bar above the composer — quoting a message before sending */
+#replyBar {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2); padding: 5px 8px 5px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+#rbIco { color: var(--accent-text); font-size: 13px; flex-shrink: 0; }
+.rb-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+#rbTo { font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent-text); }
+#rbText { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Typing indicator — three pulsing dots in a muse-style bubble (sits directly
+   in the chat area, so it needs its own alignment — Muse side = left) */
+.bubble.typing { padding: 12px var(--sp-4); align-self: flex-start; }
 .typing-dots { display: inline-flex; align-items: center; gap: 5px; }
 .typing-dots .tdot {
   width: 6px; height: 6px; border-radius: 50%;
@@ -526,19 +595,40 @@ input, textarea { caret-color: var(--caret-color); }
 .typing-dots .tdot:nth-child(3) { animation-delay: 300ms; }
 @keyframes typingDot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
 
-/* Dropbox attachment card */
+/* Resource attachment — 2 levels: .attach-wrap (column, in the bubble) holds
+   the preview frame (.attach — the bordered box) and the download bar OUTSIDE
+   the frame. Dropbox images/videos/audio render a live preview (raw=1 direct
+   stream); PDFs get a 👁 toggle that expands the frame with an embedded
+   viewer (lazy); anything else is just the download bar. */
+.attach-wrap { margin-top: var(--sp-2); display: flex; flex-direction: column; gap: 4px; max-width: 420px; width: 100%; }
 .attach {
-  display: flex; gap: 10px; align-items: center;
-  margin-top: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  max-width: 420px;
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
-  text-decoration: none;
-  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
-.attach:hover { border-color: var(--accent-text); background: var(--attach-muse-hover); }
+.attach:hover { border-color: var(--accent-text); }
+/* Fixed-height preview frames: every card is full-size from the first paint
+   and the image/video loads INTO the frame (object-fit) instead of growing it —
+   a slow Dropbox stream can never push the chat down or show a tiny preview.
+   While the bytes stream, .attach-ph (placeholder) fills the frame instantly. */
+.attach-thumb { position: relative; height: 200px; }
+.attach-img { display: block; width: 100%; height: 200px; object-fit: cover; background: var(--bg-base); cursor: zoom-in; }
+.attach-video { display: block; width: 100%; height: 240px; object-fit: contain; background: #000; }
+.attach-ph {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  color: var(--text-muted); font-size: 12px;
+  background: linear-gradient(135deg, var(--bg-surface), var(--bg-hover));
+  pointer-events: none;
+}
+.attach-ph .ph-ico { font-size: 26px; opacity: 0.8; }
+.attach-ph .ph-name { max-width: 80%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attach-audio { display: block; width: 100%; padding: var(--sp-2) var(--sp-3); }
+.attach-frame { display: block; width: 100%; height: 380px; border: 0; background: #fff; }
+.attach-bar { display: flex; gap: 8px; align-items: center; padding: 0 var(--sp-1); }
+.attach-link { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; text-decoration: none; }
 .attach-icon {
   width: 34px; height: 34px; flex-shrink: 0;
   border-radius: var(--radius-input);
@@ -547,14 +637,27 @@ input, textarea { caret-color: var(--caret-color); }
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 14px;
 }
+.attach-peek {
+  appearance: none;
+  width: 28px; height: 28px; flex-shrink: 0;
+  border-radius: var(--radius-input);
+  border: 1px solid var(--border-default);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.attach-peek:hover, .attach-peek.on { border-color: var(--accent-text); color: var(--accent-text); }
 .attach-meta { flex: 1; min-width: 0; }
 .attach-name { display: block; font-family: var(--font-mono); font-weight: 500; font-size: 12.5px; line-height: 1.3; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .attach-sub { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.attach.in-user { background: var(--attach-user-bg); border-color: var(--attach-user-icon-bg); }
-.attach.in-user:hover { background: var(--attach-user-icon-bg); border-color: var(--attach-user-sub); }
-.attach.in-user .attach-icon { background: var(--attach-user-icon-bg); color: var(--bubble-user-text); }
-.attach.in-user .attach-name { color: var(--text-on-accent); }
-.attach.in-user .attach-sub { color: var(--attach-user-sub); }
+.attach-wrap.in-user .attach { background: var(--attach-user-bg); border-color: var(--attach-user-icon-bg); }
+.attach-wrap.in-user .attach:hover { border-color: var(--attach-user-sub); }
+.attach-wrap.in-user .attach-icon { background: var(--attach-user-icon-bg); color: var(--bubble-user-text); }
+.attach-wrap.in-user .attach-name { color: var(--text-on-accent); }
+.attach-wrap.in-user .attach-sub { color: var(--attach-user-sub); }
 
 /* Empty / error / spinner states in the chat area */
 .empty-state { margin: auto; text-align: center; display: flex; flex-direction: column; align-items: center; max-width: 360px; }
@@ -577,7 +680,6 @@ input, textarea { caret-color: var(--caret-color); }
    H. COMPOSER (B.4)
    ================================================================ */
 #composer { flex-shrink: 0; background: var(--bg-panel); border-top: 1px solid var(--border-default); padding: var(--sp-3) var(--sp-4) var(--sp-2); }
-.composer-row { display: flex; gap: var(--sp-2); align-items: flex-end; }
 .composer-box {
   flex: 1; min-width: 0;
   background: var(--bg-surface);
@@ -608,33 +710,18 @@ input, textarea { caret-color: var(--caret-color); }
 }
 .send-btn:hover { background: var(--accent-hover); }
 .send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-#composerHint { text-align: right; font-size: 11px; color: var(--text-muted); margin-top: 6px; }
-
-/* Usage bar — below the composer: this thread's live context usage. Data comes
-   from the Muse itself: ⟳ sends a '/status' request, the Muse answers with a
-   '<<<STATUS>>>…' row (AGENTS.md §2) which is parsed here, never rendered in chat. */
-#usageBar {
-  display: flex; align-items: center; gap: var(--sp-2);
-  margin-top: 6px; padding: 5px 8px 5px 10px;
-  background: var(--bg-base);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-}
-#usageText {
-  flex: 1; min-width: 0;
+.send-btn.stop { background: var(--danger); }
+.send-btn.stop:hover { background: var(--danger-hover); }
+.composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-top: 6px; }
+.composer-foot .send-btn { margin-left: auto; } /* send hugs the right even when the quota chip is hidden */
+#quotaChip {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; max-width: 70%;
   font-size: 11px; color: var(--text-muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: default; user-select: none;
 }
-#usageText.has-data { color: var(--text-secondary); }
-#usageMeter {
-  position: relative; flex-shrink: 0;
-  width: 72px; height: 6px;
-  background: var(--bg-hover);
-  border-radius: 3px; overflow: hidden;
-}
-#usageFill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width var(--dur-slow) var(--ease-out); }
-#btnStatus { color: var(--text-muted); }
-#btnStatus:hover { color: var(--accent-text); }
+#quotaChip .q-ico { flex-shrink: 0; }
+#quotaChip .q-val { color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
 
 /* Setup gate banner — shown above the composer while the open Muse has not ponged */
 .setup-banner {
@@ -717,6 +804,24 @@ input, textarea { caret-color: var(--caret-color); }
 .panel-foot { padding: var(--sp-4) var(--sp-6); border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: var(--sp-2); flex-shrink: 0; }
 .panel-foot.split { justify-content: space-between; }
 .panel-foot .pf-left, .panel-foot .pf-right { display: flex; gap: var(--sp-2); }
+
+/* Viewer modal — full-size preview of an attachment (image / video / audio / PDF / doc) */
+.view-panel { width: min(900px, 94vw); }
+.view-body {
+  padding: var(--sp-4);
+  overflow: auto;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 160px; max-height: 66vh;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.view-body img { max-width: 100%; max-height: 62vh; object-fit: contain; }
+.view-body video { max-width: 100%; max-height: 62vh; background: #000; }
+.view-body audio { width: 100%; }
+.view-body iframe { width: 100%; height: 62vh; border: 0; background: #fff; border-radius: var(--radius-sm); }
+.view-doc { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); color: var(--text-muted); font-size: 13px; text-align: center; padding: var(--sp-6); }
+.view-doc .vd-ico { font-size: 40px; }
+.view-head-ico { font-size: 15px; flex-shrink: 0; }
 
 /* Stepper */
 .stepper { display: flex; align-items: center; justify-content: center; margin-bottom: var(--sp-5); }
@@ -926,6 +1031,7 @@ input, textarea { caret-color: var(--caret-color); }
         </span>
         <input id="searchInput" type="text" placeholder="Search Muses…" aria-label="Search Muses" autocomplete="off">
       </div>
+      <button type="button" id="btnNew" class="btn primary block" title="Create a new Muse">＋ New Muse</button>
     </div>
     <div class="side-divider" aria-hidden="true"></div>
     <div id="projList"></div>
@@ -941,8 +1047,8 @@ input, textarea { caret-color: var(--caret-color); }
         <span id="hdrThread" class="trunc" hidden></span>
       </div>
       <div id="hdrRight">
+        <a id="btnDocs" class="btn secondary sm" href="/docs" target="_blank" rel="noopener" title="Open the REST API docs (Swagger UI; Redoc at /redoc)">API Docs</a>
         <button type="button" id="btnSignout" class="btn secondary sm">Sign out</button>
-        <button type="button" id="btnNew" class="btn primary sm">＋ New Muse</button>
       </div>
     </header>
 
@@ -953,19 +1059,26 @@ input, textarea { caret-color: var(--caret-color); }
         <span class="setup-dot" aria-hidden="true"></span>
         <span>This Muse is still setting up — waiting for its pong.</span>
       </div>
-      <div class="composer-row">
-        <div class="composer-box">
-          <textarea id="inputMsg" rows="1" placeholder="Message your Muse…" aria-label="Message your Muse"></textarea>
+      <div id="replyBar" hidden>
+        <span id="rbIco" aria-hidden="true">↩</span>
+        <div class="rb-body">
+          <span id="rbTo">Replying to Muse</span>
+          <span id="rbText">—</span>
         </div>
+        <button type="button" id="btnRbCancel" class="icon-btn small" aria-label="Cancel reply" title="Cancel reply">✕</button>
+      </div>
+      <div class="composer-box">
+        <textarea id="inputMsg" rows="3" placeholder="Message your Muse…" aria-label="Message your Muse"></textarea>
+      </div>
+      <div class="composer-foot">
+        <span id="quotaChip" hidden>
+          <span class="q-ico" aria-hidden="true">⛽</span>
+          <span>quota</span>
+          <span class="q-val">–</span>
+        </span>
         <button type="button" id="btnSend" class="send-btn" aria-label="Send" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
         </button>
-      </div>
-      <div id="composerHint">Enter to send · Shift+Enter for a new line</div>
-      <div id="usageBar" hidden>
-        <div id="usageMeter" hidden aria-hidden="true"><div id="usageFill"></div></div>
-        <span id="usageText" class="mono">No status yet — ⟳ asks this Muse for its /status.</span>
-        <button type="button" id="btnStatus" class="icon-btn small" aria-label="Ask this Muse for /status (usage + context)">⟳</button>
       </div>
     </div>
   </section>
@@ -1164,6 +1277,14 @@ input, textarea { caret-color: var(--caret-color); }
           <label class="toggle-chip c-video"><input type="checkbox" value="video" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">video</span></label>
         </div>
       </div>
+      <div class="f-group">
+        <span class="f-label">Display hidden thread <span class="f-note">(⌘ sys — the channel the UI uses for automated tasks like auto-titling)</span></span>
+        <div class="tag-row" id="cfgSys">
+          <label class="toggle-chip"><input type="radio" name="cfgSys" value="off" class="vh" checked><span class="tbox" aria-hidden="true"></span><span class="tlabel">Off</span></label>
+          <label class="toggle-chip"><input type="radio" name="cfgSys" value="on" class="vh"><span class="tbox" aria-hidden="true"></span><span class="tlabel">On</span></label>
+        </div>
+        <div class="f-hint">When On, the thread stays pinned at the top of this Muse's group so you can inspect it; when Off, it is fully hidden. It only exists after the first automated task.</div>
+      </div>
       <div class="f-hint">Changes apply to this admin UI immediately; the Muse client picks up new capabilities on its next restart.</div>
     </div>
     <div class="panel-foot split">
@@ -1175,6 +1296,22 @@ input, textarea { caret-color: var(--caret-color); }
         <button type="button" class="btn secondary" id="btnCfgCancel">Cancel</button>
         <button type="button" class="btn primary" id="btnCfgSave">Save</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ATTACHMENT VIEWER MODAL ===================== -->
+<div id="modalView" class="overlay" hidden>
+  <div class="panel view-panel" role="dialog" aria-modal="true" aria-labelledby="vwTitle">
+    <div class="panel-head">
+      <span id="vwIcon" class="view-head-ico" aria-hidden="true">🖼</span>
+      <h2 id="vwTitle">—</h2>
+      <button type="button" id="vwClose" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="view-body" id="vwBody"></div>
+    <div class="panel-foot">
+      <a id="vwDownload" class="btn primary" href="#" target="_blank" rel="noopener">⬇ Download</a>
+      <button type="button" id="vwCloseBtn" class="btn secondary">Close</button>
     </div>
   </div>
 </div>
@@ -1203,7 +1340,7 @@ function el(tag, cls, text) {
 /* ================================================================
    HẰNG SỐ
    ================================================================ */
-const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed', ready: 'mr_ready_muses' };
+const LS_KEYS = { pin: 'mr_pinned_threads', sidebar: 'mr_sidebar_collapsed', ready: 'mr_ready_muses', sys: 'mr_sys_show' };
 const RE_MUSE_ID = /^[a-z0-9_]{3,40}$/;
 // The built Muse bundle, committed at web/muse-relay.zip on main
 const SETUP_ZIP_URL = 'https://raw.githubusercontent.com/phuongdev89/muse-relay/main/web/muse-relay.zip';
@@ -1213,18 +1350,35 @@ const RE_DB_A = /^https:\/\/(www\.)?dropbox\.com\/\S+$/;
 const RE_DB_B = /^https:\/\/dl\.dropboxusercontent\.com\/\S+$/;
 const CHIP_ORDER = ['chat', 'image', 'video'];
 const POLL_FALLBACK_MS = 30000;
-const COMPOSER_MAX_H = 160;
+const COMPOSER_MAX_H = 260;
 const MSG_BATCH_LIMIT = 200;
 const THREADS_PAGE = 5; // each "Show more" click reveals 5 more threads
 // Daemon plumbing signals — role='muse' rows whose text matches EXACTLY:
 const SIGNAL_TYPING = '...';  // typing indicator, posted right after the daemon receives a message
 const SIGNAL_PONG = 'pong';   // setup done — unlocks the Muse's threads in the UI
+// Legacy /status plumbing (the old usage bar, removed) — older threads still
+// hold these rows, so they stay filtered out of the chat as plumbing:
 const SIGNAL_STATUS = '/status';            // user request — the Muse answers with its runtime status
 const STATUS_WRAP_OPEN = '<<<STATUS>>>';    // muse reply wrapper (AGENTS.md §2) — raw /status output inside
 const STATUS_WRAP_CLOSE = '<<<END_STATUS>>>';
 const TYPING_TTL_MS = 120000; // typing state auto-expires after 120s without a follow-up row
 const SETUP_POLL_MS = 3000;   // wizard Step 2 — how often to query for the setup pong
-const STATUS_TIMEOUT_MS = 90000; // /status request — give up waiting after 90s
+// Hidden system channel ("⌘ sys" thread, one per Muse) — the UI posts automated
+// tasks there (auto-title…), the Muse's reply comes back to the same thread and
+// is routed to a handler instead of being shown. No client-zip change needed:
+// the daemon already treats it as just another thread.
+const SYS_TITLE = '⌘ sys';
+const SYS_TIMEOUT_MS = 300000; // give up on an unanswered sys task after 5 minutes (the daemon pulls on a ~3-minute schedule)
+const SYS_TEXT_CAP = 600;      // how much of the first user message feeds the title task
+// Background health jobs through the ⌘ sys channel: a ping proves the Muse's
+// account + daemon pipeline still answers; /status refreshes the quota chip.
+const PING_EVERY_MS = 10 * 60000;   // ping every 10 minutes
+const STATUS_EVERY_MS = 30 * 60000; // /status every 30 minutes
+const SYS_TICK_MS = 15000;          // scheduler granularity
+// Interim thread title: the first message's first 10 words — it holds until
+// the Muse answers the title task with a name of its own
+const TITLE_WORDS = 10;
+const TITLE_MAX_LEN = 80;
 
 /* ================================================================
    TRẠNG THÁI CLIENT (theo architecture A5)
@@ -1232,7 +1386,7 @@ const STATUS_TIMEOUT_MS = 90000; // /status request — give up waiting after 90
 /* Keys never live in the browser — serve.py reads .env and proxies every Supabase call. */
 
 /* Pinned threads: stored in localStorage (mr_pinned_threads) — no DB schema change.
-   Pinned threads gather in the Pinned section at the top, prefixed with the Muse name. */
+   Pinned threads gather in the Pinned section at the top. */
 function loadPins() {
   try {
     const v = JSON.parse(localStorage.getItem(LS_KEYS.pin) || '[]');
@@ -1253,6 +1407,23 @@ function loadReadyMuses() {
 }
 function saveReady() {
   try { localStorage.setItem(LS_KEYS.ready, JSON.stringify(Array.from(state.ready.keys()))); } catch (e) { /* ignore */ }
+}
+
+/* Hidden-thread visibility (mr_sys_show): JSON object {projectId: true} —
+   per-Muse switch in ⚙ Muse settings. Off (default) = the ⌘ sys thread is
+   fully hidden; On = it stays pinned at the top of its Muse group. */
+function loadSysShow() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_KEYS.sys) || '{}');
+    const out = [];
+    for (const k in v) if (v[k] === true) out.push(parseInt(k, 10));
+    return out.filter(function (x) { return typeof x === 'number' && !isNaN(x); });
+  } catch (e) { return []; }
+}
+function saveSysShow() {
+  const obj = {};
+  for (const [pid, on] of state.sysShow) { if (on) obj[pid] = true; }
+  try { localStorage.setItem(LS_KEYS.sys, JSON.stringify(obj)); } catch (e) { /* ignore */ }
 }
 
 const state = {
@@ -1287,11 +1458,26 @@ const state = {
      dropped when the real row (id === realId) arrives through ingest. */
   pendingSends: new Map(),   // Map<key, {key, thread_id, project_id, text, status, error, realId}>
   sessionSentIds: new Set(), // real user-row ids sent this session — only these carry status chips
-  maxMuseId: new Map(),      // Map<threadId, highest muse row id> — drives the 'received' chip
+  maxMuseId: new Map(),      // Map<threadId, highest muse row id (typing rows included)> — drives the 'delivered' chip
+  maxMuseRealId: new Map(),  // Map<threadId, highest muse row id EXCLUDING '...'> — drives the 'received' chip
   typing: new Map(),         // Map<threadId, timestamp ms> — armed by the daemon '...' signal
-  statusByThread: new Map(), // Map<threadId, {text, at, msgId}> — latest parsed <<<STATUS>>> reply per thread
-  statusPending: new Map(),  // Map<threadId, true> — a /status request is in flight for this thread
-  typingTimer: null
+  replyTo: null,             // {thread_id, role, name, text, block} — message being replied to (quote bar)
+  typingTimer: null,
+  /* Hidden ⌘ sys channel — automated tasks (auto-title…) run through one
+     hidden thread per Muse; replies are routed to handlers, never rendered. */
+  sysShow: new Map(loadSysShow().map(function (id) { return [id, true]; })), // Map<projectId, true> — the ⚙ switch
+  sysQueue: [],              // pending tasks [{kind, threadId, text, tries}]
+  sysBusy: null,             // in-flight {task, sysTid, pid} — one task per Muse at a time
+  sysTimer: null,            // give-up timer for the in-flight task
+  sysCreating: new Map(),    // Map<projectId, Promise> — de-duplicate concurrent ⌘ sys thread creation
+  titleAsked: new Set(),     // threadIds already sent a title task this session
+  interimTitles: new Map(),  // Map<threadId, interim title> — first-message titles, replaceable by the Muse's own
+  statusData: new Map(),     // Map<projectId, {raw, quota, at}> — each Muse's last /status answer
+  sysNext: new Map(),        // Map<projectId, {ping, status}> — epoch of the next background job per Muse
+  sysSchedTimer: null,       // background ping + /status ticker
+  lastAct: new Map(),        // Map<threadId, epoch ms> — latest real message per thread (drives the sort + time label)
+  thumbTried: new Set(),     // thumb keys whose generation was attempted this session
+  stopped: new Set()         // threadIds where the user pressed ■ Stop — '...' rows must not re-arm the wait
 };
 
 /* ================================================================
@@ -1312,11 +1498,10 @@ const rtLabel = E('rtLabel');
 const chatArea = E('chatArea');
 const inputMsg = E('inputMsg');
 const btnSend = E('btnSend');
-const usageBar = E('usageBar');
-const usageMeter = E('usageMeter');
-const usageFill = E('usageFill');
-const usageText = E('usageText');
-const btnStatus = E('btnStatus');
+const replyBar = E('replyBar');
+const rbTo = E('rbTo');
+const rbText = E('rbText');
+const btnRbCancel = E('btnRbCancel');
 const setupBanner = E('setupBanner');
 const modalWizard = E('modalWizard'), wizTitle = E('wizTitle'), wizClose = E('wizClose');
 const sd1 = E('sd1'), sd2 = E('sd2'), sc1 = E('sc1');
@@ -1339,10 +1524,15 @@ const modalDelThread = E('modalDelThread'), delThrText = E('delThrText');
 const btnDelThrCancel = E('btnDelThrCancel'), btnDelThrConfirm = E('btnDelThrConfirm');
 const modalMuseCfg = E('modalMuseCfg'), cfgSub = E('cfgSub'), cfgName = E('cfgName'), cfgClose = E('cfgClose');
 const cfgTags = E('cfgTags');
+const cfgSys = E('cfgSys');
 const btnCfgToken = E('btnCfgToken'), btnCfgDelete = E('btnCfgDelete');
 const btnCfgCancel = E('btnCfgCancel'), btnCfgSave = E('btnCfgSave');
 const ctxMenu = E('ctxMenu');
 const toasts = E('toasts');
+const quotaChip = E('quotaChip');
+const modalView = E('modalView'), vwIcon = E('vwIcon'), vwTitle = E('vwTitle');
+const vwBody = E('vwBody'), vwDownload = E('vwDownload');
+const vwClose = E('vwClose'), vwCloseBtn = E('vwCloseBtn');
 
 /* ================================================================
    TOAST — the single error channel (architecture A6). Errors auto-dismiss
@@ -1470,6 +1660,14 @@ function pad2(n) { return String(n).padStart(2, '0'); }
 function fmtHM(d) { return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); }
 function fmtFull(d) { return fmtHM(d) + ' · ' + pad2(d.getMonth() + 1) + '/' + pad2(d.getDate()) + '/' + d.getFullYear(); }
 
+/* Compact last-updated label for thread rows: today → HH:MM, this year → d/m, else d/m/yy */
+function fmtThreadTime(d) {
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return fmtHM(d);
+  if (d.getFullYear() === now.getFullYear()) return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1);
+  return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + '/' + String(d.getFullYear()).slice(2);
+}
+
 /* ================================================================
    REST HELPER — every call goes through serve.py (/sb proxy), keys are server-side
    ================================================================ */
@@ -1496,9 +1694,11 @@ async function rest(path, opts) {
     res = await fetch(baseUrl() + path, {
       method: opts.method || 'GET',
       headers: headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal
     });
   } catch (e) {
+    if (e && e.name === 'AbortError') throw { aborted: true, message: 'Aborted by the user' };
     throw { network: true, message: 'Could not reach serve.py — is the local server still running?' };
   }
   if (res.status === 401 || res.status === 403) {
@@ -1565,6 +1765,7 @@ function boot() {
   app.hidden = false;
   ensurePoll();
   if (state.typingTimer === null) state.typingTimer = setInterval(sweepTyping, 5000); // typing auto-expiry
+  startSysSchedule(); // background ping + /status quota jobs
   loadData();
   setupRealtime();
 }
@@ -1596,7 +1797,7 @@ async function loadData() {
   try {
     const results = await Promise.all([
       rest('/rest/v1/projects?select=id,muse_id,name,tags,email,secret,user_id&order=id.asc'),
-      rest('/rest/v1/threads?select=id,project_id,title,last_read_id&order=id.asc'),
+      rest('/rest/v1/threads?select=id,project_id,title,last_read_id,created_at&order=id.asc'),
       rest('/rest/v1/messages?select=id,project_id,thread_id,role,text,created_at&order=id.desc&limit=200')
     ]);
     state.projects = results[0] || [];
@@ -1630,18 +1831,33 @@ async function loadData() {
 function recomputeMeta() {
   const prev = new Map();
   const unread = new Map();
+  const lastAct = new Map();
   for (const p of state.projects) unread.set(p.id, 0);
-  // 'setup' threads are server-side plumbing — excluded from previews and counts (spec §6)
-  const setupTids = new Set();
-  for (const t of state.threads) { if (isSetupThread(t)) setupTids.add(t.id); }
+  // Latest real message per thread — drives the ZCode-style sort (the most
+  // recently updated thread on top of its group) + the time label on each row
   for (const m of state.msgs200) {
-    if (setupTids.has(m.thread_id)) continue;
+    const ts = dateOf(m.created_at);
+    if (ts && ts.getTime() > (lastAct.get(m.thread_id) || 0)) lastAct.set(m.thread_id, ts.getTime());
+  }
+  state.lastAct = lastAct;
+  // 'setup' threads are server-side plumbing — excluded from previews and counts (spec §6).
+  // ⌘ sys threads are the hidden control channel — invisible unless switched On,
+  // and even then they never drive previews or the unread badge.
+  const setupTids = new Set();
+  const sysTids = new Set();
+  for (const t of state.threads) {
+    if (isSetupThread(t)) setupTids.add(t.id);
+    else if (isSysThread(t)) sysTids.add(t.id);
+  }
+  const plumbingTids = function (tid) { return setupTids.has(tid) || sysTids.has(tid); };
+  for (const m of state.msgs200) {
+    if (plumbingTids(m.thread_id)) continue;
     if (!prev.has(m.project_id)) prev.set(m.project_id, m);
   }
   const lastRead = new Map();
   for (const t of state.threads) lastRead.set(t.id, t.last_read_id || 0);
   for (const m of state.msgs200) {
-    if (setupTids.has(m.thread_id)) continue;
+    if (plumbingTids(m.thread_id)) continue;
     const lr = lastRead.get(m.thread_id);
     if (lr !== undefined && m.id > lr) {
       unread.set(m.project_id, (unread.get(m.project_id) || 0) + 1);
@@ -1653,6 +1869,7 @@ function recomputeMeta() {
   const now = Date.now();
   for (const [tid, ts] of state.typing) {
     if (now - ts > TYPING_TTL_MS) continue;
+    if (plumbingTids(tid)) continue; // ⌘ sys typing stays invisible
     const th = state.threads.find(function (t) { return t.id === tid; });
     if (th) state.preview.set(th.project_id, { text: 'typing…', role: 'muse', thread_id: tid, project_id: th.project_id });
   }
@@ -1662,11 +1879,23 @@ function recomputeMeta() {
    DAEMON SIGNALS — plumbing rows posted by the Muse's daemon as ordinary
    role='muse' messages: text '...' arms the typing indicator (never
    rendered), text 'pong' marks the Muse ready and unlocks its threads.
-   The usage bar adds two more plumbing rows: the user's '/status' request
-   and the Muse's '<<<STATUS>>>…' reply — parsed, never rendered in chat.
+   Legacy '/status' + '<<<STATUS>>>…' rows (the removed usage bar) are
+   plumbing too — filtered out of the chat, never rendered.
    ================================================================ */
 function isTypingRow(m) { return !!m && m.role === 'muse' && m.text === SIGNAL_TYPING; }
 function isSetupThread(t) { return !!t && (t.title || '') === 'setup'; }
+/* The hidden ⌘ sys control channel — one per Muse, matched by exact title.
+   Its rows flow through the normal caches (so the thread renders when the ⚙
+   switch is On) but are excluded from previews/unread and routed to handlers
+   on ingest. */
+function isSysThread(t) { return !!t && (t.title || '') === SYS_TITLE; }
+function isSysThreadId(tid) {
+  return state.threads.some(function (t) { return t.id === tid && isSysThread(t); });
+}
+function sysThreadOf(pid) {
+  return state.threads.find(function (t) { return t.project_id === pid && isSysThread(t); }) || null;
+}
+function sysShown(pid) { return state.sysShow.get(pid) === true; }
 /* '/status' request (role='user') + the wrapped reply (role='muse') — both plumbing */
 function isStatusRow(m) {
   if (!m || typeof m.text !== 'string') return false;
@@ -1680,20 +1909,21 @@ function isStatusRow(m) {
 function applyMessageSignals(m, opts) {
   opts = opts || {};
   if (!m || typeof m.id !== 'number' || m.role !== 'muse') return;
-  // A '<<<STATUS>>>' reply is plumbing — store it for the usage bar and stop here:
-  // it must NOT watermark '✓✓ received' nor clear the typing state.
-  if (m.role === 'muse' && m.text.indexOf(STATUS_WRAP_OPEN) === 0) {
-    storeStatusReply(m);
-    return;
-  }
-  // Highest muse id per thread — the '✓✓ received' chip uses it as the watermark
+  // A '<<<STATUS>>>' reply is legacy plumbing — ignore it: it must NOT
+  // watermark the send-state chips nor clear the typing state.
+  if (m.text.indexOf(STATUS_WRAP_OPEN) === 0) return;
+  // Highest muse id per thread — the '...' typing signal drives the
+  // 'delivered' chip, real replies drive the 'received' chip.
   const mx = state.maxMuseId.get(m.thread_id) || 0;
   if (m.id > mx) state.maxMuseId.set(m.thread_id, m.id);
   if (m.text === SIGNAL_TYPING) {
-    if (opts.fresh) state.typing.set(m.thread_id, Date.now());
+    if (opts.fresh && !state.stopped.has(m.thread_id)) state.typing.set(m.thread_id, Date.now()); // ■ Stop suppresses the wait
     return;
   }
+  const mxr = state.maxMuseRealId.get(m.thread_id) || 0;
+  if (m.id > mxr) state.maxMuseRealId.set(m.thread_id, m.id);
   state.typing.delete(m.thread_id); // any other muse row ends the typing state
+  if (state.stopped.has(m.thread_id)) state.stopped.delete(m.thread_id); // the answer landed — back to normal
   if (m.text === SIGNAL_PONG) markProjectReady(m.project_id);
 }
 
@@ -1715,6 +1945,7 @@ function sweepTyping() {
     recomputeMeta(); // restore the real sidebar preview after the "typing…" one
     renderSidebar();
     if (state.activeThreadId != null) renderChat();
+    updateSendState(); // typing expired → the ■ morph may flip back to Send
   }
 }
 
@@ -1742,6 +1973,233 @@ function markProjectReady(pid, opts) {
   if (wiz.pid === pid) { wiz.setupDone = true; renderWizSetup(true); stopSetupWatch(); }
 }
 
+/* ================================================================
+   HIDDEN ⌘ SYS CHANNEL — automated tasks ride through one hidden thread
+   per Muse. The daemon treats it as just another thread (poller reads all
+   project threads; replies land in the same thread_id), so no client-zip
+   change is needed. The UI posts a self-contained instruction, the Muse's
+   reply is routed to a handler here and never rendered in a real thread.
+   One task in flight per Muse at a time — both title and (future) quota
+   tasks share this single control context.
+   ================================================================ */
+async function ensureSysThread(pid) {
+  const have = sysThreadOf(pid);
+  if (have) return have;
+  const pending = state.sysCreating.get(pid);
+  if (pending) return pending;
+  const pr = rest('/rest/v1/threads', {
+    method: 'POST',
+    prefer: 'return=representation',
+    body: { project_id: pid, title: SYS_TITLE }
+  }).then(function (rows) {
+    state.sysCreating.delete(pid);
+    const t = Array.isArray(rows) && rows[0] ? rows[0] : null;
+    if (t) {
+      state.threads.push(t);
+      state.threads.sort(function (a, b) { return a.id - b.id; });
+      renderSidebar(); // flips the pinned slot when the ⚙ switch is On
+    }
+    return t;
+  }).catch(function () {
+    state.sysCreating.delete(pid);
+    return null;
+  });
+  state.sysCreating.set(pid, pr);
+  return pr;
+}
+
+/* The request is self-contained — the ⌘ sys context never sees the real
+   thread, so every task carries its own data + exact output format. */
+function sysTaskText(task) {
+  if (task.kind === 'title') {
+    return 'TASK: suggest a short, clear title for a chat thread whose first message is:\n\n' +
+      '"""\n' + task.text + '\n"""\n\n' +
+      'Reply with ONLY the title: at most 10 words, no quotes, no explanation, nothing else. ' +
+      'Answer right away from the text above — do not overthink, do not use tools, do not double-check.';
+  }
+  if (task.kind === 'status') {
+    return '/status'; // the exact command — the Muse answers in the <<<STATUS>>> wrapper
+  }
+  if (task.kind === 'ping') {
+    return 'TASK: background health check. Reply with the single word: alive. ' +
+      'Answer right away — do not use tools, do not double-check.';
+  }
+  return 'TASK: ' + String(task.kind); // future task kinds plug in here
+}
+
+function enqueueSysTask(task) {
+  if (task.tries === undefined) task.tries = 0;
+  state.sysQueue.push(task);
+  pumpSysQueue();
+}
+
+async function pumpSysQueue() {
+  if (state.sysBusy || !state.sysQueue.length) return;
+  const task = state.sysQueue.shift();
+  const t = state.threads.find(function (x) { return x.id === task.threadId; });
+  if (!t || !projectReady(t.project_id)) { pumpSysQueue(); return; } // thread gone / Muse locked — drop
+  // Claimed synchronously so overlapping pumps cannot double-send
+  state.sysBusy = { task: task, sysTid: null, pid: t.project_id };
+  const st = await ensureSysThread(t.project_id);
+  if (!st) { sysClearBusy(); return; } // creation failed — task dropped quietly
+  try {
+    await rest('/rest/v1/messages', {
+      method: 'POST',
+      prefer: 'return=representation',
+      body: { thread_id: st.id, project_id: st.project_id, role: 'user', text: sysTaskText(task) }
+    });
+  } catch (e) {
+    sysClearBusy(); // send failed — drop quietly, non-critical
+    return;
+  }
+  state.sysBusy.sysTid = st.id;
+  state.sysTimer = setTimeout(sysGiveUp, SYS_TIMEOUT_MS);
+}
+
+function sysClearBusy() {
+  if (state.sysTimer !== null) { clearTimeout(state.sysTimer); state.sysTimer = null; }
+  state.sysBusy = null;
+}
+
+function sysGiveUp() { // Muse never answered — one quiet retry, then unlock the queue
+  if (!state.sysBusy) return;
+  const task = state.sysBusy.task;
+  sysClearBusy();
+  if (task.tries < 1) { task.tries += 1; state.sysQueue.unshift(task); } // the daemon schedule can be slow
+  else notifySysTaskFailed(task);
+  pumpSysQueue();
+}
+
+/* A background job exhausted its retries — ping failures are surfaced (the
+   account or daemon may be down); a failed /status just leaves quota unknown. */
+function notifySysTaskFailed(task) {
+  if (task.kind !== 'ping') return;
+  const t = state.threads.find(function (x) { return x.id === task.threadId; });
+  const p = t ? projectById(t.project_id) : null;
+  toastOnce('pingfail-' + (p ? p.id : task.threadId), 30 * 60000, {
+    kind: 'warn',
+    title: (p ? (p.name || p.muse_id) : 'Muse') + ' did not answer the health check',
+    detail: 'No reply to the background ping — its account or daemon may be down.'
+  });
+}
+
+function handleSysReply(m, fresh) {
+  if (!fresh || isTypingRow(m)) return;
+  const busy = state.sysBusy;
+  if (!busy || busy.sysTid !== m.thread_id) return; // stray/stale row — stays hidden, ignored
+  if (busy.task.kind === 'title') applySysTitle(busy.task, m.text);
+  else if (busy.task.kind === 'status') applySysStatus(busy.pid, m.text);
+  // 'ping' — any real reply proves the account + daemon pipeline is alive
+  sysClearBusy();
+  pumpSysQueue();
+}
+
+/* Parse the quota ("hạn mức") out of a /status answer — best-effort: a percent
+   near a keyword, then any percent, then a token/credit fraction, then a
+   remaining number. Unknown shapes → null (the chip shows '-'). */
+function parseQuota(raw) {
+  const s = String(raw || '');
+  if (!s) return null;
+  let m = /(?:quota|credit|limit|usage|used|remaining|allowance|hạn mức|đã dùng|còn)\D{0,24}(\d{1,3})\s*%/i.exec(s) ||
+          /(\d{1,3})\s*%\s*(?:of\s+(?:the\s+)?(?:quota|limit|context)|used|left)/i.exec(s);
+  if (m) return m[1] + '%';
+  m = /(\d{1,3})\s*%/.exec(s);
+  if (m) return m[1] + '%';
+  m = /(\d[\d,.]*\s*[kKmM]?)\s*\/\s*(\d[\d,.]*\s*[kKmM]?)\s*(?:tokens?|credits?)/i.exec(s);
+  if (m) return m[1].trim() + '/' + m[2].trim();
+  m = /(?:remaining|left|còn)\D{0,24}(\d[\d,.]*\s*[kKmM]?)/i.exec(s);
+  if (m) return m[1].trim();
+  return null;
+}
+
+function applySysStatus(pid, rawText) {
+  let inner = String(rawText || '');
+  if (inner.indexOf(STATUS_WRAP_OPEN) === 0) {
+    const end = inner.indexOf(STATUS_WRAP_CLOSE);
+    inner = end !== -1 ? inner.slice(STATUS_WRAP_OPEN.length, end) : inner.slice(STATUS_WRAP_OPEN.length);
+  }
+  inner = inner.trim();
+  state.statusData.set(pid, { raw: inner, quota: parseQuota(inner), at: Date.now() });
+  if (pid === state.activeProjectId) renderQuota();
+}
+
+function applySysTitle(task, raw) {
+  let title = String(raw || '').trim().replace(/\s+/g, ' ');
+  title = title.replace(/^["'«»“”‘’]+/, '').replace(/["'«»“”‘’]+$/, ''); // unwrap quotes
+  if (!title || title === SIGNAL_PONG || title.length > 120) return; // junk answer — keep 'New thread'
+  const t = state.threads.find(function (x) { return x.id === task.threadId; });
+  if (t.title !== 'New thread' && !titleIsInterim(t)) return; // owner renamed meanwhile — never overwrite
+  rest('/rest/v1/threads?id=eq.' + t.id, { method: 'PATCH', body: { title: title } })
+    .then(function () {
+      t.title = title;
+      state.interimTitles.delete(t.id); // the Muse's own name took over
+      renderSidebar();
+      renderHeader();
+    })
+    .catch(function () { /* keep the interim title — non-critical */ });
+}
+
+/* Auto-title: the first Muse answer in a thread still called 'New thread'
+   kicks off a title task through the ⌘ sys channel. Fires on the typing row
+   too (asks while the Muse is still composing). Once per thread per session. */
+function maybeAutoTitle(m, opts) {
+  opts = opts || {};
+  if (!opts.fresh) return;
+  const t = state.threads.find(function (x) { return x.id === m.thread_id; });
+  if (!t || isSysThread(t) || isSetupThread(t)) return;
+  if (state.titleAsked.has(t.id)) return;
+  if (t.title !== 'New thread' && !titleIsInterim(t)) return; // owner-named threads keep their name
+  if (!projectReady(t.project_id)) return;
+  const first = firstUserText(t.id);
+  if (!first) return;
+  state.titleAsked.add(t.id);
+  enqueueSysTask({ kind: 'title', threadId: t.id, text: String(first).slice(0, SYS_TEXT_CAP) });
+}
+
+function firstUserText(tid) {
+  // The open thread's cache is complete for a fresh thread; the recent-200
+  // window covers replies that landed while the thread was not open.
+  const rows = state.messagesByThread.get(tid) ||
+    state.msgs200.filter(function (m) { return m.thread_id === tid; });
+  for (const m of rows) {
+    if (m.role === 'user') return m.text;
+  }
+  return null;
+}
+
+/* Interim thread title — the first message's first 10 words. It holds until
+   the Muse answers the title task with a better name (or the owner renames). */
+function interimTitleFrom(text) {
+  let s = String(text || '').replace(RE_DROPBOX, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  const words = s.split(' ');
+  let t = words.slice(0, TITLE_WORDS).join(' ');
+  if (words.length > TITLE_WORDS || t.length > TITLE_MAX_LEN) t = t.slice(0, TITLE_MAX_LEN).trimEnd() + '…';
+  return t;
+}
+
+function applyInterimTitle(tid, text) {
+  const t = state.threads.find(function (x) { return x.id === tid; });
+  if (!t || isSysThread(t) || isSetupThread(t)) return;
+  if (t.title !== 'New thread') return; // already named (interim / Muse / owner)
+  const title = interimTitleFrom(text);
+  if (!title) return;
+  state.interimTitles.set(tid, title);
+  t.title = title; // optimistic
+  renderSidebar();
+  renderHeader();
+  rest('/rest/v1/threads?id=eq.' + tid, { method: 'PATCH', body: { title: title } })
+    .catch(function () { /* keep the optimistic title — non-critical */ });
+}
+
+/* Is this thread still on its interim first-message title? Re-derives from
+   the first user message, so it also works after a page reload. */
+function titleIsInterim(t) {
+  if (state.interimTitles.get(t.id) === t.title) return true;
+  const first = firstUserText(t.id);
+  return !!first && interimTitleFrom(first) === t.title;
+}
+
 /* Ask the server which not-ready Muses already have a pong row (covers pongs
    older than the latest-200 window). Quiet on load; poll ticks retry the
    projects that are still locked. */
@@ -1762,11 +2220,18 @@ function ingestMessage(m, opts) {
   if (!m || typeof m.id !== 'number') return false;
   const fresh = !state.msgs200.some(function (x) { return x.id === m.id; });
   applyMessageSignals(m, { fresh: fresh });
+  // ⌘ sys routing — muse rows in the hidden channel feed handlers; muse rows
+  // in a real thread may kick off the auto-title task
+  if (m.role === 'muse') {
+    if (isSysThreadId(m.thread_id)) handleSysReply(m, fresh);
+    else maybeAutoTitle(m, { fresh: fresh });
+  }
   // A real user row matching a pending send replaces its placeholder bubble
   if (m.role === 'user') {
     for (const [k, pe] of state.pendingSends) {
       if (pe.realId === m.id) { state.pendingSends.delete(k); break; }
     }
+    if (fresh) applyInterimTitle(m.thread_id, m.text); // the first message names the thread
   }
   let added = false;
   if (!isTypingRow(m) && !isStatusRow(m)) {
@@ -1783,6 +2248,7 @@ function ingestMessage(m, opts) {
     }
   }
   recomputeMeta();
+  updateSendState(); // the Send ↔ ■ Stop morph follows typing / in-flight state
   if (!opts.deferRender) renderSidebar();
   return added;
 }
@@ -1815,7 +2281,8 @@ function projectById(pid) {
 /* ================================================================
    SIDEBAR TREE — each Muse is a group; threads are leaves; hovering a group
    shows ＋ (new thread) and the gear (Muse config). Pinned threads gather
-   in the "Pinned" section at the top, prefixed with the Muse name.
+   in the "Pinned" section at the top; the ⌘ sys thread, when the ⚙ switch
+   is On, sits pinned above its own group's threads.
    ================================================================ */
 function groupIsOpen(pid) {
   return state.groupOpen.has(pid) ? state.groupOpen.get(pid) : true;
@@ -1826,13 +2293,39 @@ function toggleGroup(pid) {
 }
 
 function threadsOfProject(pid) {
-  // Exclude pinned threads (they live in the Pinned section at the top)
-  // and 'setup' plumbing threads (hidden everywhere in the sidebar — spec §6)
+  // Exclude pinned threads (they live in the Pinned section at the top),
+  // 'setup' plumbing threads (hidden everywhere in the sidebar — spec §6) and
+  // the ⌘ sys control channel (hidden, or pinned in its own group slot)
   const list = state.threads.filter(function (t) {
-    return t.project_id === pid && !isSetupThread(t) && state.pins.indexOf(t.id) === -1;
+    return t.project_id === pid && !isSetupThread(t) && !isSysThread(t) && state.pins.indexOf(t.id) === -1;
   });
-  list.sort(function (a, b) { return a.id - b.id; });
+  // Most recently updated thread first; threads never messaged sink by id
+  list.sort(function (a, b) {
+    const ka = threadLastAt(a), kb = threadLastAt(b);
+    if (kb !== ka) return kb - ka;
+    return b.id - a.id;
+  });
   return list;
+}
+
+/* Epoch ms of a thread's last real message; falls back to its creation time */
+function threadLastAt(t) {
+  const act = state.lastAct.get(t.id);
+  if (act) return act;
+  const d = t.created_at ? dateOf(t.created_at) : null;
+  return d ? d.getTime() : 0;
+}
+
+/* Has the owner read the LATEST Muse reply in this thread? Compares the
+   thread's last_read_id watermark with the newest role='muse' message in the
+   recent-200 window. Threads with no Muse reply in the window count as read. */
+function threadReadState(t) {
+  let lastMuse = 0;
+  for (const m of state.msgs200) {
+    if (m.thread_id === t.id && m.role === 'muse' && m.id > lastMuse) lastMuse = m.id;
+  }
+  if (!lastMuse) return 'read';
+  return (t.last_read_id || 0) >= lastMuse ? 'read' : 'unread';
 }
 
 function threadRow(t, pinnedRow) {
@@ -1840,21 +2333,36 @@ function threadRow(t, pinnedRow) {
   row.setAttribute('role', 'button');
   row.tabIndex = 0;
   const gated = !projectReady(t.project_id); // setup gating — threads locked until the pong
-  const ico = el('span', 't-ico', pinnedRow ? '📌' : '·');
-  ico.setAttribute('aria-hidden', 'true');
-  row.appendChild(ico);
+  const read = threadReadState(t);
+  const rIcon = el('span', 'read-ico' + (read === 'unread' ? ' unread' : ''), read === 'unread' ? '●' : '✓');
+  rIcon.title = read === 'unread'
+    ? 'Unread — a Muse reply is newer than your last read message'
+    : 'All Muse replies read';
+  row.appendChild(rIcon);
   if (pinnedRow) {
-    const p = projectById(t.project_id);
-    if (p) {
-      const pm = el('span', 'pm');
-      pm.appendChild(el('strong', '', p.name || p.muse_id));
-      pm.appendChild(document.createTextNode(' · '));
-      row.appendChild(pm);
-    }
+    const ico = el('span', 't-ico', '📌');
+    ico.setAttribute('aria-hidden', 'true');
+    row.appendChild(ico);
   }
-  const nm = el('span', 'thread-name', t.title || ('Thread #' + t.id));
+  const nm = el('span', 'thread-name');
+  const tn = el('span', 'tn-text', t.title || ('Thread #' + t.id));
+  nm.appendChild(tn);
   nm.title = t.title || '';
   row.appendChild(nm);
+  // Long names marquee-scroll instead of truncating (distance = overflow px)
+  requestAnimationFrame(function () {
+    const over = tn.scrollWidth - nm.clientWidth;
+    if (over > 2) {
+      nm.classList.add('marquee');
+      tn.style.setProperty('--mq-dist', over + 'px');
+    }
+  });
+  const lastMs = threadLastAt(t);
+  if (lastMs) {
+    const tt = el('span', 'thread-time', fmtThreadTime(new Date(lastMs)));
+    tt.title = 'Last updated ' + fmtFull(new Date(lastMs));
+    row.appendChild(tt);
+  }
   const mb = document.createElement('button');
   mb.type = 'button';
   mb.className = 'icon-btn xsmall thread-menu';
@@ -1939,6 +2447,12 @@ function museGroup(p, q) {
   if (!open) return g;
 
   const body = el('div', 'group-threads');
+  // The ⌘ sys thread, when the ⚙ switch is On, lives pinned above every
+  // other thread of this group (outside the paging quota, immune to search)
+  if (sysShown(p.id)) {
+    const st = sysThreadOf(p.id);
+    if (st) body.appendChild(threadRow(st, false));
+  }
   const all = threadsOfProject(p.id);
   const list = q ? all.filter(function (t) { return (t.title || '').toLowerCase().indexOf(q) !== -1; }) : all;
   if (!list.length) {
@@ -1978,12 +2492,13 @@ function renderSidebar() {
 
   const q = searchInput.value.trim().toLowerCase();
 
-  // Pinned section — pinned threads from ANY Muse gather at the top, prefixed with the Muse name
-  // ('setup' plumbing threads are never shown, pinned or not — spec §6)
+  // Pinned section — pinned threads from ANY Muse gather at the top
+  // ('setup' plumbing threads and the ⌘ sys channel are never shown here —
+  // the sys thread has its own pinned slot in its group when switched On)
   const pinnedThreads = state.pins
     .map(function (id) { return state.threads.find(function (t) { return t.id === id; }); })
     .filter(Boolean)
-    .filter(function (t) { return !isSetupThread(t); })
+    .filter(function (t) { return !isSetupThread(t) && !isSysThread(t); })
     .filter(function (t) {
       if (!q) return true;
       const p = projectById(t.project_id);
@@ -1992,14 +2507,14 @@ function renderSidebar() {
     });
 
   if (!state.projects.length) {
-    projList.appendChild(el('div', 'side-empty', 'No Muses yet — click ＋ New Muse (top right) to create your first one.'));
+    projList.appendChild(el('div', 'side-empty', 'No Muses yet — click ＋ New Muse (top of the sidebar) to create your first one.'));
     return;
   }
   const filtered = state.projects.filter(function (p) {
     if (!q) return true;
     if ((p.name + ' ' + p.muse_id).toLowerCase().indexOf(q) !== -1) return true;
     return state.threads.some(function (t) {
-      return t.project_id === p.id && !isSetupThread(t) && (t.title || '').toLowerCase().indexOf(q) !== -1;
+      return t.project_id === p.id && !isSetupThread(t) && !isSysThread(t) && (t.title || '').toLowerCase().indexOf(q) !== -1;
     });
   });
   if (!filtered.length && !pinnedThreads.length) {
@@ -2049,6 +2564,61 @@ function renderHeader() {
     hdrThread.title = th.title || '';
     hdrThread.hidden = false;
   }
+  renderQuota();
+}
+
+/* Quota chip — bottom-left of the composer. '-' until a background /status
+   answer lands; the full raw status rides on the chip tooltip. */
+function renderQuota() {
+  const p = activeProject();
+  quotaChip.hidden = !p;
+  if (!p) return;
+  const d = state.statusData.get(p.id);
+  const val = quotaChip.querySelector('.q-val');
+  if (!d) {
+    val.textContent = '–';
+    quotaChip.title = 'No quota yet — the UI asks each Muse for /status in the background every 30 minutes.';
+    return;
+  }
+  val.textContent = d.quota || '–';
+  quotaChip.title = 'Updated ' + fmtHM(new Date(d.at)) + (d.raw ? '\n\n' + d.raw.slice(0, 600) : '');
+}
+
+/* Background health jobs — every tick, each ready Muse whose slot is due gets
+   a ping (account alive) or a /status (quota refresh) through the ⌘ sys
+   queue. The first /status lands ~30s after boot; pings start one cycle in. */
+function startSysSchedule() {
+  if (state.sysSchedTimer !== null) return;
+  const now = Date.now();
+  for (const p of state.projects) {
+    if (!state.sysNext.has(p.id)) {
+      state.sysNext.set(p.id, { ping: now + PING_EVERY_MS, status: now + 30000 });
+    }
+  }
+  state.sysSchedTimer = setInterval(function () {
+    const t = Date.now();
+    for (const p of state.projects) {
+      if (!projectReady(p.id)) continue;
+      const nxt = state.sysNext.get(p.id);
+      if (!nxt) { state.sysNext.set(p.id, { ping: t + PING_EVERY_MS, status: t + 30000 }); continue; }
+      const slot = sysThreadSlot(p.id);
+      if (slot == null) continue;
+      if (t >= nxt.status) {
+        nxt.status = t + STATUS_EVERY_MS;
+        enqueueSysTask({ kind: 'status', threadId: slot });
+      } else if (t >= nxt.ping) {
+        nxt.ping = t + PING_EVERY_MS;
+        enqueueSysTask({ kind: 'ping', threadId: slot });
+      }
+    }
+  }, SYS_TICK_MS);
+}
+
+/* The task only needs A thread of this Muse — pumpSysQueue redirects it into
+   the ⌘ sys channel via ensureSysThread; the first ordinary thread is the handle. */
+function sysThreadSlot(pid) {
+  const t = state.threads.find(function (x) { return x.project_id === pid; });
+  return t ? t.id : null;
 }
 
 /* ================================================================
@@ -2076,22 +2646,301 @@ function fileNameFromLink(link) {
   } catch (e) { return 'Dropbox'; }
 }
 
-function attachEl(link, isUser) {
+/* ---- Resource attachment cards with inline preview --------------------
+   Dropbox links in a message become preview cards: images render a
+   thumbnail, videos/audio an inline player, PDFs a 👁 toggle that expands
+   an embedded viewer (loaded lazily); any other file keeps the plain
+   download card. The name row always links to the direct download (dl=1). */
+const IMG_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif'];
+const VID_EXT = ['mp4', 'webm', 'mov', 'm4v'];
+const AUD_EXT = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus'];
+
+function fileExtFromLink(link) {
+  try {
+    const clean = link.split('#')[0].split('?')[0];
+    const m = /\.([a-z0-9]{1,5})$/i.exec(clean);
+    return m ? m[1].toLowerCase() : '';
+  } catch (e) { return ''; }
+}
+
+/* Direct stream for previews — raw=1 serves the bytes inline instead of the
+   download page; dl.dropboxusercontent links already do. */
+function previewHref(link) {
+  if (/dropbox\.com/i.test(link)) {
+    if (/[?&]raw=/.test(link)) return link;
+    if (/[?&]dl=/.test(link)) return link.replace(/([?&])dl=[^&]*/, '$1raw=1');
+    return link + (link.indexOf('?') !== -1 ? '&' : '?') + 'raw=1';
+  }
+  return link; // dl.dropboxusercontent.com and everything else serve as-is
+}
+
+/* ---- Local thumbnails stored on the serve.py machine --------------------
+   Every preview frame is FIXED-SIZE from the first paint (see .attach-thumb),
+   so a slow Dropbox stream can never push the chat down. On top of that the
+   UI tries to capture a small JPEG thumb (canvas) and store it on the
+   serve.py machine via POST /thumbs/<hash>.jpg — once stored, later renders
+   load it locally and instantly, even on devices without a Dropbox session.
+   The capture needs the content reachable WITHOUT Dropbox credentials (CORS);
+   this machine's IP is currently soft-blocked by Dropbox, so the pipeline
+   stays dormant — harmless today, automatic the day the block lifts. */
+function hash16(s) {
+  // FNV-1a 32 + djb2 32 → 16 hex chars (no crypto.subtle: the UI also runs on plain-HTTP LAN)
+  let h1 = 0x811c9dc5, h2 = 5381;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 0x01000193);
+    h2 = ((h2 << 5) + h2 + c) | 0;
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+function thumbUrlFor(link) { return '/thumbs/' + hash16(link) + '.jpg'; }
+
+function dataUrlToBytes(dataUrl) {
+  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function saveThumb(key, dataUrl) {
+  return fetch('/thumbs/' + key + '.jpg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: dataUrlToBytes(dataUrl)
+  }).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+  });
+}
+
+function canvasThumbFrom(source, w, h) {
+  try {
+    if (!w || !h) return null;
+    const scale = Math.min(1, 480 / w);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * scale));
+    c.height = Math.max(1, Math.round(h * scale));
+    c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+    const du = c.toDataURL('image/jpeg', 0.72);
+    return du.length > 200 ? du : null;
+  } catch (e) { return null; } // tainted canvas (no CORS) — quietly skip
+}
+
+/* Capture an image thumb WITHOUT Dropbox credentials (crossOrigin=anonymous)
+   and store it on the serve.py machine. One attempt per link per session. */
+function generateImageThumb(link) {
+  const key = hash16(link);
+  if (state.thumbTried.has(key)) return;
+  state.thumbTried.add(key);
+  const probe = new Image();
+  probe.crossOrigin = 'anonymous';
+  probe.onload = function () {
+    const du = canvasThumbFrom(probe, probe.naturalWidth, probe.naturalHeight);
+    if (du) saveThumb(key, du).catch(function () { state.thumbTried.delete(key); });
+  };
+  probe.onerror = function () { /* blocked / no CORS — this session gives up on this key */ };
+  probe.src = previewHref(link);
+}
+
+/* Same for videos: a hidden muted <video crossOrigin=anonymous> grabs a frame
+   ~1s in. Failures are silent and simply leave the thumb for a future session. */
+function generateVideoThumb(link) {
+  const key = hash16(link);
+  if (state.thumbTried.has(key)) return;
+  state.thumbTried.add(key);
+  const v = document.createElement('video');
+  v.crossOrigin = 'anonymous';
+  v.muted = true;
+  v.preload = 'metadata';
+  v.src = previewHref(link);
+  let settled = false;
+  const done = function () {
+    if (settled) return;
+    settled = true;
+    v.removeAttribute('src');
+    try { v.load(); } catch (e) { /* ignore */ }
+  };
+  v.addEventListener('loadeddata', function () {
+    try {
+      v.currentTime = isFinite(v.duration) && v.duration > 0 ? Math.min(1, v.duration / 3) : 0;
+    } catch (e) { done(); }
+  }, { once: true });
+  v.addEventListener('seeked', function () {
+    const du = canvasThumbFrom(v, v.videoWidth, v.videoHeight);
+    if (du) saveThumb(key, du).catch(function () { state.thumbTried.delete(key); });
+    done();
+  }, { once: true });
+  v.addEventListener('error', done, { once: true });
+  setTimeout(done, 15000);
+}
+
+/* Instant placeholder shown inside a fixed frame while Dropbox streams */
+function attachPlaceholder(icon, name) {
+  const ph = el('div', 'attach-ph');
+  ph.appendChild(el('span', 'ph-ico', icon));
+  ph.appendChild(el('span', 'ph-name', name));
+  return ph;
+}
+
+const VIEW_KIND_ICON = { img: '🖼', vid: '🎬', aud: '🎧', pdf: '📄', doc: '📄' };
+
+function attachBarEl(link, isUser, kind) {
+  const bar = el('div', 'attach-bar');
   const a = document.createElement('a');
-  a.className = 'attach' + (isUser ? ' in-user' : '');
+  a.className = 'attach-link';
   a.target = '_blank';
   a.rel = 'noopener';
   a.href = downloadHref(link);
-  const ic = el('span', 'attach-icon', '⬇');
+  const ic = el('span', 'attach-icon', kind === 'pdf' ? '📄' : '⬇');
   ic.setAttribute('aria-hidden', 'true');
   const meta = el('span', 'attach-meta');
   meta.appendChild(el('span', 'attach-name', fileNameFromLink(link)));
-  meta.appendChild(el('span', 'attach-sub', 'Dropbox · click to download'));
+  meta.appendChild(el('span', 'attach-sub', kind === 'pdf' ? 'PDF · click to download · 👁 to preview' : 'Dropbox · click to download'));
   a.appendChild(ic); a.appendChild(meta);
-  return a;
+  bar.appendChild(a);
+  const view = document.createElement('button');
+  view.type = 'button';
+  view.className = 'attach-peek';
+  view.textContent = '⛶';
+  view.title = 'View';
+  view.setAttribute('aria-label', 'View ' + fileNameFromLink(link));
+  view.addEventListener('click', function () { openViewer(link, kind); });
+  bar.appendChild(view);
+  return bar;
 }
 
-/* Status chip for messages sent this session: sending → ✓ sent → ✓✓ received / ✗ failed */
+function attachEl(link, isUser) {
+  const ext = fileExtFromLink(link);
+  // Two levels: wrap = [preview frame (.attach) | download bar OUTSIDE it]
+  const wrap = el('figure', 'attach-wrap' + (isUser ? ' in-user' : ''));
+  if (IMG_EXT.indexOf(ext) !== -1) {
+    const box = el('div', 'attach attach-thumb');
+    const img = document.createElement('img');
+    img.className = 'attach-img';
+    img.loading = 'lazy';
+    img.alt = fileNameFromLink(link);
+    img.addEventListener('click', function () { openViewer(link, 'img'); });
+    // Local thumb first (instant); fall back to the Dropbox stream INSIDE the
+    // same fixed frame — no layout shift either way
+    img.src = thumbUrlFor(link);
+    img.addEventListener('error', function onThumbMiss() {
+      img.removeEventListener('error', onThumbMiss);
+      const ph = attachPlaceholder('🖼', fileNameFromLink(link));
+      box.appendChild(ph);
+      img.src = previewHref(link);
+      img.addEventListener('load', function onStream() {
+        img.removeEventListener('load', onStream);
+        ph.remove();
+        generateImageThumb(link); // try to store a local thumb for next time
+      });
+      img.addEventListener('error', function () { box.remove(); }, { once: true }); // dead link → bar only
+    });
+    box.appendChild(img);
+    wrap.appendChild(box);
+    wrap.appendChild(attachBarEl(link, isUser, 'img'));
+  } else if (VID_EXT.indexOf(ext) !== -1) {
+    const box = el('div', 'attach');
+    const v = document.createElement('video');
+    v.className = 'attach-video';
+    v.controls = true;
+    v.preload = 'metadata';
+    v.poster = thumbUrlFor(link); // local thumb as the poster (no-op while missing)
+    v.src = previewHref(link);
+    v.addEventListener('loadeddata', function () { generateVideoThumb(link); }, { once: true });
+    box.appendChild(v);
+    wrap.appendChild(box);
+    wrap.appendChild(attachBarEl(link, isUser, 'vid'));
+  } else if (AUD_EXT.indexOf(ext) !== -1) {
+    const box = el('div', 'attach');
+    const au = document.createElement('audio');
+    au.className = 'attach-audio';
+    au.controls = true;
+    au.preload = 'metadata';
+    au.src = previewHref(link);
+    box.appendChild(au);
+    wrap.appendChild(box);
+    wrap.appendChild(attachBarEl(link, isUser, 'aud'));
+  } else if (ext === 'pdf') {
+    // bar only at first — the 👁 toggle adds the preview frame above it (lazy)
+    const bar = attachBarEl(link, isUser, 'pdf');
+    const peek = document.createElement('button');
+    peek.type = 'button';
+    peek.className = 'attach-peek';
+    peek.textContent = '👁';
+    peek.title = 'Preview';
+    peek.setAttribute('aria-label', 'Toggle PDF preview');
+    let box = null;
+    peek.addEventListener('click', function () {
+      if (!box) {
+        box = el('div', 'attach');
+        const frame = document.createElement('iframe');
+        frame.className = 'attach-frame';
+        frame.title = fileNameFromLink(link);
+        frame.src = previewHref(link); // loaded lazily — only on first open
+        box.appendChild(frame);
+        wrap.insertBefore(box, wrap.firstChild);
+      } else {
+        box.hidden = !box.hidden;
+      }
+      peek.classList.toggle('on', !box.hidden);
+    });
+    bar.appendChild(peek);
+    wrap.appendChild(bar);
+  } else {
+    wrap.appendChild(attachBarEl(link, isUser, 'doc'));
+  }
+  return wrap;
+}
+
+/* ---- Attachment viewer modal — full-size view + download ---------------- */
+function openViewer(link, kind) {
+  const name = fileNameFromLink(link);
+  vwIcon.textContent = VIEW_KIND_ICON[kind] || '📄';
+  vwTitle.textContent = name;
+  vwTitle.title = name;
+  vwDownload.href = downloadHref(link);
+  vwBody.innerHTML = '';
+  if (kind === 'img') {
+    const img = document.createElement('img');
+    img.alt = name;
+    img.src = previewHref(link);
+    vwBody.appendChild(img);
+  } else if (kind === 'vid') {
+    const v = document.createElement('video');
+    v.controls = true;
+    v.preload = 'metadata';
+    v.src = previewHref(link);
+    vwBody.appendChild(v);
+  } else if (kind === 'aud') {
+    const au = document.createElement('audio');
+    au.controls = true;
+    au.src = previewHref(link);
+    vwBody.appendChild(au);
+  } else if (kind === 'pdf') {
+    const frame = document.createElement('iframe');
+    frame.title = name;
+    frame.src = previewHref(link); // the browser's own PDF viewer
+    vwBody.appendChild(frame);
+  } else {
+    const d = el('div', 'view-doc');
+    d.appendChild(el('span', 'vd-ico', '📄'));
+    d.appendChild(el('div', '', 'No inline preview for this file type.'));
+    d.appendChild(el('div', '', 'Use the Download button below.'));
+    vwBody.appendChild(d);
+  }
+  showModal(modalView);
+}
+
+function closeViewer() {
+  vwBody.innerHTML = ''; // stops any video/audio playback
+  if (!modalView.hidden) hideModal(modalView);
+}
+vwClose.addEventListener('click', closeViewer);
+vwCloseBtn.addEventListener('click', closeViewer);
+
+/* Status chip for messages sent this session:
+   sending → ✓ sent → ✓✓ delivered (daemon pulled it — '...' typing started)
+   → ✓✓ received (the Muse replied) / ✗ failed */
 function sendChipEl(status) {
   const st = el('span', 'msg-status ' + status);
   if (status === 'sending') {
@@ -2099,6 +2948,8 @@ function sendChipEl(status) {
     st.appendChild(document.createTextNode('sending'));
   } else if (status === 'received') {
     st.textContent = '✓✓ received';
+  } else if (status === 'delivered') {
+    st.textContent = '✓✓ delivered';
   } else if (status === 'fail') {
     st.textContent = '✗ failed';
   } else {
@@ -2107,31 +2958,135 @@ function sendChipEl(status) {
   return st;
 }
 
-/* A session-sent message counts as received once a later muse row exists in
-   its thread (the daemon posts '...' right after receiving the message) */
+/* A session-sent message counts as delivered once ANY later muse row exists
+   in its thread (the daemon posts the '...' typing signal right after
+   pulling), and as received once a REAL muse reply (not '...') exists. */
 function sendStatusOf(realId, tid) {
-  const mx = state.maxMuseId.get(tid) || 0;
-  return realId < mx ? 'received' : 'sent';
+  const mxReal = state.maxMuseRealId.get(tid) || 0;
+  if (realId < mxReal) return 'received';
+  const mxAny = state.maxMuseId.get(tid) || 0;
+  if (realId < mxAny) return 'delivered';
+  return 'sent';
 }
 
-/* Placeholder bubble for a message sent this session — replaced by the real
+/* ---- Per-message actions on the meta line: copy + reply ---------------- */
+const COPY_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const REPLY_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>';
+const QUOTE_CLIP = 400;
+
+function senderNameOf(m) {
+  if (m.role === 'muse') {
+    const p = projectById(m.project_id);
+    return (m.role === 'muse' && p) ? (p.name || p.muse_id) : 'Muse';
+  }
+  return 'You';
+}
+
+/* The text that actually goes on the wire when replying: a '> ' blockquote
+   of the quoted message (clipped), so the Muse sees the context as plain
+   text followed by a blank line and the actual reply. */
+function quotedBlockFor(m) {
+  let body = String(m.text || '');
+  if (body.length > QUOTE_CLIP) body = body.slice(0, QUOTE_CLIP) + '…';
+  return '> [' + senderNameOf(m) + '] ' + body.split('\n').join('\n> ');
+}
+
+function msgActionsEl(m) {
+  const wrap = el('span', 'msg-actions');
+  const cp = document.createElement('button');
+  cp.type = 'button';
+  cp.className = 'msg-act';
+  cp.innerHTML = COPY_SVG;
+  cp.title = 'Copy message';
+  cp.setAttribute('aria-label', 'Copy message');
+  cp.addEventListener('click', function (e) {
+    e.stopPropagation();
+    copyText(m.text || '').then(function (ok) {
+      if (!ok) return;
+      cp.classList.add('copied'); // icon turns green for a moment
+      setTimeout(function () { cp.classList.remove('copied'); }, 1200);
+    });
+  });
+  wrap.appendChild(cp);
+  const rp = document.createElement('button');
+  rp.type = 'button';
+  rp.className = 'msg-act';
+  rp.innerHTML = REPLY_SVG;
+  rp.title = 'Reply (quote this message)';
+  rp.setAttribute('aria-label', 'Reply to this message');
+  rp.addEventListener('click', function (e) {
+    e.stopPropagation();
+    startReply(m);
+  });
+  wrap.appendChild(rp);
+  return wrap;
+}
+
+/* Reply state — a quote bar above the composer; sending prepends the quote */
+function startReply(m) {
+  if (state.activeThreadId !== m.thread_id) return;
+  let preview = String(m.text || '').replace(/\s+/g, ' ').trim();
+  if (preview.length > 120) preview = preview.slice(0, 120) + '…';
+  state.replyTo = {
+    thread_id: m.thread_id,
+    name: senderNameOf(m),
+    preview: preview || '(empty message)',
+    block: quotedBlockFor(m)
+  };
+  renderReplyBar();
+  inputMsg.focus();
+}
+
+function cancelReply() {
+  state.replyTo = null;
+  renderReplyBar();
+}
+
+function renderReplyBar() {
+  const q = state.replyTo;
+  replyBar.hidden = !q;
+  if (!q) return;
+  rbTo.textContent = 'Replying to ' + q.name;
+  rbText.textContent = q.preview;
+}
+
+/* Bubble text — lines starting with '> ' render as quote blocks, everything
+   else keeps the plain pre-wrapped look (each line is a block span) */
+function bubbleTextEl(text) {
+  const d = el('div', 'bubble-text');
+  for (const ln of String(text).split('\n')) {
+    if (ln.charAt(0) === '>' && (ln.length === 1 || ln.charAt(1) === ' ')) {
+      d.appendChild(el('span', 'quote-line', ln.slice(2) || '\u200B'));
+    } else {
+      d.appendChild(el('span', 'rline', ln === '' ? '\u200B' : ln));
+    }
+  }
+  return d;
+}
+
+/* Placeholder row for a message sent this session — replaced by the real
    row once it arrives through ingest (SSE/poll) */
 function pendingBubbleEl(pe) {
+  const row = el('div', 'msg user');
   const b = el('div', 'bubble user pending');
-  b.appendChild(el('div', 'bubble-text', pe.text));
+  b.appendChild(bubbleTextEl(pe.text));
+  row.appendChild(b);
+  const meta = el('div', 'msg-meta');
+  meta.appendChild(msgActionsEl({ text: pe.text, thread_id: pe.thread_id, role: 'user', project_id: pe.project_id }));
   const st = sendChipEl(pe.status === 'sent' && pe.realId !== null ? sendStatusOf(pe.realId, pe.thread_id) : pe.status);
-  b.appendChild(st);
+  meta.appendChild(st);
   if (pe.status === 'fail') {
     st.title = pe.error || 'Send failed';
-    b.appendChild(el('div', 'msg-error', pe.error || 'Send failed'));
+    meta.appendChild(el('span', 'msg-error', pe.error || 'Send failed'));
     const rb = document.createElement('button');
     rb.type = 'button';
     rb.className = 'msg-retry';
     rb.textContent = 'Retry';
     rb.addEventListener('click', function () { retryPending(pe.key); });
-    b.appendChild(rb);
+    meta.appendChild(rb);
   }
-  return b;
+  row.appendChild(meta);
+  return row;
 }
 
 /* Pending sends for one thread, in send order (Map keeps insertion order) */
@@ -2158,22 +3113,30 @@ function typingBubbleEl() {
 }
 
 function bubbleEl(m, animate) {
-  const b = el('div', 'bubble ' + (m.role === 'user' ? 'user' : 'muse') + (animate ? ' new' : ''));
-  b.appendChild(el('div', 'bubble-text', m.text || ''));
+  const isUser = m.role === 'user';
+  const row = el('div', 'msg ' + (isUser ? 'user' : 'muse') + (animate ? ' new' : ''));
+  const b = el('div', 'bubble ' + (isUser ? 'user' : 'muse'));
+  b.appendChild(bubbleTextEl(m.text || ''));
   for (const link of findDropboxLinks(m.text)) {
-    b.appendChild(attachEl(link, m.role === 'user'));
+    b.appendChild(attachEl(link, isUser));
   }
+  row.appendChild(b);
+  // Time + send-state live OUTSIDE the bubble, on a meta line below it;
+  // hovering the row also reveals copy / reply actions there
+  const meta = el('div', 'msg-meta');
+  meta.appendChild(msgActionsEl(m)); // copy + reply — left of the timestamp
   const d = dateOf(m.created_at);
   if (d) {
     const t = el('span', 'bubble-time', fmtHM(d));
     t.title = fmtFull(d);
-    b.appendChild(t);
+    meta.appendChild(t);
   }
-  // Only messages sent this session carry a send-state chip
-  if (m.role === 'user' && state.sessionSentIds.has(m.id)) {
-    b.appendChild(sendChipEl(sendStatusOf(m.id, m.thread_id)));
+  // Only messages sent this session carry a send-state chip (right-most)
+  if (isUser && state.sessionSentIds.has(m.id)) {
+    meta.appendChild(sendChipEl(sendStatusOf(m.id, m.thread_id)));
   }
-  return b;
+  row.appendChild(meta);
+  return row;
 }
 
 function emptyStateEl(title, desc) {
@@ -2211,7 +3174,7 @@ function renderChat(opts) {
   }
   const p = activeProject();
   if (!p) {
-    chatArea.appendChild(emptyStateEl('No Muse selected', 'Pick a Muse in the sidebar, or click ＋ New Muse (top right) to create your first one.'));
+    chatArea.appendChild(emptyStateEl('No Muse selected', 'Pick a Muse in the sidebar, or click ＋ New Muse (top of the sidebar) to create your first one.'));
     return;
   }
   if (state.activeThreadId == null) {
@@ -2271,6 +3234,7 @@ async function openThread(tid) {
     state.groupOpen.set(t.project_id, true); // open the group containing the selected thread
   }
   state.activeThreadId = tid;
+  if (state.replyTo && state.replyTo.thread_id !== tid) cancelReply(); // quotes don't survive a thread switch
   renderHeader();
   renderSidebar();
   updateSendState();
@@ -2290,6 +3254,16 @@ async function openThread(tid) {
     reconcilePending(rows);
     renderChat();
     markRead(tid);
+    // Catch-up: a reply may have landed while the UI was closed — a thread
+    // still on its default/interim title gets its auto-title task now (once per session)
+    if ((t.title === 'New thread' || titleIsInterim(t)) && !state.titleAsked.has(t.id) &&
+        rows.some(function (x) { return x.role === 'muse'; })) {
+      const first = firstUserText(tid);
+      if (first) {
+        state.titleAsked.add(t.id);
+        enqueueSysTask({ kind: 'title', threadId: t.id, text: String(first).slice(0, SYS_TEXT_CAP) });
+      }
+    }
   } else {
     renderChat();
   }
@@ -2313,13 +3287,48 @@ function markRead(tid) {
 }
 
 let sending = false;
+let sendAbort = null; // AbortController for the in-flight POST — aborted by ■ Stop
+const SEND_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+const STOP_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+/* The send button morphs into a red ■ Stop (ZCode-style) while a POST is in
+   flight or the Muse is typing in the open thread. */
+function stopModeNow() {
+  return sending || (state.activeThreadId != null && typingFresh(state.activeThreadId));
+}
+
+/* ■ Stop — abort the in-flight send (the text goes back into the composer) or
+   stop the waiting UI (typing bubble + re-arming '...'). The Muse generates on
+   its own platform, so mid-generation cannot truly be interrupted from the
+   relay; whatever it already produced simply arrives as a normal message. */
+function stopActive() {
+  if (sending) {
+    if (sendAbort) sendAbort.abort();
+    return;
+  }
+  const tid = state.activeThreadId;
+  if (tid != null && typingFresh(tid)) {
+    state.stopped.add(tid);
+    state.typing.delete(tid);
+    recomputeMeta();
+    renderSidebar();
+    renderChat();
+    updateSendState();
+  }
+}
+
 function updateSendState() {
   // Setup gating — the whole composer is disabled while the Muse has not ponged
   const gated = state.activeProjectId != null && !projectReady(state.activeProjectId);
-  btnSend.disabled = sending || gated || !inputMsg.value.trim() || state.activeThreadId == null;
+  const stopMode = !gated && stopModeNow();
+  btnSend.classList.toggle('stop', stopMode);
+  btnSend.setAttribute('aria-label', stopMode ? 'Stop' : 'Send');
+  btnSend.title = stopMode ? 'Stop — cancel the send / stop waiting for the reply' : 'Send';
+  const icon = stopMode ? STOP_SVG : SEND_SVG;
+  if (btnSend.dataset.icon !== icon) { btnSend.innerHTML = icon; btnSend.dataset.icon = icon; }
+  btnSend.disabled = stopMode ? false : (sending || gated || !inputMsg.value.trim() || state.activeThreadId == null);
   inputMsg.disabled = gated;
   setupBanner.hidden = !gated;
-  renderUsageBar(); // the usage bar follows the same visibility rules as the composer
 }
 
 function resizeInput() {
@@ -2347,27 +3356,33 @@ async function sendMessage() {
   if (!text || sending || state.activeThreadId == null) return;
   const p = activeProject();
   if (!p) return;
-  // '/status' is plumbing — route it to the usage bar instead of the chat
-  if (text === SIGNAL_STATUS) {
-    inputMsg.value = '';
-    resizeInput();
-    updateSendState();
-    requestStatus();
+  // The ⌘ sys channel is write-protected — only automated tasks go through it
+  const at = state.threads.find(function (x) { return x.id === state.activeThreadId; });
+  if (at && isSysThread(at)) {
+    toastOnce('syslock', 4000, { kind: 'info', title: '⌘ sys is the hidden system channel — messages here are automated' });
     return;
+  }
+  // An active reply quotes its message: the '> ' blockquote goes on the wire
+  // ahead of the reply so the Muse sees the context as plain text.
+  let fullText = text;
+  const q = state.replyTo;
+  if (q && q.thread_id === state.activeThreadId) {
+    fullText = q.block + '\n\n' + text;
   }
   const entry = {
     key: newPendingKey(),
     thread_id: state.activeThreadId,
     project_id: p.id,
-    text: text,
+    text: fullText,
     status: 'sending',
     error: null,
     realId: null
   };
   state.pendingSends.set(entry.key, entry);
+  if (q) cancelReply(); // the quote is baked into the entry now
+  state.stopped.delete(entry.thread_id); // a new send resumes normal waiting
   sending = true;
   updateSendState();
-  btnBusy(btnSend, true, '');
   inputMsg.value = '';
   resizeInput();
   renderChat(); // show the 'sending' placeholder right away
@@ -2375,7 +3390,6 @@ async function sendMessage() {
     await postPendingMessage(entry);
   } finally {
     sending = false;
-    btnBusy(btnSend, false);
     updateSendState();
     inputMsg.focus();
   }
@@ -2386,24 +3400,38 @@ async function postPendingMessage(entry) {
   entry.status = 'sending';
   entry.error = null;
   if (state.activeThreadId === entry.thread_id) renderChat();
+  sendAbort = new AbortController();
   try {
     const rows = await rest('/rest/v1/messages', {
       method: 'POST',
       prefer: 'return=representation',
-      body: { thread_id: entry.thread_id, project_id: entry.project_id, role: 'user', text: entry.text }
+      body: { thread_id: entry.thread_id, project_id: entry.project_id, role: 'user', text: entry.text },
+      signal: sendAbort.signal
     });
     const m = Array.isArray(rows) && rows[0] ? rows[0] : null;
     if (m && typeof m.id === 'number') {
       entry.realId = m.id;
       state.sessionSentIds.add(m.id);
       markReadUpTo(entry.thread_id, m.id); // own message counts as read immediately
+      applyInterimTitle(entry.thread_id, entry.text); // optimistic — the first message names the thread
     }
     entry.status = 'sent'; // id unknown → still sent; the real row reconciles via ingest
   } catch (e) {
-    entry.status = 'fail';
-    entry.error = errText(e);
-    toastErrNoAuth('Could not send message', e);
+    if (e && e.aborted) {
+      // ■ Stop while the POST was in flight — drop the placeholder, give the text back
+      for (const [k, pe] of state.pendingSends) {
+        if (pe === entry) { state.pendingSends.delete(k); break; }
+      }
+      if (!inputMsg.value.trim()) inputMsg.value = entry.text;
+      else if (inputMsg.value.indexOf(entry.text) === -1) inputMsg.value += '\n' + entry.text;
+      resizeInput();
+    } else {
+      entry.status = 'fail';
+      entry.error = errText(e);
+      toastErrNoAuth('Could not send message', e);
+    }
   } finally {
+    sendAbort = null;
     if (state.activeThreadId === entry.thread_id) renderChat();
   }
 }
@@ -2414,108 +3442,18 @@ async function retryPending(key) {
   if (!entry || sending) return;
   sending = true;
   updateSendState();
-  btnBusy(btnSend, true, '');
   try {
     await postPendingMessage(entry);
   } finally {
     sending = false;
-    btnBusy(btnSend, false);
     updateSendState();
     inputMsg.focus();
   }
 }
 
 /* ================================================================
-   USAGE BAR — below the composer. ⟳ sends a '/status' request into the open
-   thread (a plumbing row, hidden from chat); the Muse answers with its
-   runtime status wrapped in '<<<STATUS>>>…<<<END_STATUS>>>' (AGENTS.md §2).
-   The latest reply per thread is parsed here and shown with a context meter
-   when the output contains a percentage.
+   THREADS
    ================================================================ */
-function storeStatusReply(m) {
-  let text = m.text.slice(STATUS_WRAP_OPEN.length);
-  const end = text.lastIndexOf(STATUS_WRAP_CLOSE);
-  if (end !== -1) text = text.slice(0, end);
-  text = text.replace(/^\s*\n/, '').replace(/\s+$/, '').trim();
-  if (!text) text = '(empty /status output)';
-  state.statusByThread.set(m.thread_id, { text: text, at: Date.now(), msgId: m.id });
-  state.statusPending.delete(m.thread_id); // arrived while we were waiting
-  if (state.activeThreadId === m.thread_id) renderUsageBar();
-}
-
-/* Send the '/status' request — posted directly (no pending bubble): the row is
-   plumbing and the real answer is the <<<STATUS>>> reply, not an echo. */
-async function requestStatus() {
-  const tid = state.activeThreadId;
-  if (tid == null || state.statusPending.get(tid)) return;
-  const p = activeProject();
-  if (!p || !projectReady(p.id)) return; // gated Muses have no daemon yet
-  state.statusPending.set(tid, true);
-  renderUsageBar();
-  try {
-    await rest('/rest/v1/messages', {
-      method: 'POST',
-      prefer: 'return=representation',
-      body: { thread_id: tid, project_id: p.id, role: 'user', text: SIGNAL_STATUS }
-    });
-  } catch (e) {
-    state.statusPending.delete(tid);
-    renderUsageBar();
-    toastErrNoAuth('Could not request /status', e);
-    return;
-  }
-  // The reply comes back through SSE/poll; give up loudly if it never does
-  setTimeout(function () {
-    if (!state.statusPending.get(tid)) return;
-    state.statusPending.delete(tid);
-    if (state.activeThreadId === tid) renderUsageBar();
-    toastOnce('statusTimeout', 10000, {
-      kind: 'warn',
-      title: 'No /status reply',
-      detail: 'The Muse did not answer in 90s — is its daemon running and its client zip up to date?'
-    });
-  }, STATUS_TIMEOUT_MS);
-}
-
-/* First percentage in the /status output drives the little context meter */
-function statusPercentOf(text) {
-  const m = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(text);
-  if (!m) return null;
-  const v = parseFloat(m[1]);
-  return isFinite(v) && v >= 0 && v <= 100 ? v : null;
-}
-
-function renderUsageBar() {
-  const show = state.activeThreadId != null && state.activeProjectId != null &&
-               projectReady(state.activeProjectId);
-  usageBar.hidden = !show;
-  if (!show) return;
-  const tid = state.activeThreadId;
-  const st = state.statusByThread.get(tid);
-  if (state.statusPending.get(tid)) {
-    usageMeter.hidden = true;
-    usageText.textContent = 'Asking this Muse for /status… (its daemon forwards the request; answer in a few seconds)';
-    usageText.title = '';
-    usageText.classList.remove('has-data');
-    btnStatus.disabled = true;
-    return;
-  }
-  btnStatus.disabled = false;
-  if (!st) {
-    usageMeter.hidden = true;
-    usageText.textContent = 'No status yet — ⟳ asks this Muse for its /status (usage + context).';
-    usageText.title = '';
-    usageText.classList.remove('has-data');
-    return;
-  }
-  const pct = statusPercentOf(st.text);
-  usageMeter.hidden = pct === null;
-  if (pct !== null) usageFill.style.width = pct + '%';
-  usageText.textContent = st.text;
-  usageText.title = st.text + '  (updated ' + new Date(st.at).toLocaleTimeString('en-GB') + ')';
-  usageText.classList.add('has-data');
-}
-
 async function newThreadFor(p) {
   if (!p || state.creatingThread) return;
   if (!projectReady(p.id)) return; // ＋ is hidden while setting up — double guard
@@ -2702,6 +3640,7 @@ async function saveRenameThread() {
   try {
     await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'PATCH', body: { title: v } });
     t.title = v;
+    state.interimTitles.delete(t.id); // an owner rename is final — the Muse must not retitle it
     hideModal(modalRenameThread);
     renderSidebar();
     renderHeader();
@@ -2736,12 +3675,10 @@ async function confirmDeleteThread() {
     await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'DELETE' });
     state.threads = state.threads.filter(function (x) { return x.id !== t.id; });
     state.messagesByThread.delete(t.id);
-    // Drop any pending sends + stored status bound to the deleted thread
+    // Drop any pending sends bound to the deleted thread
     for (const [k, pe] of state.pendingSends) {
       if (pe.thread_id === t.id) state.pendingSends.delete(k);
     }
-    state.statusByThread.delete(t.id);
-    state.statusPending.delete(t.id);
     const pi = state.pins.indexOf(t.id);
     if (pi !== -1) { state.pins.splice(pi, 1); savePins(); }
     if (state.activeThreadId === t.id) state.activeThreadId = null;
@@ -2767,12 +3704,23 @@ function openMuseCfg(p) {
     b.checked = (p.tags || []).indexOf(b.value) !== -1;
   });
   syncCfgChips();
+  const on = sysShown(p.id);
+  cfgSys.querySelectorAll('input[type=radio]').forEach(function (b) {
+    b.checked = (b.value === 'on') === on;
+  });
+  syncCfgSys();
   showModal(modalMuseCfg);
   cfgName.focus();
 }
 
 function syncCfgChips() {
   cfgTags.querySelectorAll('input[type=checkbox]').forEach(function (b) {
+    b.closest('.toggle-chip').classList.toggle('on', b.checked);
+  });
+}
+
+function syncCfgSys() {
+  cfgSys.querySelectorAll('input[type=radio]').forEach(function (b) {
     b.closest('.toggle-chip').classList.toggle('on', b.checked);
   });
 }
@@ -2785,12 +3733,16 @@ async function saveMuseCfg() {
   cfgTags.querySelectorAll('input[type=checkbox]').forEach(function (b) {
     if (b.checked) tags.push(b.value);
   });
+  const sysOnEl = cfgSys.querySelector('input[type=radio][value=on]');
+  const sysOn = !!(sysOnEl && sysOnEl.checked);
   state.savingCfg = true;
   btnBusy(btnCfgSave, true, 'Saving…');
   try {
     await rest('/rest/v1/projects?id=eq.' + p.id, { method: 'PATCH', body: { name: name, tags: tags } });
     p.name = name;
     p.tags = tags;
+    state.sysShow.set(p.id, sysOn); // localStorage only — no schema change
+    saveSysShow();
     hideModal(modalMuseCfg);
     renderAll();
     toast({ kind: 'success', title: 'Muse updated', detail: name + ' · ' + (tags.length ? tags.join(', ') : 'no capabilities') });
@@ -3157,9 +4109,9 @@ function closeWizard() {
 }
 
 btnNew.addEventListener('click', openWizard);
+// API Docs — plain link to serve.py's Swagger UI (Redoc lives at /redoc)
 // Sign out — serve.py clears the mr_session cookie and redirects to /login
 btnSignout.addEventListener('click', function () { window.location.href = '/logout'; });
-btnStatus.addEventListener('click', requestStatus);
 wizClose.addEventListener('click', closeWizard);
 btnWizCancel.addEventListener('click', closeWizard);
 btnWizDone.addEventListener('click', closeWizard);
@@ -3283,17 +4235,11 @@ async function confirmDelete() {
     state.activeProjectId = null;
     state.activeThreadId = null;
   }
-  // Clean up gating + pending + status state bound to the deleted Muse
+  // Clean up gating + pending state bound to the deleted Muse
   state.ready.delete(p.id);
   saveReady();
   for (const [k, pe] of state.pendingSends) {
     if (pe.project_id === p.id) state.pendingSends.delete(k);
-  }
-  for (const t of state.threads) {
-    if (t.project_id === p.id) {
-      state.statusByThread.delete(t.id);
-      state.statusPending.delete(t.id);
-    }
   }
   recomputeMeta();
   renderAll();
@@ -3319,8 +4265,10 @@ btnDelConfirm.addEventListener('click', confirmDelete);
 inputMsg.addEventListener('input', function () { resizeInput(); updateSendState(); });
 inputMsg.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  else if (e.key === 'Escape' && state.replyTo) { e.preventDefault(); cancelReply(); }
 });
-btnSend.addEventListener('click', sendMessage);
+btnSend.addEventListener('click', function () { if (stopModeNow()) stopActive(); else sendMessage(); });
+btnRbCancel.addEventListener('click', cancelReply);
 searchInput.addEventListener('input', renderSidebar);
 
 /* Collapse / expand the sidebar — remember the state in localStorage */
@@ -3357,6 +4305,7 @@ btnCfgSave.addEventListener('click', saveMuseCfg);
 btnCfgCancel.addEventListener('click', function () { if (!state.savingCfg) { cfgProject = null; hideModal(modalMuseCfg); } });
 cfgClose.addEventListener('click', function () { if (!state.savingCfg) { cfgProject = null; hideModal(modalMuseCfg); } });
 cfgTags.addEventListener('change', syncCfgChips);
+cfgSys.addEventListener('change', syncCfgSys);
 cfgName.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !state.savingCfg) { e.preventDefault(); saveMuseCfg(); }
 });
@@ -3379,6 +4328,7 @@ btnCfgDelete.addEventListener('click', function () {
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Escape') return;
   if (!ctxMenu.hidden) { closeMenu(); return; }
+  if (!modalView.hidden) { closeViewer(); return; }
   if (!modalWizard.hidden) { if (!wiz.busy) closeWizard(); return; }
   if (!modalToken.hidden) { hideModal(modalToken); return; }
   if (!modalDelete.hidden) { if (!state.deleting) { delTarget = null; hideModal(modalDelete); } return; }

@@ -72,13 +72,22 @@ Proper interactive docs ship with the server: **Swagger UI at `/docs`** and **Re
 - A lockfile (`state/puller.lock`) guarantees exactly ONE puller per folder.
 - Operating rules for the Muse: `client/AGENTS.md` (Dropbox-only assets, inbox/outbox protocol, cursor prohibitions…). Full install walkthrough: `client/setup_guide.txt`.
 
-## Usage / context bar
+## Resource previews & message meta
 
-Below the composer, the web UI shows what the **open thread** costs the Muse — powered by the Muse itself:
+Dropbox links the Muse returns render as **preview cards** right in the chat:
 
-- **⟳** (or typing `/status` in the composer) sends a `/status` request into the thread. The Muse runs its platform's `/status` command and answers with its raw output wrapped in `<<<STATUS>>>…<<<END_STATUS>>>` (contract in `client/AGENTS.md` §2).
-- The web UI parses that reply and renders it in the bar — with a small **context meter** when the output contains a percentage. Requests and replies are plumbing: hidden from the chat history, unread counts, and previews.
-- Per-thread memory: switching threads shows that thread's latest status; a request that gets no answer in 90s raises a "No /status reply" toast (daemon down or the Muse's client zip predates v5).
+- Images (jpg/png/webp/…) show an inline thumbnail, videos (mp4/webm/…) an inline player, audio a player bar — streamed directly via Dropbox `raw=1`. Click the preview (or the file name row) for the direct download (`dl=1`).
+- PDFs get a 👁 toggle that expands an embedded viewer (loaded lazily on first open); any other file keeps a plain download card. A preview that fails to load falls back to the card gracefully.
+- Time and the send-state chip (`sending → ✓ sent → ✓✓ received / ✗ failed`) sit **outside** the bubble, on a small meta line under it.
+- While a send is in flight or the Muse is typing, the send button turns into a red **■ Stop** — abort the in-flight send (the text returns to the composer) or stop the waiting UI (typing bubble); the Muse's reply then simply arrives as a normal message.
+
+The old usage/`/status` bar was removed. Its plumbing rows still live in older threads — the web UI keeps filtering `/status` requests and `<<<STATUS>>>…` replies out of the chat history.
+
+## Auto-titling & the hidden ⌘ sys channel
+
+New threads start as **"New thread"**; after the Muse's first answer the web UI asks the Muse — through a **hidden `⌘ sys` thread** (one per Muse, created lazily) — to propose a short title and applies it automatically. The channel rides the normal message pipeline, so **no client-zip change is needed**: the daemon already reads every project thread and replies to the same `thread_id`. System rows never render in a real thread and never count toward previews or unread badges; one task runs per Muse at a time, and requests/replies there cost regular Muse turns.
+
+To peek at the channel: hover the Muse → ⚙ → **Display hidden thread On** — the `⌘ sys` thread then stays pinned at the top of that Muse's group (it only exists after the first automated task). Pinned threads show their plain title in the Pinned section, without the Muse-name prefix.
 
 ## Tags: chat / image / video
 
