@@ -224,6 +224,23 @@ def field_text(data, name, max_len):
 
 # ---------- SSE realtime ----------
 
+# E2E v7: the messages table gains envelope columns when the v4 migration runs.
+# Older projects (plain v3 schema) reject the extra columns with a PostgREST
+# error — probe once, remember, and fall back to the legacy select. Rows are
+# then forwarded verbatim either way; only the UI decrypts.
+_SSE_COLS_FULL = "id,project_id,thread_id,role,text,created_at,ciphertext,nonce,sender_key_id,enc_version,alg"
+_SSE_COLS_LEGACY = "id,project_id,thread_id,role,text,created_at"
+_sse_cols = _SSE_COLS_FULL
+
+def _sse_select_cols():
+    global _sse_cols
+    return _sse_cols
+
+def _sse_note_cols(ok):
+    # sticky: once fallen back to legacy, a later v4 migration is picked up on restart
+    global _sse_cols
+    _sse_cols = _SSE_COLS_FULL if ok else _SSE_COLS_LEGACY
+
 def sse_events(wfile):
     """Poll messages every 3s; stream new ones (id > connection watermark) as SSE."""
     last_id = None
@@ -231,9 +248,12 @@ def sse_events(wfile):
     while True:
         try:
             r = requests.get(
-                sb_url("/rest/v1/messages?select=id,project_id,thread_id,role,text,created_at&order=id.desc&limit=200"),
+                sb_url(f"/rest/v1/messages?select={_sse_select_cols()}&order=id.desc&limit=200"),
                 headers=sb_headers(), timeout=15,
             )
+            if r.status_code == 400 and _sse_cols == _SSE_COLS_FULL:
+                _sse_note_cols(False)  # v3 schema — retry with the legacy select
+                continue
             if r.status_code == 200:
                 msgs = sorted(r.json(), key=lambda m: m["id"])
                 if last_id is None:
@@ -632,11 +652,19 @@ class Handler(SimpleHTTPRequestHandler):
             limit = int(s)
         if self._api_require("threads", thread_id, "thread_not_found", "thread") is None:
             return
-        path = (f"/rest/v1/messages?select=id,thread_id,project_id,role,text,created_at"
+        cols = _SSE_COLS_FULL
+        path = (f"/rest/v1/messages?select={cols}"
                 f"&thread_id=eq.{thread_id}&order=id.asc&limit={limit}")
         if after_id is not None:
             path += f"&id=gt.{after_id}"
         r = self._sb_api("GET", path)
+        if r is not None and r.status_code == 400 and cols == _SSE_COLS_FULL:
+            _sse_note_cols(False)  # v3 schema — retry with the legacy select
+            path = (f"/rest/v1/messages?select={_SSE_COLS_LEGACY}"
+                    f"&thread_id=eq.{thread_id}&order=id.asc&limit={limit}")
+            if after_id is not None:
+                path += f"&id=gt.{after_id}"
+            r = self._sb_api("GET", path)
         if r is None:
             return
         self._json(200, {"data": r.json()})

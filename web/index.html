@@ -1071,6 +1071,28 @@ input, textarea { caret-color: var(--caret-color); }
   .thread-row, .group-head { min-height: 44px; }
   #ctxMenu { font-size: 14px; }
 }
+/* ---- E2E v7 ---- */
+.e2e-banner-wrap { display: flex; flex-direction: column; gap: 6px; }
+.e2e-banner { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; }
+.e2e-banner.warn { background: rgba(255,183,77,.12); border: 1px solid rgba(255,183,77,.35); color: #e6b455; }
+.e2e-banner.alert { background: rgba(239,83,80,.12); border: 1px solid rgba(239,83,80,.4); color: #ef5350; }
+.e2e-banner-text { flex: 1; line-height: 1.45; }
+.e2e-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.chip--e2e.ok { color: #66bb6a; }
+.chip--e2e.warn { color: #e6b455; }
+.enc-badge { margin-right: 6px; font-size: 11px; opacity: .75; }
+.e2e-sas { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+.e2e-sas-row { display: flex; justify-content: center; gap: 12px; }
+.e2e-sas-group { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 19px; letter-spacing: 2px; background: rgba(127,127,127,.08); padding: 6px 10px; border-radius: 8px; }
+.e2e-w-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.e2e-w-text { font-size: 13px; line-height: 1.5; margin-bottom: 8px; opacity: .85; }
+.e2e-w-warn { font-size: 13px; line-height: 1.5; margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: rgba(255,183,77,.1); color: #e6b455; }
+.e2e-w-hint { font-size: 12px; opacity: .7; margin-bottom: 10px; }
+.e2e-w-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.cfg-e2e { border-top: 1px solid rgba(127,127,127,.18); margin-top: 10px; padding-top: 10px; }
+.cfg-e2e-line { font-size: 12.5px; margin-bottom: 8px; }
+.cfg-e2e-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.e2e-modal { max-width: 520px; }
 </style>
 </head>
 <body>
@@ -1120,6 +1142,7 @@ input, textarea { caret-color: var(--caret-color); }
         <span class="setup-dot" aria-hidden="true"></span>
         <span>This Muse is still setting up — waiting for its pong.</span>
       </div>
+      <div id="e2eBanner" class="e2e-banner-wrap" hidden></div>
       <div id="replyBar" hidden>
         <span id="rbIco" aria-hidden="true">↩</span>
         <div class="rb-body">
@@ -1288,7 +1311,7 @@ input, textarea { caret-color: var(--caret-color); }
     <div class="panel-body">
       <div class="f-group">
         <label class="f-label" for="renInput">Thread name</label>
-        <input id="renInput" class="f-input" type="text" autocomplete="off" maxlength="200">
+        <input id="renInput" class="f-input" type="text" autocomplete="off" maxlength="200" placeholder="Thread name (optional)">
       </div>
     </div>
     <div class="panel-foot">
@@ -1346,6 +1369,7 @@ input, textarea { caret-color: var(--caret-color); }
         </div>
         <div class="f-hint">When On, the thread stays pinned at the top of this Muse's group so you can inspect it; when Off, it is fully hidden. It only exists after the first automated task.</div>
       </div>
+      <div id="cfgE2E" class="cfg-e2e"></div>
       <div class="f-hint">Changes apply to this admin UI immediately; the Muse client picks up new capabilities on its next restart.</div>
     </div>
     <div class="panel-foot split">
@@ -1412,12 +1436,27 @@ input, textarea { caret-color: var(--caret-color); }
   </div>
 </div>
 
+<!-- E2E wizard (v7) — setup / verify / rekey -->
+<div id="modalE2E" class="overlay" hidden>
+  <div class="panel sm e2e-modal" role="dialog" aria-modal="true" aria-labelledby="e2eWizTitle">
+    <div class="panel-head">
+      <h2 id="e2eWizTitle">End-to-end encryption</h2>
+      <button type="button" id="e2eClose" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div id="e2eWizardBody"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Shared dropdown menu (thread ⋯ menu) -->
 <div id="ctxMenu" role="menu" hidden></div>
 
 <!-- Toast container -->
 <div id="toasts" aria-live="polite"></div>
 
+<script src="vendor/nacl-fast.min.js"></script>
+<script src="e2e-crypto.js"></script>
 <script>
 'use strict';
 (function () {
@@ -1465,7 +1504,6 @@ const SETUP_POLL_MS = 3000;   // wizard Step 2 — how often to query for the se
 // the daemon already treats it as just another thread.
 const SYS_TITLE = '⌘ sys';
 const SYS_TIMEOUT_MS = 300000; // give up on an unanswered sys task after 5 minutes (the daemon pulls on a ~3-minute schedule)
-const SYS_TEXT_CAP = 600;      // how much of the first user message feeds the title task
 // Background health jobs through the ⌘ sys channel: a ping proves the Muse's
 // account + daemon pipeline still answers; /status refreshes the quota chip.
 const PING_EVERY_MS = 10 * 60000;   // ping every 10 minutes
@@ -1473,8 +1511,6 @@ const STATUS_EVERY_MS = 30 * 60000; // /status every 30 minutes
 const SYS_TICK_MS = 15000;          // scheduler granularity
 // Interim thread title: the first message's first 10 words — it holds until
 // the Muse answers the title task with a name of its own
-const TITLE_WORDS = 10;
-const TITLE_MAX_LEN = 80;
 
 /* ================================================================
    TRẠNG THÁI CLIENT (theo architecture A5)
@@ -1572,8 +1608,6 @@ const state = {
   sysBusy: null,             // in-flight {task, sysTid, pid} — one task per Muse at a time
   sysTimer: null,            // give-up timer for the in-flight task
   sysCreating: new Map(),    // Map<projectId, Promise> — de-duplicate concurrent ⌘ sys thread creation
-  titleAsked: new Set(),     // threadIds already sent a title task this session
-  interimTitles: new Map(),  // Map<threadId, interim title> — first-message titles, replaceable by the Muse's own
   statusData: new Map(),     // Map<projectId, {raw, quota, at}> — each Muse's last /status answer
   sysNext: new Map(),        // Map<projectId, {ping, status}> — epoch of the next background job per Muse
   sysSchedTimer: null,       // background ping + /status ticker
@@ -1638,6 +1672,7 @@ const vwClose = E('vwClose'), vwCloseBtn = E('vwCloseBtn');
 const btnMenu = E('btnMenu'), sbBackdrop = E('sbBackdrop');
 const modalConnect = E('modalConnect'), connUrl = E('connUrl'), connKey = E('connKey');
 const connEmail = E('connEmail'), connPass = E('connPass'), connFb = E('connFb'), btnConnGo = E('btnConnGo');
+const modalE2E = E('modalE2E'), e2eCloseBtn = E('e2eClose');
 
 /* ================================================================
    TOAST — the single error channel (architecture A6). Errors auto-dismiss
@@ -1819,7 +1854,10 @@ function cloudAccessTokenValid() {
 /* Normalize the Supabase URL from the setup message: trim, strip trailing '/', require https:// */
 function cloudNormalizeUrl(raw) {
   const u = String(raw || '').trim().replace(/\/+$/, '');
-  return /^https:\/\/[a-z0-9.-]+/i.test(u) ? u : null;
+  if (/^https:\/\/[a-z0-9.-]+/i.test(u)) return u;
+  // local testing (mock Supabase / local proxies) — plain http on loopback only
+  if (/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(u)) return u;
+  return null;
 }
 
 /* Password sign-in against Supabase GoTrue, straight from the browser. */
@@ -1989,6 +2027,7 @@ function boot() {
   state.activeThreadId = null;
   state.chatError = null;
   app.hidden = false;
+  e2eInitPromise = e2eInit();
   ensurePoll();
   if (state.typingTimer === null) state.typingTimer = setInterval(sweepTyping, 5000); // typing auto-expiry
   startSysSchedule(); // background ping + /status quota jobs
@@ -2059,7 +2098,7 @@ async function loadData() {
     const results = await Promise.all([
       rest('/rest/v1/projects?select=id,muse_id,name,tags,email,secret,user_id&order=id.asc'),
       rest('/rest/v1/threads?select=id,project_id,title,last_read_id,created_at&order=id.asc'),
-      rest('/rest/v1/messages?select=id,project_id,thread_id,role,text,created_at&order=id.desc&limit=200')
+      rest('/rest/v1/messages?select=' + msgSelectCols() + '&order=id.desc&limit=200')
     ]);
     state.projects = results[0] || [];
     state.threads = results[1] || [];
@@ -2071,8 +2110,10 @@ async function loadData() {
         if (m.id > mx) state.maxMuseId.set(m.thread_id, m.id);
       }
     }
+    if (e2eInitPromise) { try { await e2eInitPromise; } catch (e0) { /* engine stays legacy */ } }
+    await e2eHydrateBulk(state.msgs200);
     // Typing + status rows are daemon plumbing — never stored for rendering (spec §3)
-    state.msgs200 = state.msgs200.filter(function (m) { return !isTypingRow(m) && !isStatusRow(m); });
+    state.msgs200 = state.msgs200.filter(function (m) { return !isTypingRow(m) && !isStatusRow(m) && !m._drop; });
     state.messagesByThread = new Map();
     recomputeMeta();
     reconcilePending(state.msgs200);
@@ -2272,12 +2313,6 @@ async function ensureSysThread(pid) {
 /* The request is self-contained — the ⌘ sys context never sees the real
    thread, so every task carries its own data + exact output format. */
 function sysTaskText(task) {
-  if (task.kind === 'title') {
-    return 'TASK: suggest a short, clear title for a chat thread whose first message is:\n\n' +
-      '"""\n' + task.text + '\n"""\n\n' +
-      'Reply with ONLY the title: at most 10 words, no quotes, no explanation, nothing else. ' +
-      'Answer right away from the text above — do not overthink, do not use tools, do not double-check.';
-  }
   if (task.kind === 'status') {
     return '/status'; // the exact command — the Muse answers in the <<<STATUS>>> wrapper
   }
@@ -2307,7 +2342,7 @@ async function pumpSysQueue() {
     await rest('/rest/v1/messages', {
       method: 'POST',
       prefer: 'return=representation',
-      body: { thread_id: st.id, project_id: st.project_id, role: 'user', text: sysTaskText(task) }
+      body: await e2eRequestBody({ thread_id: st.id, project_id: st.project_id, text: sysTaskText(task) })
     });
   } catch (e) {
     sysClearBusy(); // send failed — drop quietly, non-critical
@@ -2348,8 +2383,7 @@ function handleSysReply(m, fresh) {
   if (!fresh || isTypingRow(m)) return;
   const busy = state.sysBusy;
   if (!busy || busy.sysTid !== m.thread_id) return; // stray/stale row — stays hidden, ignored
-  if (busy.task.kind === 'title') applySysTitle(busy.task, m.text);
-  else if (busy.task.kind === 'status') applySysStatus(busy.pid, m.text);
+  if (busy.task.kind === 'status') applySysStatus(busy.pid, m.text);
   // 'ping' — any real reply proves the account + daemon pipeline is alive
   sysClearBusy();
   pumpSysQueue();
@@ -2384,82 +2418,9 @@ function applySysStatus(pid, rawText) {
   if (pid === state.activeProjectId) renderQuota();
 }
 
-function applySysTitle(task, raw) {
-  let title = String(raw || '').trim().replace(/\s+/g, ' ');
-  title = title.replace(/^["'«»“”‘’]+/, '').replace(/["'«»“”‘’]+$/, ''); // unwrap quotes
-  if (!title || title === SIGNAL_PONG || title.length > 120) return; // junk answer — keep 'New thread'
-  const t = state.threads.find(function (x) { return x.id === task.threadId; });
-  if (t.title !== 'New thread' && !titleIsInterim(t)) return; // owner renamed meanwhile — never overwrite
-  rest('/rest/v1/threads?id=eq.' + t.id, { method: 'PATCH', body: { title: title } })
-    .then(function () {
-      t.title = title;
-      state.interimTitles.delete(t.id); // the Muse's own name took over
-      renderSidebar();
-      renderHeader();
-    })
-    .catch(function () { /* keep the interim title — non-critical */ });
-}
-
-/* Auto-title: the first Muse answer in a thread still called 'New thread'
-   kicks off a title task through the ⌘ sys channel. Fires on the typing row
-   too (asks while the Muse is still composing). Once per thread per session. */
-function maybeAutoTitle(m, opts) {
-  opts = opts || {};
-  if (!opts.fresh) return;
-  const t = state.threads.find(function (x) { return x.id === m.thread_id; });
-  if (!t || isSysThread(t) || isSetupThread(t)) return;
-  if (state.titleAsked.has(t.id)) return;
-  if (t.title !== 'New thread' && !titleIsInterim(t)) return; // owner-named threads keep their name
-  if (!projectReady(t.project_id)) return;
-  const first = firstUserText(t.id);
-  if (!first) return;
-  state.titleAsked.add(t.id);
-  enqueueSysTask({ kind: 'title', threadId: t.id, text: String(first).slice(0, SYS_TEXT_CAP) });
-}
-
-function firstUserText(tid) {
-  // The open thread's cache is complete for a fresh thread; the recent-200
-  // window covers replies that landed while the thread was not open.
-  const rows = state.messagesByThread.get(tid) ||
-    state.msgs200.filter(function (m) { return m.thread_id === tid; });
-  for (const m of rows) {
-    if (m.role === 'user') return m.text;
-  }
-  return null;
-}
-
-/* Interim thread title — the first message's first 10 words. It holds until
-   the Muse answers the title task with a better name (or the owner renames). */
-function interimTitleFrom(text) {
-  let s = String(text || '').replace(RE_DROPBOX, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) return null;
-  const words = s.split(' ');
-  let t = words.slice(0, TITLE_WORDS).join(' ');
-  if (words.length > TITLE_WORDS || t.length > TITLE_MAX_LEN) t = t.slice(0, TITLE_MAX_LEN).trimEnd() + '…';
-  return t;
-}
-
-function applyInterimTitle(tid, text) {
-  const t = state.threads.find(function (x) { return x.id === tid; });
-  if (!t || isSysThread(t) || isSetupThread(t)) return;
-  if (t.title !== 'New thread') return; // already named (interim / Muse / owner)
-  const title = interimTitleFrom(text);
-  if (!title) return;
-  state.interimTitles.set(tid, title);
-  t.title = title; // optimistic
-  renderSidebar();
-  renderHeader();
-  rest('/rest/v1/threads?id=eq.' + tid, { method: 'PATCH', body: { title: title } })
-    .catch(function () { /* keep the optimistic title — non-critical */ });
-}
-
-/* Is this thread still on its interim first-message title? Re-derives from
-   the first user message, so it also works after a page reload. */
-function titleIsInterim(t) {
-  if (state.interimTitles.get(t.id) === t.title) return true;
-  const first = firstUserText(t.id);
-  return !!first && interimTitleFrom(first) === t.title;
-}
+/* Auto-title was removed in v7 (design doc §4): threads are named by the
+   owner, or show the first decrypted message as the preview. The functions
+   above (applySysTitle / maybeAutoTitle / interim titles) are gone. */
 
 /* Ask the server which not-ready Muses already have a pong row (covers pongs
    older than the latest-200 window). Quiet on load; poll ticks retry the
@@ -2476,26 +2437,786 @@ async function checkPongPending() {
 
 /* Ingest one message (realtime / poll / our own POST) — de-duplicated by id.
    Daemon signal rows are processed here; typing rows never enter the caches. */
-function ingestMessage(m, opts) {
+/* ================================================================
+   E2E — v7 end-to-end encryption, web side.
+   Design: docs/e2e-webui-design.md · Contract mirror: client-v7/crypto.py +
+   safety.py · Byte-for-byte verified against docs/e2e-test-vectors.json.
+   Phases per project (state.e2e.byPid):
+     legacy    — no relay_keys involvement anywhere; everything plaintext (v6.2 daemon)
+     noserver  — this device has a key (or had one) but the Muse hasn't published (6.2)
+     fresh     — Muse published, this device never set up (6.1 → wizard intro)
+     pending   — both keys exist, SAS not confirmed yet (6.3)
+     ready     — both verified (composer open, everything encrypted)
+     frozen    — Muse key changed unexpectedly (6.5, security alert)
+     lostkey   — server has key history, this device lost its key (6.6)
+     retired   — this device's key was revoked from elsewhere (6.13)
+   The Muse's key stays plaintext-signal compatible: '...' / 'pong' rows keep
+   flowing as v6 constants (contract §5 of the brief), so every existing
+   signal path is untouched.
+   ================================================================ */
+const E2E_DB = 'muse-relay-e2e';
+let e2eDb = null;
+let e2eSyncTimer = null;
+const ingestQueue = [];
+let ingestPumping = false;
+let e2eInitPromise = null;
+
+function e2eBootState() {
+  if (!state.e2e) {
+    state.e2e = {
+      on: false,        // engine usable (scripts + WebCrypto + IDB)
+      idbOk: false,
+      cols: false,      // messages table has the envelope columns (v4 schema applied)
+      keysTable: false, // relay_keys table exists
+      tier: null,
+      byPid: new Map(), // pid → per-Muse E2E record
+      versionToastShown: false,
+      chan: null        // BroadcastChannel('mr-e2e')
+    };
+  }
+  return state.e2e;
+}
+
+function e2eStateFor(pid) {
+  const e = e2eBootState();
+  if (!e.byPid.has(pid)) {
+    e.byPid.set(pid, {
+      pid: pid,
+      phase: 'legacy',
+      myKey: null,          // IDB active key {pid, keyId, publicB64, priv, tier}
+      museKey: null,        // server row {keyId, publicB64, verified}
+      myRow: null,          // server row {keyId, verified, publicB64}
+      everE2E: false,       // a Muse key row was seen at least once
+      hadWebRow: false,     // any web row ever existed (incl. revoked)
+      verifiedMuseKid: null,// last out-of-band-verified Muse key (from IDB meta)
+      legacyAfter: false,   // 6.12 — plaintext row arrived post-verified
+      dropFail: new Map(),  // threadId → consecutive decrypt fails (6.8 burst)
+      sas: null,            // wizard SAS cache {grouped, copyable}
+      before: new Map()     // beforenm cache keyed by Muse key_id
+    });
+  }
+  return e.byPid.get(pid);
+}
+
+/* ---------- IndexedDB (keys + plaintext cache + meta) ---------- */
+function e2eIdbOpen() {
+  return new Promise(function (resolve) {
+    let req;
+    try { req = indexedDB.open(E2E_DB, 1); } catch (e) { resolve(null); return; }
+    req.onupgradeneeded = function () {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('keys')) db.createObjectStore('keys', { keyPath: 'pid' });
+      if (!db.objectStoreNames.contains('plain')) db.createObjectStore('plain', { keyPath: 'msgId' });
+      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'name' });
+    };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { resolve(null); };
+    req.onblocked = function () { resolve(null); };
+  });
+}
+function e2eIdbRun(store, mode, fn) {
+  return new Promise(function (resolve, reject) {
+    if (!e2eDb) { reject(new Error('idb closed')); return; }
+    let out;
+    try {
+      const tx = e2eDb.transaction(store, mode);
+      const st = tx.objectStore(store);
+      out = fn(st);
+      tx.oncomplete = function () {
+        if (out && typeof out.result !== 'undefined') resolve(out.result);
+        else resolve(null);
+      };
+      tx.onerror = function () { reject(tx.error || new Error('idb tx failed')); };
+      tx.onabort = function () { reject(tx.error || new Error('idb tx aborted')); };
+    } catch (e) { reject(e); }
+  });
+}
+function e2eIdbGet(store, key) {
+  return new Promise(function (resolve, reject) {
+    if (!e2eDb) { resolve(null); return; }
+    try {
+      const tx = e2eDb.transaction(store, 'readonly');
+      const rq = tx.objectStore(store).get(key);
+      rq.onsuccess = function () { resolve(rq.result || null); };
+      rq.onerror = function () { reject(rq.error); };
+    } catch (e) { reject(e); }
+  });
+}
+function e2eIdbPut(store, rec) {
+  return e2eIdbRun(store, 'readwrite', function (st) { st.put(rec); });
+}
+function e2eIdbClear(store) {
+  return e2eIdbRun(store, 'readwrite', function (st) { st.clear(); });
+}
+
+/* ---------- init + schema probe ---------- */
+async function e2eInit() {
+  const e = e2eBootState();
+  if (typeof MRE2E === 'undefined' || typeof nacl === 'undefined') {
+    console.warn('[e2e] crypto scripts missing — running in legacy mode');
+    return;
+  }
+  try { MRE2E.init({ nacl: nacl }); } catch (err) { console.warn('[e2e]', err.message); return; }
+  e.tier = await MRE2E.detectTier();
+  e2eDb = await e2eIdbOpen();
+  e.idbOk = !!e2eDb;
+  if (!e.idbOk) {
+    // 6.7 — encryption needs browser storage; the app still runs in legacy mode
+    console.warn('[e2e] IndexedDB unavailable — E2E disabled (legacy mode)');
+  }
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      e.chan = new BroadcastChannel('mr-e2e');
+      e.chan.onmessage = function (ev) {
+        if (ev && ev.data && ev.data.type === 'freeze' && ev.data.pid) {
+          const st = e.byPid.get(ev.data.pid);
+          if (st) { st.phase = 'frozen'; renderAll(); }
+        }
+      };
+    }
+  } catch (err2) { /* multi-tab sync is best-effort */ }
+  await e2eProbeSchema();
+  e.on = e.idbOk;
+  await e2eSyncAll();
+  if (e2eSyncTimer === null) e2eSyncTimer = setInterval(e2eSyncAll, 15000);
+}
+
+/* Probe the DB shape: envelope columns on messages + the relay_keys table.
+   Both are additive v4 migrations the owner may not have run yet — the UI
+   stays fully usable in legacy mode until they exist. */
+async function e2eProbeSchema() {
+  const e = e2eBootState();
+  try {
+    await rest('/rest/v1/messages?select=id,ciphertext&limit=1');
+    e.cols = true;
+  } catch (err) { e.cols = false; }
+  try {
+    await rest('/rest/v1/relay_keys?select=key_id&limit=1');
+    e.keysTable = true;
+  } catch (err2) { e.keysTable = false; }
+}
+
+function msgSelectCols() {
+  const e = e2eBootState();
+  return 'id,project_id,thread_id,role,text,created_at' +
+    (e.cols ? ',ciphertext,nonce,sender_key_id,enc_version,alg' : '');
+}
+
+/* ---------- relay_keys sync + phase machine ---------- */
+function e2eRest(path, opts) {
+  // relay_keys rows are per-Muse-user; in LAN mode the proxy bypasses RLS so
+  // the project's user_id filter is applied explicitly (same value Cloud RLS
+  // would enforce).
+  const p = projectById.apply(null, arguments.length > 1 ? [] : []);
+  return null; // placeholder — replaced below
+}
+async function e2eFetchKeys(pid) {
+  const p = projectById(pid);
+  if (!p || !p.user_id) return { muse: null, mine: null, anyWeb: false };
+  const scope = '&user_id=eq.' + p.user_id;
+  let muse = null, mine = null, anyWeb = false;
+  try {
+    const rows = await rest('/rest/v1/relay_keys?select=endpoint,public_key,key_id,verified,created_at,revoked_at' +
+      scope + '&order=created_at.desc&limit=25');
+    const list = rows || [];
+    for (const r of list) {
+      if (r.endpoint === 'muse' && r.revoked_at == null && !muse) muse = r;
+      if (r.endpoint === 'web') { anyWeb = true; if (r.revoked_at == null && !mine) mine = r; }
+    }
+  } catch (err) {
+    if (String(err.message || '').indexOf('Could not find the table') !== -1 ||
+        (err && err.status === 404)) { e2eBootState().keysTable = false; }
+    return { muse: null, mine: null, anyWeb: false };
+  }
+  return { muse: muse, mine: mine, anyWeb: anyWeb };
+}
+
+async function e2eSyncAll() {
+  const e = e2eBootState();
+  if (!e.on || !e.cols || !e.keysTable) {
+    if (!e.cols || !e.keysTable) await e2eProbeSchema();
+    if (!e.cols || !e.keysTable) return;
+  }
+  let changed = false;
+  for (const p of state.projects) {
+    changed = (await e2eSyncProject(p.id)) || changed;
+  }
+  if (changed) { renderAll(); e2eRenderBanner(); }
+}
+
+async function e2eSyncProject(pid) {
+  const e = e2eBootState();
+  if (!e.on || !e.cols || !e.keysTable) return false;
+  const st = e2eStateFor(pid);
+  const k = await e2eFetchKeys(pid);
+  const prev = st.phase;
+  st.museKey = k.muse ? { keyId: k.muse.key_id, publicB64: k.muse.public_key, verified: !!k.muse.verified } : null;
+  st.myRow = k.mine ? { keyId: k.mine.key_id, verified: !!k.mine.verified, publicB64: k.mine.public_key } : null;
+  st.hadWebRow = k.anyWeb;
+  if (k.muse) st.everE2E = true;
+  // load my local key (kept across syncs)
+  if (!st.myKey) {
+    try { st.myKey = await e2eIdbGet('keys', pid); } catch (e2) { st.myKey = null; }
+  }
+  // verified-Muse-kid bookkeeping lives in IDB meta (survives reloads)
+  if (st.verifiedMuseKid === null) {
+    try {
+      const meta = await e2eIdbGet('meta', 'e2eState');
+      if (meta && meta.verifiedKids && meta.verifiedKids[pid]) st.verifiedMuseKid = meta.verifiedKids[pid];
+    } catch (e3) { /* fresh meta */ }
+  }
+
+  let phase;
+  if (!k.muse && !k.mine && !k.anyWeb) phase = 'legacy';
+  else if (!k.muse) phase = 'noserver';
+  else if (!st.myKey) phase = k.anyWeb ? 'lostkey' : 'fresh';
+  else if (st.verifiedMuseKid && k.muse.key_id !== st.verifiedMuseKid) phase = 'frozen';
+  else if (st.myRow && st.myRow.keyId !== st.myKey.keyId) phase = 'retired';
+  else if (k.muse.verified && st.myRow && st.myRow.verified) phase = 'ready';
+  else phase = 'pending';
+
+  st.phase = phase;
+  if (phase === 'ready') {
+    st.verifiedMuseKid = k.muse.key_id;
+    try {
+      const meta = await e2eIdbGet('meta', 'e2eState');
+      const rec = meta || { name: 'e2eState', verifiedKids: {} };
+      if (!rec.verifiedKids) rec.verifiedKids = {};
+      rec.verifiedKids[pid] = k.muse.key_id;
+      await e2eIdbPut('meta', rec);
+    } catch (e4) { /* non-fatal */ }
+    st.dropFail = new Map(); // fresh verified state — reset the burst counter
+  }
+  if (phase !== 'ready') st.before = new Map(); // key pair changed — drop derived keys
+  if (phase !== prev) {
+    e2eRenderBanner();
+    if (typeof e2eRenderCfg === 'function' && state.activeProjectId === pid) e2eRenderCfg();
+    if (typeof BroadcastChannel !== 'undefined' && e.chan && phase === 'frozen') {
+      try { e.chan.postMessage({ type: 'freeze', pid: pid }); } catch (e5) { /* best-effort */ }
+    }
+    return true;
+  }
+  return false;
+}
+
+function e2eComposerOpen(pid) {
+  const e = e2eBootState();
+  if (!e.on || !e.cols || !e.keysTable) return true; // legacy mode — always open
+  const st = e.byPid.get(pid);
+  if (!st) return true;
+  return st.phase === 'legacy' || st.phase === 'ready';
+}
+
+/* ---------- decrypt: one gate, hydrate before the pipeline ---------- */
+async function e2eBeforenmFor(st) {
+  const kid = st.museKey ? st.museKey.keyId : '';
+  if (st.before.has(kid)) return st.before.get(kid);
+  if (!st.museKey || !st.myKey) return null;
+  try {
+    const peerRaw = MRE2E.b64decode(st.museKey.publicB64, 'muse public key');
+    const bn = await MRE2E.beforenm(st.myKey.priv, peerRaw);
+    st.before.set(kid, bn);
+    return bn;
+  } catch (err) { return null; }
+}
+
+async function e2eCachePlain(m) {
+  try {
+    await e2eIdbPut('plain', {
+      msgId: m.id, threadId: m.thread_id, projectId: m.project_id, role: m.role,
+      text: m.text || '', createdAt: m.created_at || '',
+      enc: m._enc || 'legacy', decryptedAt: Date.now()
+    });
+  } catch (err) { /* cache is best-effort */ }
+}
+
+/* beforenm for ANY sender this device can decrypt: the Muse's key (incoming)
+   or OUR OWN web key (our own messages echo back through the relay — the
+   self-box decrypts because crypto_box(my_priv, my_pub) is a valid box). */
+async function e2eResolveBeforenm(st, senderKid) {
+  if (st.myKey && senderKid === st.myKey.keyId) {
+    const key = 'self:' + st.myKey.keyId;
+    if (st.before.has(key)) return st.before.get(key);
+    const myPubRaw = MRE2E.b64decode(st.myKey.publicB64, 'my public key');
+    const bn = await MRE2E.beforenm(st.myKey.priv, myPubRaw);
+    st.before.set(key, bn);
+    return bn;
+  }
+  if (st.museKey && senderKid === st.museKey.keyId) return e2eBeforenmFor(st);
+  return null;
+}
+
+async function e2eHydrateRow(m) {
+  const e = e2eBootState();
+  if (!m || typeof m.id !== 'number') return;
+  if (!e.on || !e.cols) return; // legacy schema — rows have text as usual
+  const st = e2eStateFor(m.project_id);
+  if (!st || st.phase === 'legacy' || !st.everE2E) return;
+  if (m.ciphertext != null) {
+    if (m.enc_version !== 1 || m.alg !== 'crypto_box') {
+      m._drop = 'unsupported';
+      if (!e.versionToastShown) {
+        e.versionToastShown = true;
+        toastOnce('e2ever', 6000, { kind: 'warn', title: "This app is outdated and can't read new encrypted messages. Reload to update." });
+      }
+      return;
+    }
+    if (m.role === 'muse' && (m.text === SIGNAL_TYPING || m.text === SIGNAL_PONG)) return; // impossible, defensive
+    const res = await MRE2E.decryptRow(m, {
+      getBeforenm: async function (kid) { return e2eResolveBeforenm(st, kid); },
+      allowLegacy: false
+    });
+    if (res.drop) {
+      m._drop = res.drop;
+      const n = (st.dropFail.get(m.thread_id) || 0) + 1;
+      st.dropFail.set(m.thread_id, n);
+      return;
+    }
+    m.text = res.package.body; // the decrypted body drives every existing consumer
+    m._enc = 'e2e';
+    st.dropFail.delete(m.thread_id);
+    await e2eCachePlain(m);
+    return;
+  }
+  // No ciphertext — legacy content or a plaintext signal row
+  if (m.role === 'muse' && (m.text === SIGNAL_TYPING || m.text === SIGNAL_PONG)) return;
+  if (m.text == null) return;
+  m._enc = 'legacy';
+  if (st.verifiedMuseKid && (st.phase === 'ready' || st.phase === 'frozen')) {
+    st.legacyAfter = true; // 6.12 — a plaintext message arrived after verification
+  }
+  await e2eCachePlain(m);
+}
+
+async function e2eHydrateAll(rows) {
+  for (const m of rows) await e2eHydrateRow(m);
+}
+
+/* Bulk hydrate for boot/openThread — cached plaintext first (instant),
+   then decrypt the misses. Dropped rows are marked for the filters. */
+async function e2eHydrateBulk(rows) {
+  const e = e2eBootState();
+  if (!e.on || !e.cols) return;
+  for (const m of rows) {
+    if (m.ciphertext == null) { await e2eHydrateRow(m); continue; }
+    const cached = await e2eIdbGet('plain', m.id);
+    if (cached && typeof cached.text === 'string') {
+      m.text = cached.text;
+      m._enc = cached.enc || 'e2e';
+    } else {
+      await e2eHydrateRow(m);
+    }
+  }
+}
+
+/* Serial ingest pump — hydrate (decrypt) runs BEFORE the v6 pipeline. */
+function queueIngest(m, opts, cb) {
+  ingestQueue.push([m, opts || {}, cb || null]);
+  if (!ingestPumping) pumpIngest();
+}
+async function pumpIngest() {
+  ingestPumping = true;
+  try {
+    while (ingestQueue.length) {
+      const item = ingestQueue.shift();
+      try { await e2eHydrateRow(item[0]); } catch (err) { /* drop quietly */ }
+      const added = ingestMessageCore(item[0], item[1]);
+      if (item[2]) { try { item[2](added, item[0]); } catch (err2) { /* ignore */ } }
+    }
+  } finally { ingestPumping = false; }
+}
+
+/* ---------- encrypt: send path ---------- */
+async function e2eEnvelopeFor(pid, text, threadId) {
+  const st = e2eStateFor(pid);
+  if (!st || st.phase !== 'ready' || !st.museKey || !st.myKey) return null;
+  const bn = await e2eBeforenmFor(st);
+  if (!bn) return null;
+  return MRE2E.encryptUserEnvelope(text, String(threadId),
+    new Date().toISOString(), bn, st.myKey.keyId);
+}
+
+function e2eRequestBody(entry) {
+  // Returns a promise resolving to the POST body (encrypted or legacy text)
+  return e2eEnvelopeFor(entry.project_id, entry.text, entry.thread_id).then(function (env) {
+    if (!env) return { thread_id: entry.thread_id, project_id: entry.project_id, role: 'user', text: entry.text };
+    return {
+      thread_id: entry.thread_id, project_id: entry.project_id, role: 'user',
+      ciphertext: env.ciphertext, nonce: env.nonce,
+      sender_key_id: env.sender_key_id, enc_version: env.enc_version, alg: env.alg
+    };
+  });
+}
+
+/* ---------- wizard + key lifecycle ---------- */
+let e2eWizard = null; // { mode: 'setup'|'rekey'|'reverify', step, pid }
+
+function e2eOpenWizard(mode) {
+  const pid = state.activeProjectId;
+  const p = projectById(pid);
+  if (!p) return;
+  const e = e2eBootState();
+  if (!e.on) { toastOnce('e2enoidb', 6000, { kind: 'warn', title: 'Encryption needs browser storage. Turn off private browsing or allow site data for this page, then reload.' }); return; }
+  e2eWizard = { mode: mode, pid: pid, step: 'intro' };
+  e2eRenderWizard();
+  showModal(modalE2E);
+}
+
+function e2eSasFor(pid) {
+  const st = e2eStateFor(pid);
+  if (!st.museKey || !st.myKey) return null;
+  return MRE2E.computeSas(st.myKey.publicB64, st.myKey.keyId, st.museKey.publicB64, st.museKey.keyId);
+}
+
+async function e2eWizardNext() {
+  const w = e2eWizard;
+  if (!w) return;
+  if (w.step === 'intro') {
+    w.step = 'creating';
+    e2eRenderWizard();
+    try {
+      await e2eCreateLocalKey(w.pid, w.mode === 'setup' ? null : w.pid /* revoke replaced */);
+      w.step = 'waiting';
+    } catch (err) {
+      toastError('Could not create the encryption key', err);
+      w.step = 'intro';
+    }
+    e2eRenderWizard();
+    return;
+  }
+}
+
+/* Create (or replace) this device's key and publish it pending. */
+async function e2eCreateLocalKey(pid, revokePid) {
+  const p = projectById(pid);
+  if (!p) throw new Error('Project not found');
+  // multi-tab guard: two tabs must not publish two pending keys for one Muse
+  const publish = async function () {
+    const kp = await MRE2E.generateKeypair();
+    const keyId = await MRE2E.keyIdFromRaw(kp.publicRaw);
+    const publicB64 = MRE2E.b64encode(kp.publicRaw);
+    const rec = {
+      pid: pid, keyId: keyId, publicB64: publicB64,
+      priv: kp.privKey,           // CryptoKey (tier A) or Uint8Array (tier B) — IDB stores both
+      tier: kp.tier, status: 'active', createdAt: Date.now()
+    };
+    await e2eIdbPut('keys', rec);
+    if (revokePid !== null && revokePid !== undefined) {
+      // replacing an existing device key: revoke the old server row (new key = new row)
+      try {
+        await rest('/rest/v1/relay_keys?endpoint=eq.web&user_id=eq.' + p.user_id + '&key_id=neq.' + keyId + '&revoked_at=is.null',
+          { method: 'PATCH', body: { revoked_at: new Date().toISOString() } });
+      } catch (err) { /* best-effort — the newest row wins regardless */ }
+    }
+    await rest('/rest/v1/relay_keys', {
+      method: 'POST',
+      body: { user_id: p.user_id, endpoint: 'web', public_key: publicB64, key_id: keyId, verified: false }
+    });
+    const st = e2eStateFor(pid);
+    st.myKey = rec;
+    st.before = new Map();
+    return rec;
+  };
+  if (typeof navigator !== 'undefined' && navigator.locks && navigator.locks.request) {
+    return navigator.locks.request('mr-e2e-keygen', publish);
+  }
+  return publish();
+}
+
+/* Confirm the SAS: mark my row verified (the daemon does the same on its side
+   after the owner types the confirmation in the official Muse chat). */
+async function e2eConfirmMatch() {
+  const w = e2eWizard;
+  if (!w) return;
+  const p = projectById(w.pid);
+  const st = e2eStateFor(w.pid);
+  if (!p || !st.myKey) return;
+  try {
+    await rest('/rest/v1/relay_keys?endpoint=eq.web&user_id=eq.' + p.user_id + '&key_id=eq.' + st.myKey.keyId,
+      { method: 'PATCH', body: { verified: true } });
+  } catch (err) {
+    toastError('Could not save the verification', err);
+    return;
+  }
+  w.step = 'done';
+  e2eRenderWizard();
+  await e2eSyncProject(w.pid);
+  renderAll();
+  e2eRenderBanner();
+}
+
+function e2eRerunSetup() {
+  const w = e2eWizard;
+  if (!w) return;
+  w.step = 'intro';
+  e2eRenderWizard();
+}
+
+/* ---------- banner + chips + settings render ---------- */
+function e2eBannerContent(pid) {
+  const st = e2eStateFor(pid);
+  const mk = function (cls, html, actions) {
+    const w = el('div', 'e2e-banner ' + cls);
+    const t = el('div', 'e2e-banner-text');
+    t.innerHTML = html;
+    w.appendChild(t);
+    if (actions && actions.length) {
+      const a = el('div', 'e2e-banner-actions');
+      for (const b of actions) a.appendChild(b);
+      w.appendChild(a);
+    }
+    return w;
+  };
+  const btn = function (label, fn, cls) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn ' + (cls || 'secondary');
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    return b;
+  };
+  const phase = st ? st.phase : 'legacy';
+  switch (phase) {
+    case 'pending':
+      return mk('warn', 'Verify your Muse to start chatting. Compare the safety code with your official Muse chat.',
+        [btn('Compare codes', function () { e2eOpenWizard('setup'); }, 'primary')]);
+    case 'noserver':
+      return mk('warn', 'Waiting for your Muse. Your Muse has not published its encryption key yet. Update your Muse\'s app, then come back.', []);
+    case 'fresh':
+      return mk('warn', 'Encryption is not set up on this device. Messages between you and your Muse are not protected yet.',
+        [btn('Turn on encryption', function () { e2eOpenWizard('setup'); }, 'primary')]);
+    case 'frozen':
+      return mk('alert', 'Security alert. Your Muse\'s encryption key changed unexpectedly. Messages are paused to protect you. If you did NOT just reinstall or replace your Muse\'s app, do not continue.',
+        [btn('Start verification again', function () { e2eOpenWizard('reverify'); }, 'primary'),
+         btn('Report a problem', function () { toastOnce('e2ereport', 6000, { kind: 'info', title: 'Check the official Muse chat — never continue if you cannot verify the new code.' }); })]);
+    case 'lostkey':
+      return mk('alert', 'This device does not have your encryption key. Your past encrypted messages can never be read on this device — there is no backup, by design.',
+        [btn('Set up a new key', function () { e2eOpenWizard('rekey'); }, 'primary')]);
+    case 'retired':
+      return mk('warn', 'Encryption was set up on another device. You can still read older messages here. To receive new messages on this device, set up a new key.',
+        [btn('Set up a new key', function () { e2eOpenWizard('rekey'); }, 'primary')]);
+    default: return null;
+  }
+}
+
+function e2eRenderBanner() {
+  const wrap = E('e2eBanner');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const e = e2eBootState();
+  const pid = state.activeProjectId;
+  let show = null;
+  if (pid && e.on && e.cols && e.keysTable) {
+    show = e2eBannerContent(pid);
+    if (!show) {
+      const st = e2eStateFor(pid);
+      if (st && st.legacyAfter && (st.phase === 'ready' || st.phase === 'frozen')) {
+        show = e2eBannerContent.__legacy(st);
+      } else if (st && st.phase === 'pending' && st.dropFailBurst) {
+        // handled in e2eBannerContent via burst flag below
+      }
+    }
+  }
+  wrap.hidden = !show;
+  if (show) wrap.appendChild(show);
+}
+// 6.12 + 6.8 banners — built here so the main switch stays readable
+e2eBannerContent.__legacy = function (st) {
+  const w = el('div', 'e2e-banner warn');
+  const t = el('div', 'e2e-banner-text', 'Your Muse sent an unencrypted message. Update your Muse\'s app (daemon) to the encrypted version.');
+  w.appendChild(t);
+  return w;
+};
+
+function e2eHeaderChip(pid) {
+  const st = e2eStateFor(pid);
+  if (!st || st.phase === 'legacy') return null;
+  const c = el('span', 'chip chip--e2e' + (st.phase === 'ready' ? ' ok' : ' warn'));
+  const dot = el('span', 'cdot');
+  dot.setAttribute('aria-hidden', 'true');
+  c.appendChild(dot);
+  c.appendChild(document.createTextNode(st.phase === 'ready' ? 'Encrypted' : 'Not verified'));
+  c.title = st.phase === 'ready' ? 'End-to-end encrypted · Verified' : 'End-to-end encryption is not verified yet';
+  return c;
+}
+
+/* ⚙ Muse config — Encryption block */
+function e2eRenderCfg() {
+  const box = E('cfgE2E');
+  if (!box) return;
+  const p = cfgProject;
+  box.innerHTML = '';
+  if (!p) return;
+  const e = e2eBootState();
+  if (!e.on || !e.cols || !e.keysTable) {
+    box.appendChild(el('div', 'cfg-e2e-line dim', 'Encryption: unavailable — run the v4 schema first (supabase/setup-v4-draft.sql).'));
+    return;
+  }
+  const st = e2eStateFor(p.id);
+  const label = {
+    legacy: 'Legacy — this Muse has not turned on encryption yet.',
+    noserver: 'Waiting for your Muse to publish its key.',
+    fresh: 'Not set up on this device — turn it on to start.',
+    pending: 'Not verified — compare the safety code to finish.',
+    ready: 'Verified · Key created ' + (st.myKey && st.myKey.createdAt ? new Date(st.myKey.createdAt).toLocaleDateString() : ''),
+    frozen: 'Security alert — the Muse key changed unexpectedly.',
+    lostkey: 'This device lost its encryption key.',
+    retired: 'Set up on another device.'
+  }[st.phase] || st.phase;
+  box.appendChild(el('div', 'cfg-e2e-line', label));
+  const actions = el('div', 'cfg-e2e-actions');
+  const mkBtn = function (label2, fn) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn secondary'; b.textContent = label2;
+    b.addEventListener('click', fn);
+    return b;
+  };
+  if (st.phase === 'fresh' || st.phase === 'lostkey' || st.phase === 'retired') {
+    actions.appendChild(mkBtn(st.phase === 'fresh' ? 'Turn on encryption' : 'Set up a new key', function () {
+      hideModal(modalMuseCfg);
+      e2eOpenWizard('rekey');
+    }));
+  }
+  if (st.phase === 'pending') {
+    actions.appendChild(mkBtn('Verify now', function () {
+      hideModal(modalMuseCfg);
+      e2eOpenWizard('setup');
+    }));
+  }
+  if (st.phase === 'ready') {
+    actions.appendChild(mkBtn('Clear local message cache', async function () {
+      try { await e2eIdbClear('plain'); toastOnce('e2ecache', 3000, { kind: 'info', title: 'Local message cache cleared — reopening the thread re-fetches and re-decrypts.' }); } catch (err) { /* ignore */ }
+    }));
+    actions.appendChild(mkBtn('Replace encryption key…', function () {
+      hideModal(modalMuseCfg);
+      e2eOpenWizard('rekey');
+    }));
+  }
+  box.appendChild(actions);
+}
+
+/* ---------- wizard rendering ---------- */
+let e2eWaitTimer = null;
+function e2eWizardBtn(label, fn, cls) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'btn ' + (cls || 'secondary');
+  b.textContent = label;
+  b.addEventListener('click', fn);
+  return b;
+}
+function e2eCloseWizard() {
+  if (e2eWaitTimer !== null) { clearInterval(e2eWaitTimer); e2eWaitTimer = null; }
+  e2eWizard = null;
+  hideModal(modalE2E);
+}
+function e2eRenderWizard() {
+  const w = e2eWizard;
+  if (!w) return;
+  const body = E('e2eWizardBody');
+  if (!body) return;
+  body.innerHTML = '';
+  const st = e2eStateFor(w.pid);
+  if (w.step === 'intro') {
+    if (w.mode === 'setup') {
+      body.appendChild(el('div', 'e2e-w-title', 'Set up end-to-end encryption'));
+      body.appendChild(el('div', 'e2e-w-text', 'Your messages will be locked so only you and your Muse can read them. Your secret key stays in this browser and is never uploaded.'));
+      body.appendChild(el('div', 'e2e-w-warn', 'Important: if you clear this browser\'s data or use a new device, past encrypted messages can never be read again. There is no backup — by design.'));
+      body.appendChild(e2eWizardBtn('Turn on encryption', function () { e2eWizardNext(); }, 'primary'));
+    } else if (w.mode === 'rekey') {
+      body.appendChild(el('div', 'e2e-w-title', 'Replace your encryption key?'));
+      body.appendChild(el('div', 'e2e-w-text', 'Your new key starts fresh. Messages encrypted with your old key stay readable on this device only. On any other device, old messages can never be read again.'));
+      body.appendChild(e2eWizardBtn('Replace key', function () { e2eWizardNext(); }, 'primary'));
+    } else {
+      body.appendChild(el('div', 'e2e-w-title', 'Start verification again'));
+      body.appendChild(el('div', 'e2e-w-text', 'Your Muse has a new encryption key. Compare a new safety code with your official Muse chat to resume.'));
+      body.appendChild(e2eWizardBtn('Start again', function () { e2eWizardNext(); }, 'primary'));
+    }
+  } else if (w.step === 'creating') {
+    body.appendChild(el('div', 'e2e-w-title', 'Creating your key…'));
+    body.appendChild(el('div', 'e2e-w-text', 'This takes a moment.'));
+  } else if (w.step === 'waiting') {
+    body.appendChild(el('div', 'e2e-w-title', 'Waiting for your Muse…'));
+    body.appendChild(el('div', 'e2e-w-text', 'Your Muse has not published its encryption key yet. This screen continues automatically once it appears. If this takes long, update your Muse\'s app (daemon).'));
+    if (e2eWaitTimer === null) {
+      e2eWaitTimer = setInterval(async function () {
+        if (!e2eWizard || e2eWizard.step !== 'waiting') { clearInterval(e2eWaitTimer); e2eWaitTimer = null; return; }
+        await e2eSyncProject(e2eWizard.pid);
+        const st2 = e2eStateFor(e2eWizard.pid);
+        if (st2.museKey) {
+          clearInterval(e2eWaitTimer); e2eWaitTimer = null;
+          e2eWizard.step = 'sas';
+          e2eRenderWizard();
+        }
+      }, 3000);
+    }
+  } else if (w.step === 'sas') {
+    body.appendChild(el('div', 'e2e-w-title', 'Your safety code'));
+    const grid = el('div', 'e2e-sas');
+    MRE2E.computeSas(st.myKey.publicB64, st.myKey.keyId, st.museKey.publicB64, st.museKey.keyId)
+      .then(function (sas) {
+        w.sas = sas;
+        grid.innerHTML = '';
+        const groups = sas.grouped.split(' ');
+        for (let r = 0; r < 4; r++) {
+          const row = el('div', 'e2e-sas-row');
+          for (let c = 0; c < 3; c++) row.appendChild(el('span', 'e2e-sas-group', groups[r * 3 + c] || ''));
+          grid.appendChild(row);
+        }
+      })
+      .catch(function () { grid.appendChild(el('div', 'e2e-w-text', 'Could not compute the safety code — reopen this window.')); });
+    body.appendChild(grid);
+    body.appendChild(el('div', 'e2e-w-text', 'Compare this code with the code in your official Muse chat, row by row, left to right.'));
+    body.appendChild(el('div', 'e2e-w-hint', 'Open your official Muse chat and send: verify — then your Muse replies with its own code.'));
+    const acts = el('div', 'e2e-w-actions');
+    const cp = e2eWizardBtn('Copy code', function () {
+      if (w.sas) copyText(w.sas.copyable, cp);
+    });
+    acts.appendChild(cp);
+    acts.appendChild(e2eWizardBtn('Codes match', function () { e2eConfirmMatch(); }, 'primary'));
+    acts.appendChild(e2eWizardBtn("Codes don't match", function () { w.step = 'mismatch'; e2eRenderWizard(); }));
+    body.appendChild(acts);
+  } else if (w.step === 'mismatch') {
+    body.appendChild(el('div', 'e2e-w-title', "The codes don't match"));
+    body.appendChild(el('div', 'e2e-w-warn', 'Do NOT confirm anything in your Muse chat — someone may be listening. Create a new code and try again.'));
+    body.appendChild(e2eWizardBtn('Re-run setup', function () { w.step = 'intro'; e2eRenderWizard(); }, 'primary'));
+  } else if (w.step === 'done') {
+    body.appendChild(el('div', 'e2e-w-title', 'Verified ✓'));
+    body.appendChild(el('div', 'e2e-w-text', 'Your messages are now end-to-end encrypted.'));
+    body.appendChild(e2eWizardBtn('Back to chat', function () { e2eCloseWizard(); }, 'primary'));
+  }
+}
+
+/* ---------- display title (auto-title removed per design §4) ---------- */
+function displayTitle(t) {
+  const t0 = t.title || '';
+  if (t0 && t0 !== 'New thread') return t0;
+  let first = null;
+  for (const m of state.msgs200) {
+    if (m.thread_id !== t.id) continue;
+    if (first === null || m.id < first.id) first = m;
+  }
+  if (first && first.text) return String(first.text).slice(0, 80) || 'New chat';
+  return 'New chat';
+}
+
+
+function ingestMessageCore(m, opts) {
   opts = opts || {};
   if (!m || typeof m.id !== 'number') return false;
   const fresh = !state.msgs200.some(function (x) { return x.id === m.id; });
   applyMessageSignals(m, { fresh: fresh });
   // ⌘ sys routing — muse rows in the hidden channel feed handlers; muse rows
   // in a real thread may kick off the auto-title task
-  if (m.role === 'muse') {
-    if (isSysThreadId(m.thread_id)) handleSysReply(m, fresh);
-    else maybeAutoTitle(m, { fresh: fresh });
-  }
+  if (m.role === 'muse' && isSysThreadId(m.thread_id)) handleSysReply(m, fresh);
   // A real user row matching a pending send replaces its placeholder bubble
   if (m.role === 'user') {
     for (const [k, pe] of state.pendingSends) {
       if (pe.realId === m.id) { state.pendingSends.delete(k); break; }
     }
-    if (fresh) applyInterimTitle(m.thread_id, m.text); // the first message names the thread
   }
   let added = false;
-  if (!isTypingRow(m) && !isStatusRow(m)) {
+  if (!isTypingRow(m) && !isStatusRow(m) && !m._drop) {
     const cache = state.messagesByThread.get(m.thread_id);
     if (cache && !cache.some(function (x) { return x.id === m.id; })) {
       cache.push(m);
@@ -2606,9 +3327,9 @@ function threadRow(t, pinnedRow) {
     row.appendChild(ico);
   }
   const nm = el('span', 'thread-name');
-  const tn = el('span', 'tn-text', t.title || ('Thread #' + t.id));
+  const tn = el('span', 'tn-text', displayTitle(t) || ('Thread #' + t.id));
   nm.appendChild(tn);
-  nm.title = t.title || '';
+  nm.title = displayTitle(t) || '';
   row.appendChild(nm);
   // Long names marquee-scroll instead of truncating (distance = overflow px)
   requestAnimationFrame(function () {
@@ -2819,6 +3540,8 @@ function renderHeader() {
   for (const tag of CHIP_ORDER) {
     if ((p.tags || []).indexOf(tag) !== -1) hdrChips.appendChild(chipEl(tag));
   }
+  const eChip = e2eHeaderChip(p.id);
+  if (eChip) hdrChips.appendChild(eChip);
   const th = state.threads.find(function (t) { return t.id === state.activeThreadId; });
   if (th) {
     hdrThread.textContent = th.title || '';
@@ -2826,6 +3549,7 @@ function renderHeader() {
     hdrThread.hidden = false;
   }
   renderQuota();
+  e2eRenderBanner();
 }
 
 /* Quota chip — bottom-left of the composer. '-' until a background /status
@@ -3377,6 +4101,12 @@ function bubbleEl(m, animate) {
   const isUser = m.role === 'user';
   const row = el('div', 'msg ' + (isUser ? 'user' : 'muse') + (animate ? ' new' : ''));
   const b = el('div', 'bubble ' + (isUser ? 'user' : 'muse'));
+  const eSt = state.e2e && state.e2e.byPid ? state.e2e.byPid.get(m.project_id) : null;
+  if (m._enc === 'legacy' && eSt && eSt.everE2E) {
+    const lb = el('span', 'enc-badge', '🔓');
+    lb.title = 'Sent before end-to-end encryption was enabled';
+    b.appendChild(lb);
+  }
   b.appendChild(bubbleTextEl(m.text || ''));
   for (const link of findDropboxLinks(m.text)) {
     b.appendChild(attachEl(link, isUser));
@@ -3467,6 +4197,7 @@ function renderAll() {
   renderHeader();
   renderChat();
   updateSendState();
+  e2eRenderBanner();
 }
 
 function selectProject(pid) {
@@ -3502,7 +4233,7 @@ async function openThread(tid) {
   renderSidebar();
   updateSendState();
   state.chatError = null;
-  const raw = await rest('/rest/v1/messages?thread_id=eq.' + tid + '&order=id.asc&limit=500')
+  const raw = await rest('/rest/v1/messages?thread_id=eq.' + tid + '&select=' + msgSelectCols() + '&order=id.asc&limit=500')
     .then(function (r) { return r || []; })
     .catch(function (e) {
       toastErrNoAuth('Could not load thread', e);
@@ -3510,23 +4241,14 @@ async function openThread(tid) {
       return null;
     });
   if (raw) {
+    await e2eHydrateBulk(raw);
     // Seed the muse watermark + stored statuses from older rows, then strip plumbing
     for (const m of raw) applyMessageSignals(m, { fresh: false });
-    const rows = raw.filter(function (m) { return !isTypingRow(m) && !isStatusRow(m); });
+    const rows = raw.filter(function (m) { return !isTypingRow(m) && !isStatusRow(m) && !m._drop; });
     state.messagesByThread.set(tid, rows);
     reconcilePending(rows);
     renderChat();
     markRead(tid);
-    // Catch-up: a reply may have landed while the UI was closed — a thread
-    // still on its default/interim title gets its auto-title task now (once per session)
-    if ((t.title === 'New thread' || titleIsInterim(t)) && !state.titleAsked.has(t.id) &&
-        rows.some(function (x) { return x.role === 'muse'; })) {
-      const first = firstUserText(tid);
-      if (first) {
-        state.titleAsked.add(t.id);
-        enqueueSysTask({ kind: 'title', threadId: t.id, text: String(first).slice(0, SYS_TEXT_CAP) });
-      }
-    }
   } else {
     renderChat();
   }
@@ -3582,7 +4304,7 @@ function stopActive() {
 
 function updateSendState() {
   // Setup gating — the whole composer is disabled while the Muse has not ponged
-  const gated = state.activeProjectId != null && !projectReady(state.activeProjectId);
+  const gated = (state.activeProjectId != null && !projectReady(state.activeProjectId)) || !e2eComposerOpen(state.activeProjectId);
   const stopMode = !gated && stopModeNow();
   btnSend.classList.toggle('stop', stopMode);
   btnSend.setAttribute('aria-label', stopMode ? 'Stop' : 'Send');
@@ -3668,7 +4390,7 @@ async function postPendingMessage(entry) {
     const rows = await rest('/rest/v1/messages', {
       method: 'POST',
       prefer: 'return=representation',
-      body: { thread_id: entry.thread_id, project_id: entry.project_id, role: 'user', text: entry.text },
+      body: await e2eRequestBody(entry),
       signal: sendAbort.signal
     });
     const m = Array.isArray(rows) && rows[0] ? rows[0] : null;
@@ -3676,7 +4398,6 @@ async function postPendingMessage(entry) {
       entry.realId = m.id;
       state.sessionSentIds.add(m.id);
       markReadUpTo(entry.thread_id, m.id); // own message counts as read immediately
-      applyInterimTitle(entry.thread_id, entry.text); // optimistic — the first message names the thread
     }
     entry.status = 'sent'; // id unknown → still sent; the real row reconciles via ingest
   } catch (e) {
@@ -3844,15 +4565,16 @@ function scheduleCloudReconnect() {
 function onRealtimeInsert(payload) {
   const m = payload && payload.new;
   if (!m || typeof m.id !== 'number') return;
-  const added = ingestMessage(m);
-  if (m.thread_id === state.activeThreadId) {
-    if (added) {
-      renderChat({ animateId: m.id });
-      markRead(m.thread_id);
-    } else if (isTypingRow(m)) {
-      renderChat(); // typing signal — the bubble toggles without a new message row
+  queueIngest(m, {}, function (added) {
+    if (m.thread_id === state.activeThreadId) {
+      if (added) {
+        renderChat({ animateId: m.id });
+        markRead(m.thread_id);
+      } else if (isTypingRow(m)) {
+        renderChat(); // typing signal — the bubble toggles without a new message row
+      }
     }
-  }
+  });
 }
 
 function ensurePoll() {
@@ -3863,15 +4585,19 @@ function ensurePoll() {
 let pollFailStreak = 0;
 async function pollTick() {
   try {
-    const ms = await rest('/rest/v1/messages?select=id,project_id,thread_id,role,text,created_at&order=id.desc&limit=200');
+    const ms = await rest('/rest/v1/messages?select=' + msgSelectCols() + '&order=id.desc&limit=200');
     const sorted = (ms || []).slice().sort(function (a, b) { return a.id - b.id; });
     let maxNewActive = null;
     let typingActive = false;
-    for (const m of sorted) {
-      const added = ingestMessage(m, { deferRender: true });
-      if (added && m.thread_id === state.activeThreadId) maxNewActive = m.id;
-      else if (!added && isTypingRow(m) && m.thread_id === state.activeThreadId) typingActive = true;
-    }
+    await Promise.all(sorted.map(function (m) {
+      return new Promise(function (res) {
+        queueIngest(m, { deferRender: true }, function (added) {
+          if (added && m.thread_id === state.activeThreadId) maxNewActive = m.id;
+          else if (!added && isTypingRow(m) && m.thread_id === state.activeThreadId) typingActive = true;
+          res();
+        });
+      });
+    }));
     renderSidebar();
     if (maxNewActive !== null) {
       renderChat({ animateId: maxNewActive });
@@ -3975,7 +4701,6 @@ async function saveRenameThread() {
   try {
     await rest('/rest/v1/threads?id=eq.' + t.id, { method: 'PATCH', body: { title: v } });
     t.title = v;
-    state.interimTitles.delete(t.id); // an owner rename is final — the Muse must not retitle it
     hideModal(modalRenameThread);
     renderSidebar();
     renderHeader();
@@ -4044,6 +4769,7 @@ function openMuseCfg(p) {
     b.checked = (b.value === 'on') === on;
   });
   syncCfgSys();
+  e2eRenderCfg();
   showModal(modalMuseCfg);
   cfgName.focus();
 }
@@ -4657,6 +5383,9 @@ btnCfgCancel.addEventListener('click', function () { if (!state.savingCfg) { cfg
 cfgClose.addEventListener('click', function () { if (!state.savingCfg) { cfgProject = null; hideModal(modalMuseCfg); } });
 cfgTags.addEventListener('change', syncCfgChips);
 cfgSys.addEventListener('change', syncCfgSys);
+e2eCloseBtn.addEventListener('click', function () { e2eCloseWizard(); });
+/* debug/automation handle — read-only access to UI state for tests */
+window.__MR = { state: state, e2eSyncAll: e2eSyncAll, e2eStateFor: e2eStateFor };
 cfgName.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !state.savingCfg) { e.preventDefault(); saveMuseCfg(); }
 });
