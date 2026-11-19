@@ -4759,6 +4759,12 @@ async function confirmDeleteThread() {
 function openMuseCfg(p) {
   cfgProject = p;
   cfgSub.textContent = '@' + (p.muse_id || '') + ' · id ' + p.id;
+  // self-heal: if the schema probe missed (page loaded before the v4 SQL ran),
+  // re-probe right now so the Encryption block never shows a stale verdict
+  const ePre = state.e2e;
+  if (ePre && ePre.on && (!ePre.cols || !ePre.keysTable)) {
+    e2eProbeSchema().then(function () { e2eSyncAll(); });
+  }
   cfgName.value = p.name || '';
   cfgTags.querySelectorAll('input[type=checkbox]').forEach(function (b) {
     b.checked = (p.tags || []).indexOf(b.value) !== -1;
