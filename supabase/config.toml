@@ -1,0 +1,15 @@
+# Relay config (from Muse/Nyx package). submit_message is called by a signed-in
+# user, so the platform JWT check stays on. claim_message and submit_result are
+# service-to-service calls from Muse; they authenticate in code with the
+# X-Relay-Token header instead.
+
+project_id = "muse-relay"
+
+[functions.submit_message]
+verify_jwt = true
+
+[functions.claim_message]
+verify_jwt = false
+
+[functions.submit_result]
+verify_jwt = false

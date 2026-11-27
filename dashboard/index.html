@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Muse Relay — Dashboard (draft)</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--fg:#e6e9ef;--mut:#8b93a5;--acc:#4f8cff}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0;flex:1}
+main{max-width:980px;margin:0 auto;padding:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+label{display:block;color:var(--mut);font-size:12px;margin:10px 0 4px}
+input,textarea,select{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:#0c0e13;color:var(--fg);font:inherit}
+button{padding:8px 14px;border-radius:8px;border:0;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--mut)}
+button.room{background:transparent;border:1px solid var(--line);color:var(--fg);padding:6px 14px}
+button.room.active{background:var(--acc);border-color:var(--acc);color:#fff}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.row>div{flex:1;min-width:130px}
+.msg{margin-top:10px;font-size:13px;min-height:18px}
+.msg.err{color:#ff6b6b}.msg.oki{color:#5fd38a}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:12px}
+.chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.pending{background:#5a4a1e;color:#ffd166}.processing{background:#1e3a5a;color:#6db3ff}
+.done{background:#1e4a2e;color:#5fd38a}.failed{background:#4a1e1e;color:#ff6b6b}
+.path{font:12px ui-monospace,Consolas,monospace;color:#9fb6d9;word-break:break-all}
+.chatout{white-space:pre-wrap;background:#0c0e13;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:4px;max-width:340px;font-size:13px}
+.mut{color:var(--mut)}
+.prompt-cell{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[hidden]{display:none!important}
+.copy{padding:1px 6px;font-size:11px;margin-left:6px}
+.overlay{position:fixed;inset:0;background:rgba(5,7,10,.72);z-index:50;overflow:auto;padding:5vh 16px}
+.wizcard{max-width:760px;margin:0 auto;background:var(--card)}
+.contract{width:100%;font:12px/1.55 ui-monospace,Consolas,monospace;white-space:pre;resize:vertical}
+</style>
+</head>
+<body>
+<header>
+  <h1>Muse Relay <span class="mut">— dashboard draft</span></h1>
+  <span id="who" class="mut" hidden></span>
+  <button id="logout" class="ghost" hidden>Thoát</button>
+</header>
+<main>
+  <section id="login-view" class="card">
+    <h2 style="margin:0 0 4px;font-size:14px">Đăng nhập</h2>
+    <p class="mut" style="margin:4px 0 8px">Tài khoản owner duy nhất của relay (đã tắt đăng ký công khai).</p>
+    <label>Email</label><input id="email" type="email" autocomplete="username">
+    <label>Mật khẩu</label><input id="password" type="password" autocomplete="current-password">
+    <div class="row" style="margin-top:12px"><button id="login">Đăng nhập</button></div>
+    <div id="login-msg" class="msg"></div>
+  </section>
+
+  <section id="app-view" hidden>
+    <section class="card" style="padding:10px 16px">
+      <div class="row" style="align-items:center;margin:0">
+        <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap;align-items:center" id="muses"></div>
+        <button id="add-muse">＋ Thêm Muse</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 style="margin:0 0 4px;font-size:14px">Gửi yêu cầu mới <span id="room-name" class="mut"></span></h2>
+      <div class="row">
+        <div><label>Loại</label>
+          <select id="action"><option value="image">Ảnh</option><option value="video">Video</option><option value="chat">Chat</option></select>
+        </div>
+        <div id="f-count"><label>Số ảnh (1–4)</label><input id="count" type="number" min="1" max="4" value="1"></div>
+        <div id="f-dur" hidden><label>Thời lượng (5–10s)</label><input id="dur" type="number" min="5" max="10" value="8"></div>
+        <div id="f-ar"><label>Tỉ lệ</label><select id="ar"></select></div>
+        <div id="f-thread"><label>Thread (tùy chọn)</label><input id="thread" placeholder="vd: cat-climbing-01"></div>
+        <div id="f-res" hidden><label>Loại tài nguyên (chat)</label><select id="res"><option>auto</option><option>none</option><option>image</option><option>video</option><option>document</option><option>archive</option></select></div>
+        <div id="f-fmt" hidden><label>Định dạng đầu ra (chat)</label><select id="fmt"><option>auto</option><option>md</option><option>txt</option><option>csv</option><option>docx</option><option>xlsx</option><option>zip</option></select></div>
+      </div>
+      <label>Prompt (Ctrl+Enter để gửi)</label>
+      <textarea id="prompt" rows="3" placeholder="VD: con mèo đang trèo cây cau, phong cách ảnh thật, ánh sáng chiều"></textarea>
+      <div class="row" style="margin-top:12px">
+        <button id="send">Gửi</button>
+        <span class="mut">Yêu cầu hết hiệu lực sau 30 phút nếu <span id="hint-muse">Muse</span> không claim.</span>
+      </div>
+      <div id="send-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="align-items:center;margin-bottom:8px">
+        <h2 style="margin:0;font-size:14px;flex:1">Yêu cầu gần đây <span id="auto" class="mut"></span></h2>
+        <button id="refresh" class="ghost">Làm mới</button>
+      </div>
+      <table>
+        <thead><tr><th>Thời gian</th><th>Loại</th><th>Prompt</th><th>Trạng thái</th><th>Kết quả</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="mut">—</td></tr></tbody>
+      </table>
+    </section>
+  </section>
+</main>
+
+<div id="wiz" class="overlay" hidden>
+  <div class="card wizcard">
+    <h2 style="margin:0 0 4px;font-size:15px">Thêm Muse mới</h2>
+    <div id="wiz-form">
+      <p class="mut" style="margin:4px 0 0">Wizard sinh recipient UUID + relay token mới, đăng ký vào relay. Token chỉ hiện <b>một lần</b> ở bước cuối.</p>
+      <label>Tên Muse (hiển thị trong dashboard)</label>
+      <input id="w-name" placeholder="vd: Muse 2" maxlength="64">
+      <label>Dropbox root của nó — thư mục gốc xuất kết quả, bắt đầu và kết thúc bằng /</label>
+      <input id="w-root" placeholder="/ten-muse@domain.com/" maxlength="256">
+      <div class="row" style="margin-top:12px"><button id="w-create">Tạo Muse + sinh token</button></div>
+      <div id="w-msg" class="msg"></div>
+    </div>
+    <div id="wiz-done" hidden>
+      <p class="mut" style="margin:6px 0 8px">Đã đăng ký. Token dưới đây <b>chỉ hiện lần này</b> — copy toàn bộ khung hướng dẫn gửi cho Muse (dán vào chat của nó), sau đó bấm Xong; muốn lộ token khác phải xoá Muse và tạo lại.</p>
+      <textarea id="w-contract" class="contract" readonly rows="26"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="w-copy">Copy toàn bộ</button>
+        <button id="w-close" class="ghost">Xong — đóng</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://oxhhhuklumscmyopjayv.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_hlIc9ACO_7IWFEzEuaJyBg_RIHj40Aw";
+const LEGACY_RECIPIENT_ID = "dece1c57-a093-4a3c-95ab-cbf74399605e"; // Nyx, token nằm ở env legacy
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const AR = { image: ["9:16","16:9","1:1","4:5","3:4"], video: ["9:16","16:9"], chat: [] };
+let timer = null;
+let MUSES = [];            // [{recipient, name}]
+let currentRecipient = null;
+
+function setAROptions() {
+  const a = $("action").value;
+  $("ar").innerHTML = AR[a].map((v) => `<option value="${v}">${v}</option>`).join("");
+  $("f-count").hidden = a !== "image";
+  $("f-dur").hidden = a !== "video";
+  $("f-ar").hidden = a === "chat";
+  $("f-thread").hidden = false;
+  $("f-res").hidden = a !== "chat";
+  $("f-fmt").hidden = a !== "chat";
+}
+
+function showApp(on, email) {
+  $("login-view").hidden = on;
+  $("app-view").hidden = !on;
+  $("who").hidden = !on;
+  $("logout").hidden = !on;
+  if (on && email) $("who").textContent = email;
+}
+
+function currentMuse() {
+  return MUSES.find((m) => m.recipient === currentRecipient) || { name: "Muse" };
+}
+
+async function loadMuses() {
+  const { data, error } = await db.from("relay_muses")
+    .select("recipient,name,created_at")
+    .order("created_at", { ascending: true });
+  MUSES = (!error && data && data.length) ? data : [];
+  if (!MUSES.some((m) => m.recipient === LEGACY_RECIPIENT_ID)) {
+    MUSES.unshift({ recipient: LEGACY_RECIPIENT_ID, name: "Nyx" });
+  }
+  renderMuses();
+  if (!currentRecipient) switchRoom(MUSES[0].recipient);
+}
+
+function renderMuses() {
+  $("muses").innerHTML = MUSES.map((m) =>
+    `<button class="room${m.recipient === currentRecipient ? " active" : ""}" data-r="${m.recipient}">${esc(m.name)}</button>`
+  ).join("");
+  $("room-name").textContent = "— phòng " + currentMuse().name;
+  $("hint-muse").textContent = currentMuse().name;
+}
+
+function switchRoom(recipient) {
+  currentRecipient = recipient;
+  renderMuses();
+  $("rows").innerHTML = '<tr><td colspan="5" class="mut">—</td></tr>';
+  refresh();
+}
+
+async function boot() {
+  setAROptions();
+  const { data: { session } } = await db.auth.getSession();
+  if (session) { showApp(true, session.user.email); await loadMuses(); refresh(); startTimer(); }
+}
+
+async function login() {
+  const m = $("login-msg"); m.className = "msg"; m.textContent = "Đang đăng nhập…";
+  const { data, error } = await db.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
+  if (error) { m.className = "msg err"; m.textContent = "Lỗi: " + error.message; return; }
+  m.textContent = "";
+  showApp(true, data.user.email); await loadMuses(); refresh(); startTimer();
+}
+
+async function logout() {
+  await db.auth.signOut();
+  stopTimer(); showApp(false);
+  $("rows").innerHTML = '<tr><td colspan="5" class="mut">—</td></tr>';
+}
+
+function startTimer() { stopTimer(); timer = setInterval(refresh, 10000); }
+function stopTimer() { if (timer) clearInterval(timer); timer = null; }
+
+function randomHex(bytes) {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function buildInstructions({ name, recipient, token, root }) {
+  return `HƯỚNG DẪN KẾT NỐI RELAY — BẢN CANONICAL
+
+Relay này là kênh làm việc giữa owner và bạn: owner gửi yêu cầu, bạn claim -> thực hiện -> trả kết quả đúng schema bên dưới. Không tự chế endpoint, không đổi tên trường.
+
+BƯỚC 0 — DỌN CŨ (nếu có)
+Nếu bạn đã từng tự dựng relay / bảng / hàm nào cho mục đích này ở bất kỳ đâu: xóa sạch hoàn toàn (edge functions, migrations, secrets, bảng dữ liệu) trước khi bắt đầu. Từ giờ chỉ dùng relay dưới đây.
+
+BƯỚC 1 — THÔNG TIN KẾT NỐI
+- SUPABASE_URL: ${SUPABASE_URL}
+- Publishable key (apikey công khai): ${SUPABASE_PUBLISHABLE_KEY}
+- RELAY_TOKEN (bí mật — đưa vào Secure Vault của bạn, KHÔNG ghi vào file, KHÔNG log): ${token}
+- recipient của bạn: ${recipient}
+- Dropbox root xuất kết quả (bắt buộc — mọi file output phải nằm dưới đúng thư mục này): ${root}
+
+BƯỚC 2 — ENDPOINTS (POST, JSON)
+- claim_message: POST ${SUPABASE_URL}/functions/v1/claim_message
+  Header: x-relay-token: <RELAY_TOKEN>   (không cần Authorization)
+  Body: {}. Response {"message": null} nếu hàng đợi trống — poll 30-60 giây/lần.
+- submit_result: POST ${SUPABASE_URL}/functions/v1/submit_result
+  Header: x-relay-token: <RELAY_TOKEN>
+
+BƯỚC 3 — SCHEMA CLAIM (công việc nhận về)
+{
+  "message": {
+    "id": "<uuid>",
+    "claim_id": "<uuid>",              // dùng khi trả kết quả; hết hạn sau 30 phút
+    "recipient": "${recipient}",       // = recipient của bạn
+    "action": "chat" | "image" | "video",
+    "params": {
+      "prompt": "string, 1-4000 ký tự",
+      "thread_id": "string | null",   // tùy chọn, gộp phiên làm việc
+      "aspect_ratio": "9:16|16:9|1:1|4:5|3:4",      // image, chat
+      "count": 1-4,                                  // image
+      "duration_seconds": 5-10,                      // video
+      "resource_type": "auto|none|image|video|document|archive",  // chat
+      "output_format": "auto|md|txt|csv|docx|xlsx|zip",           // chat
+      "reference_storage_paths": ["..."]   // tải qua reference_signed_urls (hết hạn 1 giờ)
+    },
+    "reference_signed_urls": [{ "path": "...", "signed_url": "..." }],
+    "claim_expires_at": "ISO 8601"
+  }
+}
+Hết 30 phút chưa trả kết quả -> claim_id hết hạn: claim lại (sẽ nhận lại đúng tin đó) rồi mới submit.
+
+BƯỚC 4 — SCHEMA KẾT QUẢ (submit_result)
+{
+  "message_id": "<uuid>",
+  "claim_id": "<uuid>",
+  "status": "done" | "failed",
+  "output": { "dropbox_paths": ["${root}..."], "notes": "string | null", "text": "string | null" },
+  "error": "string",            // bắt buộc khi status=failed
+  "error_code": "string"        // tùy chọn, ví dụ "out_of_scope"
+}
+- action chat: output.text KHÔNG được rỗng.
+- action image/video: tối thiểu 1 dropbox_path; MỖI path phải bắt đầu bằng đúng Dropbox root ở Bước 1.
+- Mọi nội dung trả lời chỉ đi qua submit_result — không gửi văn bản kết quả ra kênh nào khác.
+- Việc ngoài khả năng / ngoài scope -> status "failed" + error_code "out_of_scope" + notes giải thích ngắn.
+- Mỗi claim submit đúng 1 lần; gặp lỗi không retry mù — claim lại rồi mới submit tiếp.
+
+BƯỚC 5 — AN TOÀN
+- RELAY_TOKEN là credential duy nhất của bạn: chỉ đọc từ vault mỗi phiên, không log, không gửi cho bất kỳ ai.
+- claim/submit trả 401 -> token sai hoặc đã bị thu hồi: dừng và báo owner.
+- submit trả 409 claim_expired -> claim lại như Bước 3.
+`;
+}
+
+async function createMuse() {
+  const m = $("w-msg"); m.className = "msg"; m.textContent = "";
+  const name = $("w-name").value.trim();
+  let root = $("w-root").value.trim();
+  if (name.length < 1) { m.className = "msg err"; m.textContent = "Thiếu tên Muse."; return; }
+  if (!root.startsWith("/")) root = "/" + root;
+  if (!root.endsWith("/")) root = root + "/";
+  if (root.length < 3 || root.includes("..") || root.length > 256) {
+    m.className = "msg err"; m.textContent = "Dropbox root không hợp lệ (vd /ten@domain.com/)."; return;
+  }
+  const recipient = crypto.randomUUID();
+  const token = randomHex(32);
+  const tokenHash = await sha256Hex(token);
+  const { data: { user } } = await db.auth.getUser();
+  const { error } = await db.from("relay_muses").insert({
+    owner_id: user.id, recipient, name, token_hash: tokenHash, dropbox_root: root,
+  });
+  if (error) { m.className = "msg err"; m.textContent = "Lỗi tạo Muse: " + error.message; return; }
+  $("w-contract").value = buildInstructions({ name, recipient, token, root });
+  $("wiz-form").hidden = true;
+  $("wiz-done").hidden = false;
+  await loadMuses();
+  switchRoom(recipient);
+}
+
+function closeWizard() {
+  $("w-contract").value = "";
+  $("wiz-done").hidden = true;
+  $("wiz-form").hidden = false;
+  $("w-name").value = ""; $("w-root").value = ""; $("w-msg").textContent = "";
+  $("wiz").hidden = true;
+}
+
+async function send() {
+  const m = $("send-msg"); m.className = "msg"; m.textContent = "";
+  const action = $("action").value;
+  const prompt = $("prompt").value.trim();
+  if (prompt.length < 1 || prompt.length > 4000) { m.className = "msg err"; m.textContent = "Prompt phải từ 1–4000 ký tự."; return; }
+  const params = { prompt };
+  if (action === "chat") {
+    params.resource_type = $("res").value;
+    params.output_format = $("fmt").value;
+    const thc = $("thread").value.trim();
+    if (thc) {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(thc)) { m.className = "msg err"; m.textContent = "Thread chỉ gồm chữ/số/-/_ (1–64 ký tự)."; return; }
+      params.thread_id = thc;
+    }
+  } else {
+    params.aspect_ratio = $("ar").value;
+    params.reference_storage_paths = [];
+    const th = $("thread").value.trim();
+    if (th) {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(th)) { m.className = "msg err"; m.textContent = "Thread chỉ gồm chữ/số/-/_ (1–64 ký tự)."; return; }
+      params.thread_id = th;
+    }
+    if (action === "image") {
+      const count = parseInt($("count").value, 10);
+      if (!(count >= 1 && count <= 4)) { m.className = "msg err"; m.textContent = "Số ảnh phải 1–4."; return; }
+      params.count = count;
+    } else {
+      const dur = parseInt($("dur").value, 10);
+      if (!(dur >= 5 && dur <= 10)) { m.className = "msg err"; m.textContent = "Thời lượng phải 5–10 giây."; return; }
+      params.duration_seconds = dur;
+    }
+  }
+  $("send").disabled = true;
+  const { data, error } = await db.functions.invoke("submit_message", { body: { recipient: currentRecipient, action, params } });
+  $("send").disabled = false;
+  if (error) { m.className = "msg err"; m.textContent = "Lỗi gửi: " + (error.message || JSON.stringify(error)); return; }
+  m.className = "msg oki";
+  m.textContent = "Đã gửi cho " + currentMuse().name + " — message_id " + data.message_id.slice(0, 8) + "…, chờ claim (hết hạn " + new Date(data.expires_at).toLocaleTimeString("vi-VN", { hour12: false }) + ").";
+  $("prompt").value = "";
+  refresh();
+}
+
+function fmtTime(iso) { return new Date(iso).toLocaleString("vi-VN", { hour12: false }); }
+
+async function refresh() {
+  if (!currentRecipient) return;
+  const museName = currentMuse().name;
+  const msgs = await db.from("relay_messages")
+    .select("id,action,params,status,attempts,created_at")
+    .eq("recipient", currentRecipient)
+    .order("created_at", { ascending: false }).limit(50);
+  const res = await db.from("relay_results")
+    .select("message_id,status,output,error")
+    .order("created_at", { ascending: false }).limit(50);
+  if (msgs.error || res.error) {
+    $("auto").textContent = " (lỗi tải: " + ((msgs.error || res.error).message) + ")";
+    return;
+  }
+  const resultMap = new Map(res.data.map((r) => [r.message_id, r]));
+  if (!msgs.data.length) {
+    $("rows").innerHTML = '<tr><td colspan="5" class="mut">Phòng trống — chưa có yêu cầu nào cho ' + esc(museName) + '.</td></tr>';
+    $("auto").textContent = " (cập nhật " + new Date().toLocaleTimeString("vi-VN", { hour12: false }) + ")";
+    return;
+  }
+  $("rows").innerHTML = msgs.data.map((r) => {
+    const p = r.params || {};
+    const spec = r.action === "chat" ? "" : ((p.thread_id ? "⌗" + p.thread_id + " · " : "") + (r.action === "video" ? (p.duration_seconds + "s") : ("x" + p.count)));
+    const out = resultMap.get(r.id);
+    let resultHtml = '<span class="mut">—</span>';
+    if (out) {
+      const paths = (out.output && out.output.dropbox_paths) || [];
+      const txt = out.output && out.output.text;
+      resultHtml = (txt ? `<div class="chatout">${esc(txt)}</div>` : "")
+        + paths.map((pt) => `<div><span class="path">${esc(pt)}</span><button class="copy ghost" data-t="${esc(pt)}" onclick="copyText(this)">copy</button></div>`).join("")
+        + (out.error ? `<div style="color:#ff6b6b">${esc(out.error)}</div>` : "")
+        + ((out.output && out.output.notes) ? `<div class="mut">${esc(out.output.notes)}</div>` : "");
+    } else if (r.status === "processing") {
+      resultHtml = `<span class="mut">${esc(museName)} đang xử lý…</span>`;
+    } else if (r.status === "pending") {
+      resultHtml = `<span class="mut">chờ ${esc(museName)} claim…</span>`;
+    }
+    return `<tr>
+      <td class="mut">${fmtTime(r.created_at)}</td>
+      <td>${r.action === "chat" ? "💬 chat" : (r.action === "video" ? "🎬 video" : "🖼 ảnh")} <span class="mut">${esc(spec)}</span></td>
+      <td class="prompt-cell" title="${esc(p.prompt || "")}">${esc(p.prompt || "")}</td>
+      <td><span class="chip ${r.status}">${esc(r.status)}</span>${r.attempts > 1 ? ` <span class="mut">lần ${r.attempts}</span>` : ""}</td>
+      <td>${resultHtml}</td>
+    </tr>`;
+  }).join("");
+  $("auto").textContent = " (cập nhật " + new Date().toLocaleTimeString("vi-VN", { hour12: false }) + ")";
+}
+
+function copyText(btn) {
+  navigator.clipboard.writeText(btn.dataset.t);
+  btn.textContent = "đã copy";
+  setTimeout(() => { btn.textContent = "copy"; }, 1200);
+}
+
+$("action").addEventListener("change", setAROptions);
+$("login").addEventListener("click", login);
+$("logout").addEventListener("click", logout);
+$("send").addEventListener("click", send);
+$("refresh").addEventListener("click", refresh);
+$("muses").addEventListener("click", (e) => {
+  const btn = e.target.closest("button.room");
+  if (btn) switchRoom(btn.dataset.r);
+});
+$("add-muse").addEventListener("click", () => { $("wiz").hidden = false; $("w-name").focus(); });
+$("w-create").addEventListener("click", createMuse);
+$("w-copy").addEventListener("click", () => {
+  navigator.clipboard.writeText($("w-contract").value);
+  $("w-copy").textContent = "đã copy";
+  setTimeout(() => { $("w-copy").textContent = "Copy toàn bộ"; }, 1200);
+});
+$("w-close").addEventListener("click", closeWizard);
+$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(); });
+boot();
+</script>
+</body>
+</html>
