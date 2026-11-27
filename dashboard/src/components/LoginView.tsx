@@ -1,26 +1,28 @@
 import { useState } from "react";
+import { useLang } from "../lib/i18n";
 import { db } from "../lib/supabase";
 import { useTheme } from "../lib/theme";
 import { MoonIcon, StarIcon, SunIcon } from "./Icons";
-import { ErrorMsg, setButtonBusy } from "./ui";
+import { ErrorMsg, LangToggle, setButtonBusy } from "./ui";
 
 export function LoginView({ onSignedIn }: { onSignedIn: (email: string) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const { theme, toggleTheme } = useTheme();
+  const { t } = useLang();
 
   async function submit() {
     setError("");
     const btn = document.getElementById("login-btn") as HTMLButtonElement | null;
-    const undo = setButtonBusy(btn, "Đang đăng nhập…");
+    const undo = setButtonBusy(btn, t("login.signingIn"));
     const { data, error } = await db.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
     undo();
     if (error) {
-      setError("Lỗi: " + error.message);
+      setError(t("common.errorPrefix", { err: error.message }));
       return;
     }
     onSignedIn(data.user.email ?? "");
@@ -28,16 +30,19 @@ export function LoginView({ onSignedIn }: { onSignedIn: (email: string) => void 
 
   return (
     <section id="login-view" className="fade">
-      <button
-        type="button"
-        className="login-theme-btn"
-        onClick={toggleTheme}
-        aria-label={theme === "dark" ? "Chuyển sang giao diện sáng" : "Chuyển sang giao diện tối"}
-        title={theme === "dark" ? "Giao diện sáng" : "Giao diện tối"}
-      >
-        {theme === "dark" ? <SunIcon size={15} /> : <MoonIcon size={15} />}
-        <span>{theme === "dark" ? "Sáng" : "Tối"}</span>
-      </button>
+      <div className="login-corner-controls">
+        <LangToggle compact />
+        <button
+          type="button"
+          className="login-theme-btn"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? t("login.toLightAria") : t("login.toDarkAria")}
+          title={theme === "dark" ? t("login.lightTitle") : t("login.darkTitle")}
+        >
+          {theme === "dark" ? <SunIcon size={15} /> : <MoonIcon size={15} />}
+          <span>{theme === "dark" ? t("login.light") : t("login.dark")}</span>
+        </button>
+      </div>
 
       <div className="login-card">
         <div className="login-brand">
@@ -49,15 +54,13 @@ export function LoginView({ onSignedIn }: { onSignedIn: (email: string) => void 
               <span>Muse Relay</span>
               <span className="brand-pill">Command</span>
             </div>
-            <span className="login-tag">Trung tâm điều phối đội Muse</span>
+            <span className="login-tag">{t("login.tagline")}</span>
           </div>
         </div>
 
-        <p className="sub">
-          Đăng nhập bằng tài khoản owner của relay (đã tắt đăng ký công khai).
-        </p>
+        <p className="sub">{t("login.sub")}</p>
 
-        <label htmlFor="email">Email owner</label>
+        <label htmlFor="email">{t("login.emailLabel")}</label>
         <input
           id="email"
           type="email"
@@ -67,7 +70,7 @@ export function LoginView({ onSignedIn }: { onSignedIn: (email: string) => void 
           onChange={(e) => setEmail(e.target.value)}
         />
 
-        <label htmlFor="password">Mật khẩu</label>
+        <label htmlFor="password">{t("login.passwordLabel")}</label>
         <input
           id="password"
           type="password"
@@ -81,7 +84,7 @@ export function LoginView({ onSignedIn }: { onSignedIn: (email: string) => void 
         />
 
         <button id="login-btn" className="btn" onClick={submit}>
-          Đăng nhập vào Command Center
+          {t("login.submit")}
         </button>
         <ErrorMsg text={error} />
       </div>

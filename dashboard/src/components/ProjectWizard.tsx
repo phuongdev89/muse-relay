@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { createProject, syncProjectAgents, updateProject } from "../lib/api";
+import { useLang } from "../lib/i18n";
 import type { AgentKind, Muse, OpenAIAgent, Project, ProjectAgent } from "../types";
 import { ErrorMsg, Modal, toast } from "./ui";
 
@@ -17,6 +18,7 @@ export function ProjectWizard(props: {
   onClose: () => void;
   onSaved: (projectId: string, isNew: boolean) => void;
 }) {
+  const { t } = useLang();
   const isEdit = Boolean(props.project);
   const [name, setName] = useState(props.project?.name ?? "");
   const [description, setDescription] = useState(props.project?.description ?? "");
@@ -79,7 +81,7 @@ export function ProjectWizard(props: {
     const trimmedName = name.trim();
     const trimmedDesc = description.trim();
     if (trimmedName.length < 1 || trimmedName.length > 64) {
-      setError("Tên Project phải từ 1–64 ký tự.");
+      setError(t("pwiz.nameErr"));
       return;
     }
 
@@ -92,7 +94,7 @@ export function ProjectWizard(props: {
       });
       if (err) {
         setSaving(false);
-        setError("Lỗi cập nhật Project: " + err);
+        setError(t("pwiz.updateErr", { err }));
         return;
       }
     } else {
@@ -102,7 +104,7 @@ export function ProjectWizard(props: {
       });
       if (err || !data) {
         setSaving(false);
-        setError("Lỗi tạo Project: " + (err ?? "không rõ"));
+        setError(t("pwiz.createErr", { err: err ?? t("common.unknown") }));
         return;
       }
       projectId = data.id;
@@ -110,51 +112,51 @@ export function ProjectWizard(props: {
 
     if (!projectId) {
       setSaving(false);
-      setError("Không xác định được Project ID.");
+      setError(t("pwiz.noIdErr"));
       return;
     }
 
     const syncErr = await syncProjectAgents(projectId, [...picked.values()]);
     setSaving(false);
     if (syncErr) {
-      setError("Lỗi lưu danh sách Agent của Project: " + syncErr);
+      setError(t("pwiz.syncErr", { err: syncErr }));
       return;
     }
 
-    toast(isEdit ? "Đã cập nhật Project" : "Đã tạo Project mới");
+    toast(isEdit ? t("pwiz.updatedToast") : t("pwiz.createdToast"));
     props.onSaved(projectId, !isEdit);
     props.onClose();
   }
 
   return (
     <Modal open onClose={props.onClose} labelledBy="pwiz-title">
-      <h2 id="pwiz-title">{isEdit ? `Cài đặt Project — ${props.project?.name}` : "Tạo Project mới"}</h2>
-      <p className="lead">
-        Mỗi Project tập hợp các Agent (Muse Relay &amp; OpenAI Compatible) dùng chung cho các cuộc hội thoại bên trong.
-      </p>
+      <h2 id="pwiz-title">
+        {isEdit ? t("pwiz.editTitle", { name: props.project?.name ?? "" }) : t("pwiz.createTitle")}
+      </h2>
+      <p className="lead">{t("pwiz.lead")}</p>
 
-      <label htmlFor="proj-name">Tên Project</label>
+      <label htmlFor="proj-name">{t("pwiz.nameLabel")}</label>
       <input
         id="proj-name"
         value={name}
         maxLength={64}
-        placeholder="vd: Chiến dịch Mùa Thu, Nghiên cứu AI…"
+        placeholder={t("pwiz.namePlaceholder")}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") void submit();
         }}
       />
 
-      <label htmlFor="proj-desc">Mô tả (tuỳ chọn)</label>
+      <label htmlFor="proj-desc">{t("pwiz.descLabel")}</label>
       <textarea
         id="proj-desc"
         rows={2}
         value={description}
-        placeholder="Mục tiêu, ngữ cảnh hoặc ghi chú cho Project…"
+        placeholder={t("pwiz.descPlaceholder")}
         onChange={(e) => setDescription(e.target.value)}
       />
 
-      <label>Agent tham gia Project ({picked.size} đã chọn)</label>
+      <label>{t("pwiz.agentsLabel", { count: picked.size })}</label>
       <div className="check-list">
         {allOptions.map((item) => {
           const key = `${item.agent_kind}:${item.agent_ref}`;
@@ -179,7 +181,7 @@ export function ProjectWizard(props: {
         })}
         {allOptions.length === 0 && (
           <span className="hint">
-            Chưa có Agent nào. Vào mục <strong>Quản trị Agent</strong> để thêm Muse hoặc OpenAI Agent trước.
+            {t("pwiz.noAgentsPrefix")} <strong>{t("sidebar.agents")}</strong> {t("pwiz.noAgentsSuffix")}
           </span>
         )}
       </div>
@@ -192,10 +194,10 @@ export function ProjectWizard(props: {
           disabled={saving}
           onClick={submit}
         >
-          {saving ? "Đang lưu…" : isEdit ? "Lưu thay đổi" : "Tạo Project"}
+          {saving ? t("common.saving") : isEdit ? t("common.saveChanges") : t("pwiz.createBtn")}
         </button>
         <button type="button" className="btn-ghost" onClick={props.onClose}>
-          Huỷ
+          {t("common.cancel")}
         </button>
       </div>
     </Modal>

@@ -19,6 +19,13 @@
     document.documentElement.dataset.theme="dark";
     document.documentElement.style.backgroundColor="#111318";
   }
+  try{
+    var l=localStorage.getItem("muse_relay_lang");
+    var lang=l==="en"?"en":"vi";
+    document.documentElement.lang=lang;
+  }catch(e){
+    document.documentElement.lang="vi";
+  }
 })();
 </script>
 </head>

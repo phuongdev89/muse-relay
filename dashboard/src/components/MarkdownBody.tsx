@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useLang } from "../lib/i18n";
 import { CheckIcon, CopyIcon } from "./Icons";
 import { copyText } from "./ui";
 
@@ -194,9 +195,10 @@ function parseBlocks(markdown: string): Block[] {
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const { t } = useLang();
 
   async function handleCopy() {
-    await copyText(code, "Đã copy đoạn mã");
+    await copyText(code, t("md.copiedCode"));
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   }
@@ -209,11 +211,11 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           type="button"
           className="md-code-copy"
           onClick={handleCopy}
-          title="Copy code"
-          aria-label="Copy đoạn mã"
+          title={t("md.copyCodeAria")}
+          aria-label={t("md.copyCodeAria")}
         >
           {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-          <span>{copied ? "Đã copy" : "Copy"}</span>
+          <span>{copied ? t("common.copied") : t("common.copy")}</span>
         </button>
       </div>
       <pre className="md-pre">

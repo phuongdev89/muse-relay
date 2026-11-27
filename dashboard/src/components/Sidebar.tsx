@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { museConnectionInfo, type MuseFleetSummary } from "../lib/format";
+import { useLang, type I18nKey } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 import type {
   ActiveRoom,
@@ -25,14 +26,15 @@ import {
   SunIcon,
   XIcon,
 } from "./Icons";
+import { LangToggle } from "./ui";
 
 export type { ActiveRoom };
 
-const CONV_MODE_SHORT: Record<ConversationMode, string> = {
-  muse_single: "1 Muse",
-  muse_group: "Nhóm",
-  openai: "OpenAI",
-  mixed: "Mix",
+const CONV_MODE_SHORT_KEY: Record<ConversationMode, I18nKey> = {
+  muse_single: "convModeShort.muse_single",
+  muse_group: "convModeShort.muse_group",
+  openai: "convModeShort.openai",
+  mixed: "convModeShort.mixed",
 };
 
 export function Sidebar(props: {
@@ -66,6 +68,7 @@ export function Sidebar(props: {
   const [query, setQuery] = useState("");
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
   const { theme, setTheme } = useTheme();
+  const { lang, t } = useLang();
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -167,7 +170,7 @@ export function Sidebar(props: {
       )}
       <aside
         className={`rail${mobileOpen ? " mobile-open" : ""}`}
-        aria-label="Điều hướng chính"
+        aria-label={t("sidebar.navAria")}
       >
         <div className="rail-head">
           <div className="wordmark">
@@ -179,22 +182,25 @@ export function Sidebar(props: {
             type="button"
             className="btn-quiet rail-close"
             onClick={onCloseMobile}
-            aria-label="Đóng thanh điều hướng"
+            aria-label={t("sidebar.closeAria")}
           >
             <XIcon size={16} />
           </button>
         </div>
 
-        <nav className="rail-top-nav" aria-label="Điều hướng cấp cao">
+        <nav className="rail-top-nav" aria-label={t("sidebar.topNavAria")}>
           <button
             type="button"
             className={`rail-nav-item${active?.kind === "overview" ? " active" : ""}`}
             onClick={() => selectRoom({ kind: "overview" })}
           >
             <OverviewIcon size={16} />
-            <span className="nm">Tổng quan</span>
+            <span className="nm">{t("sidebar.overview")}</span>
             {totalActiveJobs > 0 && (
-              <span className="rail-badge busy" title={`${totalActiveJobs} việc đang chạy`}>
+              <span
+                className="rail-badge busy"
+                title={t("sidebar.activeJobsTitle", { count: totalActiveJobs })}
+              >
                 {totalActiveJobs}
               </span>
             )}
@@ -206,7 +212,7 @@ export function Sidebar(props: {
             onClick={() => selectRoom({ kind: "agents" })}
           >
             <BotIcon size={16} />
-            <span className="nm">Quản trị Agent</span>
+            <span className="nm">{t("sidebar.agents")}</span>
           </button>
         </nav>
 
@@ -215,8 +221,8 @@ export function Sidebar(props: {
           <input
             type="search"
             value={query}
-            placeholder="Tìm Project, hội thoại, Muse…"
-            aria-label="Tìm Project, cuộc hội thoại hoặc Muse"
+            placeholder={t("sidebar.searchPlaceholder")}
+            aria-label={t("sidebar.searchAria")}
             onChange={(e) => setQuery(e.target.value)}
           />
           {query && (
@@ -224,7 +230,7 @@ export function Sidebar(props: {
               type="button"
               className="rail-search-clear"
               onClick={() => setQuery("")}
-              aria-label="Xoá từ khoá tìm kiếm"
+              aria-label={t("sidebar.clearSearchAria")}
             >
               <XIcon size={13} />
             </button>
@@ -233,9 +239,11 @@ export function Sidebar(props: {
 
         <div className="rail-scroll">
           {/* Project-Centric Tree */}
-          <nav className="rail-section" aria-label="Danh sách Project">
+          <nav className="rail-section" aria-label={t("sidebar.projectsAria")}>
             <div className="rail-label-row">
-              <span className="rail-label">PROJECT ({projects.length})</span>
+              <span className="rail-label">
+                {t("sidebar.projectsLabel", { count: projects.length })}
+              </span>
               <button
                 type="button"
                 className="rail-add-icon"
@@ -243,8 +251,8 @@ export function Sidebar(props: {
                   onCloseMobile();
                   props.onAddProject();
                 }}
-                title="Tạo project mới"
-                aria-label="Tạo project mới"
+                title={t("sidebar.newProject")}
+                aria-label={t("sidebar.newProject")}
               >
                 <PlusIcon size={14} />
               </button>
@@ -267,7 +275,11 @@ export function Sidebar(props: {
                         type="button"
                         className="proj-chevron"
                         aria-expanded={isExpanded}
-                        aria-label={isExpanded ? `Thu gọn ${project.name}` : `Mở rộng ${project.name}`}
+                        aria-label={
+                          isExpanded
+                            ? t("sidebar.collapseProj", { name: project.name })
+                            : t("sidebar.expandProj", { name: project.name })
+                        }
                         onClick={() => toggleProjectExpand(project.id)}
                       >
                         {isExpanded ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
@@ -283,7 +295,10 @@ export function Sidebar(props: {
                       >
                         <LayersIcon size={14} className="proj-icon" />
                         <span className="nm">{project.name}</span>
-                        <span className="rail-badge" title={`${agentCount} Agent trong Project`}>
+                        <span
+                          className="rail-badge"
+                          title={t("sidebar.agentsInProj", { count: agentCount })}
+                        >
                           {agentCount}
                         </span>
                       </button>
@@ -292,8 +307,8 @@ export function Sidebar(props: {
                         <button
                           type="button"
                           className="proj-action-btn"
-                          title="Cuộc hội thoại mới"
-                          aria-label={`Cuộc hội thoại mới trong ${project.name}`}
+                          title={t("sidebar.newConv")}
+                          aria-label={t("sidebar.newConvIn", { name: project.name })}
                           onClick={() => {
                             onCloseMobile();
                             props.onNewConversation(project);
@@ -304,8 +319,8 @@ export function Sidebar(props: {
                         <button
                           type="button"
                           className="proj-action-btn"
-                          title="Cài đặt Project"
-                          aria-label={`Cài đặt ${project.name}`}
+                          title={t("sidebar.projSettings")}
+                          aria-label={t("sidebar.projSettingsOf", { name: project.name })}
                           onClick={() => {
                             onCloseMobile();
                             props.onEditProject(project);
@@ -319,7 +334,7 @@ export function Sidebar(props: {
                     {isExpanded && (
                       <div className="proj-convs">
                         {convs.length === 0 ? (
-                          <span className="proj-conv-empty">Chưa có hội thoại</span>
+                          <span className="proj-conv-empty">{t("sidebar.noConvs")}</span>
                         ) : (
                           convs.map((c) => {
                             const isConvActive =
@@ -341,7 +356,7 @@ export function Sidebar(props: {
                                 <MessageIcon size={12} className="conv-nav-icon" />
                                 <span className="nm">{c.title}</span>
                                 <span className="conv-nav-hint">
-                                  {CONV_MODE_SHORT[c.mode]} · {c.participants.length}
+                                  {t(CONV_MODE_SHORT_KEY[c.mode])} · {c.participants.length}
                                 </span>
                               </button>
                             );
@@ -355,23 +370,27 @@ export function Sidebar(props: {
 
               {filteredProjects.length === 0 && (
                 <span className="rail-empty">
-                  {projects.length === 0 ? "Chưa có Project nào" : "Không tìm thấy Project"}
+                  {projects.length === 0
+                    ? t("sidebar.noProjects")
+                    : t("sidebar.noMatchingProjects")}
                 </span>
               )}
             </div>
           </nav>
 
           {/* Direct 1:1 Muse Channels */}
-          <nav className="rail-section" aria-label="Kênh trực tiếp với Muse">
+          <nav className="rail-section" aria-label={t("sidebar.directAria")}>
             <div className="rail-label-row">
-              <span className="rail-label">KÊNH TRỰC TIẾP ({muses.length})</span>
+              <span className="rail-label">
+                {t("sidebar.directLabel", { count: muses.length })}
+              </span>
             </div>
 
             <div className="rail-rooms">
               {filteredMuses.map((m) => {
                 const isMuseActive =
                   active?.kind === "muse" && active.recipient === m.recipient;
-                const conn = museConnectionInfo(m);
+                const conn = museConnectionInfo(m, lang);
                 const summary = fleetSummary.get(m.recipient);
                 const activeJobs = summary?.activeCount ?? 0;
 
@@ -388,7 +407,7 @@ export function Sidebar(props: {
                     {activeJobs > 0 ? (
                       <span
                         className="rail-badge busy"
-                        title={`${activeJobs} việc đang chạy`}
+                        title={t("sidebar.activeJobsTitle", { count: activeJobs })}
                       >
                         {activeJobs}
                       </span>
@@ -403,7 +422,7 @@ export function Sidebar(props: {
 
               {filteredMuses.length === 0 && (
                 <span className="rail-empty">
-                  {muses.length === 0 ? "Chưa có Muse nào" : "Không tìm thấy Muse"}
+                  {muses.length === 0 ? t("sidebar.noMuses") : t("sidebar.noMatchingMuses")}
                 </span>
               )}
             </div>
@@ -411,27 +430,30 @@ export function Sidebar(props: {
         </div>
 
         <div className="rail-foot">
-          <div className="theme-toggle" role="radiogroup" aria-label="Chế độ giao diện">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={theme === "dark"}
-              className={`theme-opt${theme === "dark" ? " on" : ""}`}
-              onClick={() => setTheme("dark")}
-            >
-              <MoonIcon size={13} />
-              <span>Tối</span>
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={theme === "light"}
-              className={`theme-opt${theme === "light" ? " on" : ""}`}
-              onClick={() => setTheme("light")}
-            >
-              <SunIcon size={13} />
-              <span>Sáng</span>
-            </button>
+          <div className="rail-controls-row">
+            <div className="theme-toggle" role="radiogroup" aria-label={t("sidebar.themeAria")}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={theme === "dark"}
+                className={`theme-opt${theme === "dark" ? " on" : ""}`}
+                onClick={() => setTheme("dark")}
+              >
+                <MoonIcon size={13} />
+                <span>{t("login.dark")}</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={theme === "light"}
+                className={`theme-opt${theme === "light" ? " on" : ""}`}
+                onClick={() => setTheme("light")}
+              >
+                <SunIcon size={13} />
+                <span>{t("login.light")}</span>
+              </button>
+            </div>
+            <LangToggle compact />
           </div>
 
           <div className="owner-chip">
@@ -440,11 +462,11 @@ export function Sidebar(props: {
               type="button"
               className="btn-quiet btn-logout"
               onClick={props.onLogout}
-              title="Đăng xuất"
-              aria-label="Đăng xuất"
+              title={t("sidebar.logout")}
+              aria-label={t("sidebar.logout")}
             >
               <LogOutIcon size={14} />
-              <span>Thoát</span>
+              <span>{t("sidebar.logoutShort")}</span>
             </button>
           </div>
         </div>

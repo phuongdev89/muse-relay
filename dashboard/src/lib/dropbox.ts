@@ -1,3 +1,5 @@
+import { getStoredLang, translate, type I18nKey, type Lang } from "./i18n";
+
 // Dropbox conventions: every muse owns exactly one root folder — `/<email>/` —
 // derived from the owner email the wizard collects. The server independently
 // enforces that result paths stay under the muse's root (relay_muses.dropbox_root),
@@ -30,14 +32,14 @@ const EXT_KIND: Record<string, ResourceKind> = {
   zip: "archive", rar: "archive", "7z": "archive", tar: "archive", gz: "archive",
 };
 
-const KIND_LABEL: Record<ResourceKind, string> = {
-  image: "Ảnh",
-  video: "Video",
-  audio: "Âm thanh",
-  document: "Tài liệu",
-  spreadsheet: "Bảng tính",
-  archive: "Lưu trữ",
-  other: "Tệp",
+const KIND_KEY: Record<ResourceKind, I18nKey> = {
+  image: "res.image",
+  video: "res.video",
+  audio: "res.audio",
+  document: "res.document",
+  spreadsheet: "res.spreadsheet",
+  archive: "res.archive",
+  other: "res.other",
 };
 
 const KIND_ICON: Record<ResourceKind, string> = {
@@ -60,8 +62,8 @@ export function resourceKind(path: string): ResourceKind {
   return EXT_KIND[extOf(path)] ?? "other";
 }
 
-export function resourceLabel(path: string): string {
-  return KIND_LABEL[resourceKind(path)];
+export function resourceLabel(path: string, lang: Lang = getStoredLang()): string {
+  return translate(lang, KIND_KEY[resourceKind(path)]);
 }
 
 export function resourceIcon(path: string): string {

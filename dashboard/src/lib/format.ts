@@ -1,4 +1,5 @@
 import type { FleetActivityItem, Muse } from "../types";
+import { getStoredLang, translate, type Lang } from "./i18n";
 
 const TIME_OPTS: Intl.DateTimeFormatOptions = {
   hour: "2-digit",
@@ -6,24 +7,34 @@ const TIME_OPTS: Intl.DateTimeFormatOptions = {
   hour12: false,
 };
 
-/** Today → `14:05`; older → `27/11 14:05`. */
-export function fmtTime(iso: string): string {
+function intlLocale(lang: Lang): string {
+  return lang === "en" ? "en-US" : "vi-VN";
+}
+
+const RTF_CACHE: Record<Lang, Intl.RelativeTimeFormat> = {
+  vi: new Intl.RelativeTimeFormat("vi-VN", { numeric: "always" }),
+  en: new Intl.RelativeTimeFormat("en-US", { numeric: "always" }),
+};
+
+/** Today → `14:05`; older → `27/11 14:05` (vi) or `11/27 14:05` (en). */
+export function fmtTime(iso: string, lang: Lang = getStoredLang()): string {
   const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "chưa rõ";
+  if (!Number.isFinite(d.getTime())) return translate(lang, "common.unknown");
+  const locale = intlLocale(lang);
   const now = new Date();
   const sameDay =
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
-  const time = d.toLocaleTimeString("vi-VN", TIME_OPTS);
+  const time = d.toLocaleTimeString(locale, TIME_OPTS);
   return sameDay
     ? time
-    : `${d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })} ${time}`;
+    : `${d.toLocaleDateString(locale, { day: "2-digit", month: "2-digit" })} ${time}`;
 }
 
 /** Wall-clock with seconds, for "last refreshed" indicators. */
-export function fmtClock(d: Date): string {
-  return d.toLocaleTimeString("vi-VN", { ...TIME_OPTS, second: "2-digit" });
+export function fmtClock(d: Date, lang: Lang = getStoredLang()): string {
+  return d.toLocaleTimeString(intlLocale(lang), { ...TIME_OPTS, second: "2-digit" });
 }
 
 // Derived message states beyond the DB's four: a pending row whose claim
@@ -56,11 +67,26 @@ export function ownerState(
 /** Short params summary shown under the owner bubble. */
 export function paramsSummary(
   action: string,
-  p: { thread_id?: string | null; aspect_ratio?: string; count?: number; duration_seconds?: number; resource_type?: string; output_format?: string },
+  p: {
+    thread_id?: string | null;
+    aspect_ratio?: string;
+    count?: number;
+    duration_seconds?: number;
+    resource_type?: string;
+    output_format?: string;
+  },
+  lang: Lang = getStoredLang(),
 ): string {
   const parts: string[] = [];
-  if (action === "image") parts.push(`${p.count ?? 1} ảnh`, p.aspect_ratio ?? "");
-  if (action === "video") parts.push(`${p.duration_seconds ?? 8}s`, p.aspect_ratio ?? "");
+  if (action === "image") {
+    parts.push(
+      translate(lang, "fmt.imageCount", { count: p.count ?? 1 }),
+      p.aspect_ratio ?? "",
+    );
+  }
+  if (action === "video") {
+    parts.push(`${p.duration_seconds ?? 8}s`, p.aspect_ratio ?? "");
+  }
   if (action === "chat") {
     if (p.resource_type && p.resource_type !== "auto") parts.push(p.resource_type);
     if (p.output_format && p.output_format !== "auto") parts.push(p.output_format);
@@ -151,20 +177,25 @@ export function memberDotColor(index: number): string {
   return `oklch(70% 0.12 ${hue})`;
 }
 
-/** Human-readable relative age in Vietnamese (e.g. "vừa xong", "12 giây trước"). */
-export function fmtRelativeAge(iso: string | null, nowMs = Date.now()): string {
-  if (!iso) return "chưa có";
+/** Locale-aware relative age using Intl.RelativeTimeFormat. */
+export function fmtRelativeAge(
+  iso: string | null,
+  lang: Lang = getStoredLang(),
+  nowMs = Date.now(),
+): string {
+  if (!iso) return translate(lang, "common.none");
   const ts = new Date(iso).getTime();
-  if (!Number.isFinite(ts)) return "chưa rõ";
+  if (!Number.isFinite(ts)) return translate(lang, "common.unknown");
   const diffSec = Math.max(0, Math.floor((nowMs - ts) / 1000));
-  if (diffSec < 5) return "vừa xong";
-  if (diffSec < 60) return `${diffSec} giây trước`;
+  if (diffSec < 5) return translate(lang, "fmt.justNow");
+  const rtf = RTF_CACHE[lang];
+  if (diffSec < 60) return rtf.format(-diffSec, "second");
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} phút trước`;
+  if (diffMin < 60) return rtf.format(-diffMin, "minute");
   const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return `${diffHour} giờ trước`;
+  if (diffHour < 24) return rtf.format(-diffHour, "hour");
   const diffDay = Math.floor(diffHour / 24);
-  return `${diffDay} ngày trước`;
+  return rtf.format(-diffDay, "day");
 }
 
 export type MuseConnectionState =
@@ -186,15 +217,19 @@ export interface MuseConnectionInfo {
 }
 
 /** Derives setup, connection, and live heartbeat telemetry for a Muse. */
-export function museConnectionInfo(muse: Muse, nowMs = Date.now()): MuseConnectionInfo {
+export function museConnectionInfo(
+  muse: Muse,
+  lang: Lang = getStoredLang(),
+  nowMs = Date.now(),
+): MuseConnectionInfo {
   if (!muse.setup_done && !muse.last_claim_at) {
     return {
       setupDone: false,
       connected: false,
       state: "not_setup",
-      shortLabel: "Chưa setup",
-      label: "Chưa setup / Chưa kết nối",
-      detail: "Chưa claim lần nào — cần dán token vào vault & khởi chạy daemon",
+      shortLabel: translate(lang, "conn.notSetupShort"),
+      label: translate(lang, "conn.notSetupLabel"),
+      detail: translate(lang, "conn.notSetupDetail"),
       chipClass: "pending",
       dotClass: "dot-pending",
     };
@@ -212,9 +247,11 @@ export function museConnectionInfo(muse: Muse, nowMs = Date.now()): MuseConnecti
       setupDone: true,
       connected: false,
       state: "reconnecting",
-      shortLabel: "Chờ kết nối lại",
-      label: "Đã đổi token — chờ kết nối lại",
-      detail: `Đổi token ${fmtRelativeAge(muse.token_rotated_at, nowMs)} · chưa claim lại`,
+      shortLabel: translate(lang, "conn.reconnectingShort"),
+      label: translate(lang, "conn.reconnectingLabel"),
+      detail: translate(lang, "conn.reconnectingDetail", {
+        age: fmtRelativeAge(muse.token_rotated_at, lang, nowMs),
+      }),
       chipClass: "pending",
       dotClass: "dot-pending",
     };
@@ -227,9 +264,11 @@ export function museConnectionInfo(muse: Muse, nowMs = Date.now()): MuseConnecti
       setupDone: true,
       connected: true,
       state: "live",
-      shortLabel: "Live",
-      label: "Đang live",
-      detail: `Poll ${fmtRelativeAge(muse.last_claim_at, nowMs)}`,
+      shortLabel: translate(lang, "conn.liveShort"),
+      label: translate(lang, "conn.liveLabel"),
+      detail: translate(lang, "conn.pollDetail", {
+        age: fmtRelativeAge(muse.last_claim_at, lang, nowMs),
+      }),
       chipClass: "idle",
       dotClass: "dot-live",
     };
@@ -240,9 +279,11 @@ export function museConnectionInfo(muse: Muse, nowMs = Date.now()): MuseConnecti
       setupDone: true,
       connected: true,
       state: "standby",
-      shortLabel: "Chờ nhịp",
-      label: "Đã kết nối (nhịp chờ)",
-      detail: `Poll ${fmtRelativeAge(muse.last_claim_at, nowMs)}`,
+      shortLabel: translate(lang, "conn.standbyShort"),
+      label: translate(lang, "conn.standbyLabel"),
+      detail: translate(lang, "conn.pollDetail", {
+        age: fmtRelativeAge(muse.last_claim_at, lang, nowMs),
+      }),
       chipClass: "processing",
       dotClass: "dot-standby",
     };
@@ -252,11 +293,13 @@ export function museConnectionInfo(muse: Muse, nowMs = Date.now()): MuseConnecti
     setupDone: true,
     connected: false,
     state: "offline",
-    shortLabel: "Offline",
-    label: "Mất kết nối",
+    shortLabel: translate(lang, "conn.offlineShort"),
+    label: translate(lang, "conn.offlineLabel"),
     detail: muse.last_claim_at
-      ? `Lần poll cuối ${fmtRelativeAge(muse.last_claim_at, nowMs)}`
-      : "Chưa có nhịp poll gần đây",
+      ? translate(lang, "conn.offlineDetailLast", {
+          age: fmtRelativeAge(muse.last_claim_at, lang, nowMs),
+        })
+      : translate(lang, "conn.offlineDetailNone"),
     chipClass: "failed",
     dotClass: "dot-error",
   };

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { tNow, useLang, type I18nKey } from "../lib/i18n";
 
 // ---- toast -----------------------------------------------------------------
 
@@ -31,19 +32,53 @@ export function ToastHost() {
   );
 }
 
+// ---- language toggle -------------------------------------------------------
+
+export function LangToggle({ compact = false }: { compact?: boolean }) {
+  const { lang, setLang, t } = useLang();
+  return (
+    <div
+      className={`lang-toggle${compact ? " compact" : ""}`}
+      role="radiogroup"
+      aria-label={t("lang.groupAria")}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={lang === "vi"}
+        className={`lang-opt${lang === "vi" ? " on" : ""}`}
+        onClick={() => setLang("vi")}
+      >
+        VI
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={lang === "en"}
+        className={`lang-opt${lang === "en" ? " on" : ""}`}
+        onClick={() => setLang("en")}
+      >
+        EN
+      </button>
+    </div>
+  );
+}
+
 // ---- chips -----------------------------------------------------------------
 
-const CHIP_LABEL: Record<string, string> = {
-  pending: "chờ nhận",
-  processing: "đang xử lý",
-  done: "xong",
-  failed: "lỗi",
-  expired: "hết hạn",
-  idle: "sẵn sàng",
+const CHIP_KEY: Record<string, I18nKey> = {
+  pending: "chip.pending",
+  processing: "chip.processing",
+  done: "chip.done",
+  failed: "chip.failed",
+  expired: "chip.expired",
+  idle: "chip.idle",
 };
 
 export function Chip({ state, label }: { state: string; label?: string }) {
-  return <span className={`chip ${state}`}>{label ?? CHIP_LABEL[state] ?? state}</span>;
+  const { t } = useLang();
+  const key = CHIP_KEY[state];
+  return <span className={`chip ${state}`}>{label ?? (key ? t(key) : state)}</span>;
 }
 
 // ---- modal -----------------------------------------------------------------
@@ -122,10 +157,10 @@ export function setButtonBusy(
 export async function copyText(text: string, note?: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
-    toast(note ?? "Đã copy");
+    toast(note ?? tNow("common.copied"));
     return true;
   } catch {
-    toast("Không copy được");
+    toast(tNow("common.copyFailed"));
     return false;
   }
 }

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMuseThread, sendMessage } from "../lib/api";
 import { fmtClock, fmtTime, museConnectionInfo, ownerState, paramsSummary } from "../lib/format";
+import { useLang } from "../lib/i18n";
 import type { ActionMode, MessageParams, Muse, ThreadItem } from "../types";
 import { Composer } from "./Composer";
-import { ArrowDownIcon, PanelRightIcon, RefreshIcon, TrashIcon } from "./Icons";
+import { ArrowDownIcon, KeyIcon, LockIcon, PanelRightIcon, RefreshIcon, TrashIcon } from "./Icons";
 import { MarkdownBody } from "./MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "./MessageBubble";
 import { MuseManageMenu } from "./MuseManage";
@@ -28,6 +29,8 @@ export function MuseRoom(props: {
   refreshTrigger?: number;
 }) {
   const { muse, onPathsChange } = props;
+  const { lang, t } = useLang();
+
   const [items, setItems] = useState<ThreadItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -87,8 +90,8 @@ export function MuseRoom(props: {
     isNearBottomRef.current = true;
     setIsNearBottom(true);
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(t);
+    const tmr = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(tmr);
   }, [load, props.refreshTrigger]);
 
   // Smart auto-scroll
@@ -146,18 +149,19 @@ export function MuseRoom(props: {
       it.message.expires_at,
       it.message.claim_expires_at,
     );
-    if (st === "pending") return "đang chờ Muse nhận việc…";
-    if (st === "processing") return `${muse.name} đang xử lý…`;
-    if (st === "expired") return "hết hạn chờ — Muse không nhận hoặc không trả kết quả trong 30 phút.";
+    if (st === "pending") return t("museRoom.statusPending");
+    if (st === "processing") return t("museRoom.statusProcessing", { name: muse.name });
+    if (st === "expired") return t("museRoom.statusExpired");
     return null;
   };
 
   const showSkeleton = loading && items.length === 0 && pending.length === 0 && !loadError;
   const hasContent = items.length > 0 || pending.length > 0;
-  const conn = museConnectionInfo(muse);
+  const conn = museConnectionInfo(muse, lang);
+  const isLocked = !conn.setupDone;
 
   return (
-    <section className="room-pane fade" aria-label={`Phòng ${muse.name}`}>
+    <section className="room-pane fade" aria-label={t("museRoom.aria", { name: muse.name })}>
       <div className="pane-head">
         <div className="pane-title-group">
           <div className="pane-title-row">
@@ -166,10 +170,10 @@ export function MuseRoom(props: {
           </div>
           <span className="sub">
             {loadError
-              ? `lỗi tải: ${loadError}`
+              ? t("museRoom.loadErr", { err: loadError })
               : updatedAt
-                ? `${conn.detail} · cập nhật ${fmtClock(updatedAt)}`
-                : `${conn.detail} · đang tải…`}
+                ? `${conn.detail} · ${t("ov.updated", { time: fmtClock(updatedAt, lang) })}`
+                : `${conn.detail} · ${t("ov.loading")}`}
           </span>
         </div>
         <span className="grow" />
@@ -178,30 +182,37 @@ export function MuseRoom(props: {
             type="button"
             className="btn-ghost"
             onClick={() => props.onOpenAction("clear")}
-            title="Xoá lịch sử tin nhắn kênh trực tiếp"
-            aria-label="Xoá lịch sử kênh trực tiếp"
+            title={t("museRoom.clearHistoryTitle")}
+            aria-label={t("museRoom.clearHistoryAria")}
           >
             <TrashIcon size={14} />
-            <span className="hide-xs">Xoá lịch sử</span>
+            <span className="hide-xs">{t("museRoom.clearHistory")}</span>
           </button>
           <MuseManageMenu
             onRename={() => props.onOpenAction("rename")}
             onRotate={() => props.onOpenAction("rotate")}
             onDelete={() => props.onOpenAction("delete")}
           />
-          <button type="button" className="btn-ghost" onClick={load}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={load}
+            title={t("common.refresh")}
+            aria-label={t("common.refresh")}
+          >
             <RefreshIcon size={14} />
-            <span className="hide-xs">Làm mới</span>
+            <span className="hide-xs">{t("common.refresh")}</span>
           </button>
           <button
             type="button"
             className={`btn-ghost btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
             onClick={props.onToggleInspector}
             aria-pressed={props.inspectorOpen}
-            title="Đóng/mở hồ sơ Muse"
+            title={t("museRoom.toggleProfileTitle")}
+            aria-label={t("museRoom.toggleProfileTitle")}
           >
             <PanelRightIcon size={15} />
-            <span className="hide-xs">Chi tiết</span>
+            <span className="hide-xs">{t("common.details")}</span>
           </button>
         </div>
       </div>
@@ -214,7 +225,7 @@ export function MuseRoom(props: {
           aria-live="polite"
         >
           {showSkeleton && (
-            <div className="thread-skeleton" aria-label="Đang tải hội thoại">
+            <div className="thread-skeleton" aria-label={t("museRoom.loadingAria")}>
               <div className="skel-bubble owner" />
               <div className="skel-bubble muse" />
               <div className="skel-bubble owner short" />
@@ -224,13 +235,13 @@ export function MuseRoom(props: {
 
           {!loading && items.length === 0 && pending.length === 0 && !loadError && (
             <div className="thread-empty">
-              Phòng trống — nhắn tin đầu tiên cho {muse.name} bên dưới.
+              {t("museRoom.empty", { name: muse.name })}
             </div>
           )}
 
           {items.map((it) => {
             const st = ownerState(it.message.status, it.message.expires_at, it.message.claim_expires_at);
-            const summary = paramsSummary(it.message.action, it.message.params);
+            const summary = paramsSummary(it.message.action, it.message.params, lang);
             const promptText = it.message.params.prompt ?? "";
             return (
               <div key={it.message.id} className="exchange">
@@ -238,7 +249,7 @@ export function MuseRoom(props: {
                   side="owner"
                   state={st}
                   failed={st === "failed"}
-                  timeLabel={fmtTime(it.message.created_at)}
+                  timeLabel={fmtTime(it.message.created_at, lang)}
                   copyValue={promptText}
                   footer={summary || null}
                   statusText={st === "failed" ? null : ownerStatusText(it)}
@@ -248,7 +259,7 @@ export function MuseRoom(props: {
                     <div className="statusline err">{it.result.error}</div>
                   )}
                 </MessageBubble>
-                {it.result && <MuseReply museName={muse.name} item={it} />}
+                {it.result && <MuseReply item={it} />}
               </div>
             );
           })}
@@ -258,7 +269,7 @@ export function MuseRoom(props: {
               <MessageBubble
                 side="owner"
                 state="pending"
-                timeLabel={fmtTime(new Date(o.sentAt).toISOString())}
+                timeLabel={fmtTime(new Date(o.sentAt).toISOString(), lang)}
                 copyValue={o.prompt}
               >
                 <div className="body">{o.prompt}</div>
@@ -272,34 +283,58 @@ export function MuseRoom(props: {
             type="button"
             className="scroll-bottom-btn"
             onClick={() => scrollToBottom(true)}
-            aria-label="Cuộn xuống tin mới nhất"
+            aria-label={t("museRoom.scrollBottomAria")}
           >
             <ArrowDownIcon size={14} />
-            <span>Xuống cuối</span>
+            <span>{t("museRoom.scrollBottom")}</span>
           </button>
         )}
       </div>
 
       <Composer
-        placeholder={`Nhắn cho ${muse.name}… (Enter gửi, Shift+Enter xuống dòng)`}
+        placeholder={
+          isLocked
+            ? t("museRoom.composerLockedPlaceholder", { name: muse.name })
+            : t("museRoom.composerPlaceholder", { name: muse.name })
+        }
         onSend={handleSend}
+        disabled={isLocked}
+        disabledBanner={
+          isLocked ? (
+            <div className="composer-lock-banner" role="status">
+              <LockIcon size={15} className="composer-lock-icon" />
+              <span className="composer-lock-text">
+                {t("composer.lockText", { name: muse.name })}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost btn-sm composer-lock-btn"
+                onClick={() => props.onOpenAction("rotate")}
+              >
+                <KeyIcon size={13} />
+                <span>{t("composer.getTokenRotate")}</span>
+              </button>
+            </div>
+          ) : undefined
+        }
       />
     </section>
   );
 }
 
-function MuseReply(props: { museName: string; item: ThreadItem }) {
+function MuseReply(props: { item: ThreadItem }) {
+  const { lang, t } = useLang();
   const { result, message } = props.item;
   const r = result;
   if (!r) return null;
   if (r.status === "failed") {
-    const errText = r.error || "thất bại";
+    const errText = r.error || t("api.failed");
     return (
       <MessageBubble
         side="muse"
         state="failed"
         failed
-        timeLabel={fmtTime(r.created_at)}
+        timeLabel={fmtTime(r.created_at, lang)}
         copyValue={errText}
       >
         <div className="body err">{errText}</div>
@@ -313,9 +348,9 @@ function MuseReply(props: { museName: string; item: ThreadItem }) {
     <MessageBubble
       side="muse"
       state="done"
-      timeLabel={`trả lời ${fmtTime(r.created_at)}`}
+      timeLabel={t("museRoom.replyAt", { time: fmtTime(r.created_at, lang) })}
       copyValue={text || undefined}
-      footer={paths.length > 0 ? `${paths.length} tệp trên Dropbox` : null}
+      footer={paths.length > 0 ? t("museRoom.dropboxFiles", { count: paths.length }) : null}
     >
       {text && (
         <>
@@ -326,7 +361,7 @@ function MuseReply(props: { museName: string; item: ThreadItem }) {
       <ResourceCards paths={paths} />
       {r.output?.notes && <div className="statusline">{r.output.notes}</div>}
       {message.attempts > 1 && (
-        <div className="statusline">nhận việc lần {message.attempts}</div>
+        <div className="statusline">{t("museRoom.attemptNum", { n: message.attempts })}</div>
       )}
     </MessageBubble>
   );

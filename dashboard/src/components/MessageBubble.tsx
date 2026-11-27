@@ -1,15 +1,17 @@
 import { useState, type ReactNode } from "react";
 import { fileName, resourceLabel } from "../lib/dropbox";
+import { useLang } from "../lib/i18n";
 import { CheckIcon, CopyIcon, LinkIcon, ResourceKindIcon } from "./Icons";
 import { copyText } from "./ui";
 
 // ---- status ticks (owner-side message states) ------------------------------
 
 export function Ticks({ state }: { state: string }) {
+  const { t } = useLang();
   const stroke = "currentColor";
   if (state === "done") {
     return (
-      <svg className="ticks ticks-done" width="17" height="12" viewBox="0 0 20 12" fill="none" aria-label="đã xong">
+      <svg className="ticks ticks-done" width="17" height="12" viewBox="0 0 20 12" fill="none" aria-label={t("ticks.done")}>
         <path d="M1 6.5l3.5 3.5L11 2.5" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
         <path d="M8.5 6.5L12 10l6.5-7.5" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
       </svg>
@@ -17,24 +19,24 @@ export function Ticks({ state }: { state: string }) {
   }
   if (state === "failed") {
     return (
-      <svg className="ticks ticks-failed" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="thất bại">
+      <svg className="ticks ticks-failed" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label={t("ticks.failed")}>
         <path d="M2 2l8 8M10 2l-8 8" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
       </svg>
     );
   }
   if (state === "processing") {
-    return <span className="ticks tick-spin" role="status" aria-label="đang xử lý" />;
+    return <span className="ticks tick-spin" role="status" aria-label={t("ticks.processing")} />;
   }
   if (state === "expired") {
     return (
-      <svg className="ticks ticks-expired" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="hết hạn">
+      <svg className="ticks ticks-expired" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label={t("ticks.expired")}>
         <circle cx="6" cy="6" r="4.6" stroke={stroke} strokeWidth="1.5" />
         <path d="M6 3.6V6l1.8 1.2" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     );
   }
   return (
-    <svg className="ticks ticks-pending" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="đã gửi, chờ nhận">
+    <svg className="ticks ticks-pending" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label={t("ticks.pending")}>
       <circle cx="6" cy="6" r="4.6" stroke={stroke} strokeWidth="1.5" strokeDasharray="2.2 1.8" />
     </svg>
   );
@@ -50,7 +52,7 @@ export interface BubbleProps {
   timeLabel?: string;
   /** owner 1:1 → OwnerState · group → BatchState; renders ticks or chip */
   state?: string;
-  /** extra status sentence under the body ("đang chờ Muse nhận việc…") */
+  /** extra status sentence under the body */
   statusText?: string | null;
   failed?: boolean;
   /** text copied when user clicks the hover/focus-within copy action */
@@ -62,10 +64,11 @@ export interface BubbleProps {
 
 export function MessageBubble(p: BubbleProps) {
   const [copied, setCopied] = useState(false);
+  const { t } = useLang();
 
   async function handleCopy() {
     if (!p.copyValue) return;
-    const ok = await copyText(p.copyValue, "Đã copy nội dung");
+    const ok = await copyText(p.copyValue, t("msg.copiedContent"));
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
@@ -92,11 +95,11 @@ export function MessageBubble(p: BubbleProps) {
             type="button"
             className={`bubble-copy${copied ? " copied" : ""}`}
             onClick={handleCopy}
-            title="Copy nội dung tin nhắn"
-            aria-label="Copy nội dung tin nhắn"
+            title={t("msg.copyAria")}
+            aria-label={t("msg.copyAria")}
           >
             {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-            <span>{copied ? "Đã copy" : "Copy"}</span>
+            <span>{copied ? t("common.copied") : t("common.copy")}</span>
           </button>
         ) : null}
       </div>
@@ -108,22 +111,24 @@ export function MessageBubble(p: BubbleProps) {
 }
 
 function ChipOf({ state }: { state: string }) {
+  const { t } = useLang();
   const label =
     state === "pending"
-      ? "chờ"
+      ? t("chip.shortPending")
       : state === "processing"
-        ? "đang viết"
+        ? t("chip.shortWriting")
         : state === "failed"
-          ? "lỗi"
+          ? t("chip.failed")
           : state === "expired"
-            ? "hết hạn"
-            : "xong";
+            ? t("chip.expired")
+            : t("chip.done");
   return <span className={`chip ${state}`}>{label}</span>;
 }
 
 // ---- dropbox resource preview ----------------------------------------------
 
 export function ResourceCards({ paths }: { paths: string[] }) {
+  const { lang, t } = useLang();
   if (paths.length === 0) return null;
   return (
     <div className="res-list">
@@ -134,15 +139,15 @@ export function ResourceCards({ paths }: { paths: string[] }) {
           </span>
           <span className="res-info">
             <span className="res-name">{fileName(path)}</span>
-            <span className="res-kind">{resourceLabel(path)}</span>
+            <span className="res-kind">{resourceLabel(path, lang)}</span>
             <code className="res-path">{path}</code>
           </span>
           <button
             type="button"
             className="btn-quiet btn-icon-copy"
-            title="Copy đường dẫn Dropbox"
-            aria-label={`Copy đường dẫn ${fileName(path)}`}
-            onClick={() => copyText(path, "Đã copy đường dẫn")}
+            title={t("res.copyPathTitle")}
+            aria-label={t("res.copyPathAria", { name: fileName(path) })}
+            onClick={() => copyText(path, t("res.copyPathToast"))}
           >
             <CopyIcon size={13} />
           </button>
@@ -154,6 +159,7 @@ export function ResourceCards({ paths }: { paths: string[] }) {
 
 /** Inline previews for any http(s) links carried in text/notes. */
 export function UrlPreviews({ text }: { text: string }) {
+  const { t } = useLang();
   const urls = [...new Set(text.match(/https?:\/\/[^\s<>"')\]]+/g) ?? [])];
   if (urls.length === 0) return null;
   return (
@@ -161,7 +167,7 @@ export function UrlPreviews({ text }: { text: string }) {
       {urls.map((u) =>
         /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(u) ? (
           <a key={u} href={u} target="_blank" rel="noreferrer noopener" className="url-img">
-            <img src={u} alt="preview" loading="lazy" />
+            <img src={u} alt={t("msg.imgPreviewAlt")} loading="lazy" />
           </a>
         ) : (
           <a key={u} href={u} target="_blank" rel="noreferrer noopener" className="url-link">

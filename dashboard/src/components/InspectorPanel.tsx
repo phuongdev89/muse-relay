@@ -8,6 +8,7 @@ import {
   museConnectionInfo,
   type MuseFleetSummary,
 } from "../lib/format";
+import { useLang, type I18nKey } from "../lib/i18n";
 import type {
   ActiveRoom,
   Conversation,
@@ -33,11 +34,11 @@ import {
 } from "./Icons";
 import { Chip, copyText } from "./ui";
 
-const STATUS_LABEL: Record<string, string> = {
-  processing: "đang xử lý",
-  pending: "chờ nhận",
-  error: "lỗi / hết hạn",
-  idle: "sẵn sàng",
+const STATUS_KEY: Record<string, I18nKey> = {
+  processing: "chip.processing",
+  pending: "chip.pending",
+  error: "ov.kpiErrors",
+  idle: "chip.idle",
 };
 
 const STATUS_CHIP: Record<string, string> = {
@@ -47,22 +48,18 @@ const STATUS_CHIP: Record<string, string> = {
   idle: "idle",
 };
 
-const MODE_LABEL: Record<ConversationMode, string> = {
-  muse_single: "1:1 Muse (Thread riêng)",
-  muse_group: "Nhóm Muse (Relay Group)",
-  openai: "OpenAI Compatible",
-  mixed: "Hỗn hợp Muse + OpenAI",
+const MODE_LABEL_KEY: Record<ConversationMode, I18nKey> = {
+  muse_single: "insp.modeLabel.muse_single",
+  muse_group: "insp.modeLabel.muse_group",
+  openai: "insp.modeLabel.openai",
+  mixed: "insp.modeLabel.mixed",
 };
 
-const MODE_DESC: Record<ConversationMode, string> = {
-  muse_single:
-    "Tin nhắn gửi kèm thread_id của cuộc hội thoại này. Hỗ trợ đầy đủ Chat, Ảnh và Video.",
-  muse_group:
-    "Owner là người khởi xướng duy nhất. Các Muse tự luân phiên phản hồi tối đa 12 lượt tự động rồi dừng chờ chỉ đạo tiếp theo.",
-  openai:
-    "Mỗi tin nhắn của Owner được gửi trực tiếp tới endpoint /chat/completions của các OpenAI Agent đã chọn và lưu vào Supabase.",
-  mixed:
-    "Mỗi tin nhắn của Owner được điều phối đồng thời tới cả Muse Relay và OpenAI Compatible Agent, hợp nhất theo thứ tự thời gian.",
+const MODE_DESC_KEY: Record<ConversationMode, I18nKey> = {
+  muse_single: "insp.modeDesc.muse_single",
+  muse_group: "insp.modeDesc.muse_group",
+  openai: "insp.modeDesc.openai",
+  mixed: "insp.modeDesc.mixed",
 };
 
 export function InspectorPanel(props: {
@@ -100,6 +97,7 @@ export function InspectorPanel(props: {
     openaiAgents,
     threadPaths,
   } = props;
+  const { t } = useLang();
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -114,14 +112,14 @@ export function InspectorPanel(props: {
 
   const title =
     active?.kind === "agents"
-      ? "Hướng dẫn Agent"
+      ? t("insp.titleAgents")
       : conversation
-        ? "Chi tiết Hội thoại"
+        ? t("insp.titleConv")
         : project && active?.kind === "project"
-          ? "Chi tiết Project"
+          ? t("insp.titleProj")
           : muse
-            ? "Hồ sơ Muse"
-            : "Hướng dẫn Relay";
+            ? t("insp.titleMuse")
+            : t("insp.titleOverview");
 
   return (
     <>
@@ -132,14 +130,14 @@ export function InspectorPanel(props: {
           onClick={onCloseMobile}
         />
       )}
-      <aside className={panelClass} aria-label="Bảng thông tin chi tiết">
+      <aside className={panelClass} aria-label={t("insp.aria")}>
         <div className="inspector-head">
           <span className="inspector-title">{title}</span>
           <button
             type="button"
             className="btn-quiet inspector-close"
             onClick={onCloseMobile}
-            aria-label="Đóng bảng chi tiết"
+            aria-label={t("insp.closeAria")}
           >
             <XIcon size={16} />
           </button>
@@ -195,6 +193,7 @@ function AgentsInspector({
   musesCount: number;
   openaiCount: number;
 }) {
+  const { t } = useLang();
   return (
     <>
       <div className="insp-card insp-identity">
@@ -202,34 +201,33 @@ function AgentsInspector({
           <BotIcon size={18} />
         </span>
         <div className="insp-identity-info">
-          <strong className="insp-name">Kho Agent Hợp Nhất</strong>
+          <strong className="insp-name">{t("insp.registryTitle")}</strong>
           <span className="insp-sub">
-            {musesCount} Muse Relay · {openaiCount} OpenAI Compatible
+            {t("agents.sub", { muses: musesCount, openai: openaiCount })}
           </span>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Muse Relay (Async Daemon)</span>
+        <span className="insp-label">{t("insp.museAsyncLabel")}</span>
         <div className="insp-note-box">
-          Mỗi Muse dùng <code>recipient</code> UUID và <code>RELAY_TOKEN</code> lưu trong Secure
-          Vault. Phù hợp tác vụ dài hạn, tạo Ảnh / Video và xuất tệp lên Dropbox.
+          {t("insp.museAsyncBody1")} <code>recipient</code> {t("insp.museAsyncBody2")}{" "}
+          <code>RELAY_TOKEN</code> {t("insp.museAsyncBody3")}
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">OpenAI Compatible (Direct API)</span>
+        <span className="insp-label">{t("insp.oaiDirectLabel")}</span>
         <div className="insp-note-box">
-          Gọi trực tiếp từ trình duyệt tới <code>{"{base_url}/chat/completions"}</code> bằng Bearer
-          API key. Endpoint cần bật CORS cho domain dashboard nếu chạy trên trình duyệt.
+          {t("insp.oaiDirectBody1")} <code>{"{base_url}/chat/completions"}</code>{" "}
+          {t("insp.oaiDirectBody2")}
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Lưu ý khi xoá Agent</span>
+        <span className="insp-label">{t("insp.deleteNoteLabel")}</span>
         <div className="insp-note-box">
-          Khi xoá Muse hoặc OpenAI Agent, hệ thống tự động gỡ liên kết khỏi các{" "}
-          <strong>Project</strong> đang tham chiếu để tránh thành viên treo.
+          {t("insp.deleteNoteBody1")} <strong>Project</strong> {t("insp.deleteNoteBody2")}
         </div>
       </div>
     </>
@@ -246,6 +244,7 @@ function ProjectInspector(props: {
   onNewConversation: () => void;
 }) {
   const { project, projectAgents, conversationsCount, muses, openaiAgents } = props;
+  const { lang, t } = useLang();
   const museMap = new Map(muses.map((m) => [m.recipient, m]));
   const oaiMap = new Map(openaiAgents.map((a) => [a.id, a]));
 
@@ -258,45 +257,47 @@ function ProjectInspector(props: {
         <div className="insp-identity-info">
           <strong className="insp-name">{project.name}</strong>
           <span className="insp-sub">
-            {projectAgents.length} Agent · {conversationsCount} hội thoại
+            {t("insp.projMeta", { agents: projectAgents.length, convs: conversationsCount })}
           </span>
         </div>
       </div>
 
       {project.description && (
         <div className="insp-section">
-          <span className="insp-label">Mô tả Project</span>
+          <span className="insp-label">{t("insp.projDesc")}</span>
           <div className="insp-note-box">{project.description}</div>
         </div>
       )}
 
       <div className="insp-section">
-        <span className="insp-label">Thông tin</span>
+        <span className="insp-label">{t("insp.info")}</span>
         <div className="insp-kv">
-          <span className="insp-k">Project ID</span>
+          <span className="insp-k">{t("insp.projId")}</span>
           <div className="insp-copy-row">
             <code className="insp-code">{project.id}</code>
             <button
               type="button"
               className="btn-quiet btn-icon-copy"
-              title="Copy Project ID"
-              aria-label="Copy Project ID"
-              onClick={() => copyText(project.id, "Đã copy Project ID")}
+              title={t("insp.projId")}
+              aria-label={t("insp.projId")}
+              onClick={() => copyText(project.id, t("insp.copyProjId"))}
             >
               <CopyIcon size={13} />
             </button>
           </div>
         </div>
         <div className="insp-kv">
-          <span className="insp-k">Ngày tạo</span>
-          <span className="insp-v">{fmtTime(project.created_at)}</span>
+          <span className="insp-k">{t("insp.createdDate")}</span>
+          <span className="insp-v">{fmtTime(project.created_at, lang)}</span>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Agent đã gán ({projectAgents.length})</span>
+        <span className="insp-label">
+          {t("insp.assignedAgents", { count: projectAgents.length })}
+        </span>
         {projectAgents.length === 0 ? (
-          <p className="insp-empty">Chưa có Agent nào trong Project này.</p>
+          <p className="insp-empty">{t("insp.noAssignedAgents")}</p>
         ) : (
           <div className="insp-member-list">
             {projectAgents.map((pa, i) => {
@@ -321,15 +322,15 @@ function ProjectInspector(props: {
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Thao tác nhanh</span>
+        <span className="insp-label">{t("insp.quickActions")}</span>
         <div className="insp-actions">
           <button type="button" className="btn-ghost insp-action-btn" onClick={props.onNewConversation}>
             <PlusIcon size={14} />
-            <span>Cuộc hội thoại mới</span>
+            <span>{t("sidebar.newConv")}</span>
           </button>
           <button type="button" className="btn-ghost insp-action-btn" onClick={props.onEditProject}>
             <SettingsIcon size={14} />
-            <span>Cài đặt Project</span>
+            <span>{t("sidebar.projSettings")}</span>
           </button>
         </div>
       </div>
@@ -345,6 +346,7 @@ function ConversationInspector(props: {
   paths: string[];
 }) {
   const { project, conversation, muses, openaiAgents, paths } = props;
+  const { lang, t } = useLang();
   const museMap = new Map(muses.map((m) => [m.recipient, m]));
   const oaiMap = new Map(openaiAgents.map((a) => [a.id, a]));
 
@@ -357,21 +359,23 @@ function ConversationInspector(props: {
         <div className="insp-identity-info">
           <strong className="insp-name">{conversation.title}</strong>
           <span className="insp-sub">
-            {project.name} · {fmtTime(conversation.created_at)}
+            {project.name} · {fmtTime(conversation.created_at, lang)}
           </span>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Chế độ vận hành</span>
+        <span className="insp-label">{t("insp.opMode")}</span>
         <div className="insp-note-box">
-          <strong>{MODE_LABEL[conversation.mode]}</strong>
-          <p>{MODE_DESC[conversation.mode]}</p>
+          <strong>{t(MODE_LABEL_KEY[conversation.mode])}</strong>
+          <p>{t(MODE_DESC_KEY[conversation.mode])}</p>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Thành viên tham gia ({conversation.participants.length})</span>
+        <span className="insp-label">
+          {t("insp.participants", { count: conversation.participants.length })}
+        </span>
         <div className="insp-member-list">
           {conversation.participants.map((p, i) => {
             const liveMuse = p.kind === "muse" ? museMap.get(p.ref) : undefined;
@@ -384,7 +388,9 @@ function ConversationInspector(props: {
                 <div className="insp-member-meta">
                   <span className="insp-member-name">
                     {displayName}
-                    {deleted && <span className="deleted-note"> (đã xoá)</span>}
+                    {deleted && (
+                      <span className="deleted-note"> ({t("convRoom.deletedTag")})</span>
+                    )}
                   </span>
                   <code className="insp-member-id">
                     {p.kind === "muse"
@@ -395,9 +401,9 @@ function ConversationInspector(props: {
                 <button
                   type="button"
                   className="btn-quiet btn-icon-copy"
-                  title="Copy ID"
-                  aria-label={`Copy ID của ${displayName}`}
-                  onClick={() => copyText(p.ref, `Đã copy ID của ${displayName}`)}
+                  title={t("insp.copyIdAria", { name: displayName })}
+                  aria-label={t("insp.copyIdAria", { name: displayName })}
+                  onClick={() => copyText(p.ref, t("insp.copyIdToast", { name: displayName }))}
                 >
                   <CopyIcon size={13} />
                 </button>
@@ -409,8 +415,8 @@ function ConversationInspector(props: {
 
       {conversation.mode !== "openai" && (
         <div className="insp-section">
-          <span className="insp-label">Tệp Dropbox trong luồng ({paths.length})</span>
-          <InspectorFileList paths={paths} emptyText="Chưa có tệp nào trong cuộc hội thoại." />
+          <span className="insp-label">{t("insp.dropboxFiles", { count: paths.length })}</span>
+          <InspectorFileList paths={paths} emptyText={t("insp.noFilesConv")} />
         </div>
       )}
     </>
@@ -424,8 +430,9 @@ function MuseInspector(props: {
   onAction: (action: "rename" | "rotate" | "delete" | "clear") => void;
 }) {
   const { muse, summary, paths } = props;
+  const { lang, t } = useLang();
   const status = summary?.status ?? "idle";
-  const conn = museConnectionInfo(muse);
+  const conn = museConnectionInfo(muse, lang);
 
   return (
     <>
@@ -437,67 +444,67 @@ function MuseInspector(props: {
           <strong className="insp-name">{muse.name}</strong>
           <div className="insp-chip-row">
             <Chip state={conn.chipClass} label={conn.label} />
-            <Chip state={STATUS_CHIP[status]} label={STATUS_LABEL[status]} />
+            <Chip state={STATUS_CHIP[status]} label={t(STATUS_KEY[status])} />
           </div>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Kết nối &amp; Telemetry</span>
+        <span className="insp-label">{t("insp.telemetry")}</span>
         <div className="insp-telemetry-list">
           <div className="insp-kv">
-            <span className="insp-k">Trạng thái Setup</span>
+            <span className="insp-k">{t("insp.setupState")}</span>
             <span className="insp-v">
-              {conn.setupDone ? "Đã setup (setup_done = true)" : "Chưa setup (chưa từng claim)"}
+              {conn.setupDone ? t("insp.setupDone") : t("insp.setupPending")}
             </span>
           </div>
           <div className="insp-kv">
-            <span className="insp-k">Kết nối đầu tiên</span>
+            <span className="insp-k">{t("insp.firstConnected")}</span>
             <span className="insp-v">
               {muse.first_connected_at
-                ? `${fmtTime(muse.first_connected_at)} · ${fmtRelativeAge(muse.first_connected_at)}`
-                : "Chưa kết nối"}
+                ? `${fmtTime(muse.first_connected_at, lang)} · ${fmtRelativeAge(muse.first_connected_at, lang)}`
+                : t("insp.notConnected")}
             </span>
           </div>
           <div className="insp-kv">
-            <span className="insp-k">Nhịp poll gần nhất (last_claim_at)</span>
+            <span className="insp-k">{t("insp.lastPoll")}</span>
             <span className="insp-v">
               {muse.last_claim_at
-                ? `${fmtTime(muse.last_claim_at)} · ${fmtRelativeAge(muse.last_claim_at)}`
-                : "Chưa có"}
+                ? `${fmtTime(muse.last_claim_at, lang)} · ${fmtRelativeAge(muse.last_claim_at, lang)}`
+                : t("common.none")}
             </span>
           </div>
           <div className="insp-kv">
-            <span className="insp-k">Trả kết quả gần nhất (last_result_at)</span>
+            <span className="insp-k">{t("insp.lastResult")}</span>
             <span className="insp-v">
               {muse.last_result_at
-                ? `${fmtTime(muse.last_result_at)} · ${fmtRelativeAge(muse.last_result_at)}`
-                : "Chưa có"}
+                ? `${fmtTime(muse.last_result_at, lang)} · ${fmtRelativeAge(muse.last_result_at, lang)}`
+                : t("common.none")}
             </span>
           </div>
           <div className="insp-kv">
-            <span className="insp-k">Đổi token gần nhất (token_rotated_at)</span>
+            <span className="insp-k">{t("insp.lastRotated")}</span>
             <span className="insp-v">
               {muse.token_rotated_at
-                ? `${fmtTime(muse.token_rotated_at)} · ${fmtRelativeAge(muse.token_rotated_at)}`
-                : "Chưa từng đổi"}
+                ? `${fmtTime(muse.token_rotated_at, lang)} · ${fmtRelativeAge(muse.token_rotated_at, lang)}`
+                : t("insp.neverRotated")}
             </span>
           </div>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Định danh &amp; Thư mục</span>
+        <span className="insp-label">{t("insp.identityFolder")}</span>
         <div className="insp-kv">
-          <span className="insp-k">Recipient UUID</span>
+          <span className="insp-k">{t("insp.recipientUuid")}</span>
           <div className="insp-copy-row">
             <code className="insp-code">{muse.recipient}</code>
             <button
               type="button"
               className="btn-quiet btn-icon-copy"
-              title="Copy recipient UUID"
-              aria-label="Copy recipient UUID"
-              onClick={() => copyText(muse.recipient, "Đã copy recipient UUID")}
+              title={t("insp.recipientUuid")}
+              aria-label={t("insp.recipientUuid")}
+              onClick={() => copyText(muse.recipient, t("agents.copyUuidToast"))}
             >
               <CopyIcon size={13} />
             </button>
@@ -505,16 +512,16 @@ function MuseInspector(props: {
         </div>
 
         <div className="insp-kv">
-          <span className="insp-k">Dropbox root</span>
+          <span className="insp-k">{t("agents.metaDropbox")}</span>
           <div className="insp-copy-row">
             <code className="insp-code">{muse.dropbox_root || "/"}</code>
             {muse.dropbox_root && (
               <button
                 type="button"
                 className="btn-quiet btn-icon-copy"
-                title="Copy Dropbox root"
-                aria-label="Copy Dropbox root"
-                onClick={() => copyText(muse.dropbox_root, "Đã copy Dropbox root")}
+                title={t("agents.metaDropbox")}
+                aria-label={t("agents.metaDropbox")}
+                onClick={() => copyText(muse.dropbox_root, t("insp.copyRootToast"))}
               >
                 <CopyIcon size={13} />
               </button>
@@ -524,32 +531,32 @@ function MuseInspector(props: {
 
         {muse.email_owner && (
           <div className="insp-kv">
-            <span className="insp-k">Email sở hữu Muse</span>
+            <span className="insp-k">{t("insp.ownerEmail")}</span>
             <span className="insp-v">{muse.email_owner}</span>
           </div>
         )}
 
         <div className="insp-kv">
-          <span className="insp-k">Ngày tạo</span>
-          <span className="insp-v">{fmtTime(muse.created_at)}</span>
+          <span className="insp-k">{t("insp.createdDate")}</span>
+          <span className="insp-v">{fmtTime(muse.created_at, lang)}</span>
         </div>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Tệp Dropbox trong luồng ({paths.length})</span>
-        <InspectorFileList paths={paths} emptyText="Chưa có tệp nào trong 50 tin gần nhất." />
+        <span className="insp-label">{t("insp.dropboxFiles", { count: paths.length })}</span>
+        <InspectorFileList paths={paths} emptyText={t("insp.noFilesThread")} />
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Thao tác nhanh</span>
+        <span className="insp-label">{t("insp.quickActions")}</span>
         <div className="insp-actions">
           <button type="button" className="btn-ghost insp-action-btn" onClick={() => props.onAction("rename")}>
             <EditIcon size={14} />
-            <span>Đổi tên Muse</span>
+            <span>{t("insp.renameMuse")}</span>
           </button>
           <button type="button" className="btn-ghost insp-action-btn" onClick={() => props.onAction("rotate")}>
             <KeyIcon size={14} />
-            <span>Rotate token</span>
+            <span>{t("insp.rotateToken")}</span>
           </button>
           <button
             type="button"
@@ -557,7 +564,7 @@ function MuseInspector(props: {
             onClick={() => props.onAction("clear")}
           >
             <TrashIcon size={14} />
-            <span>Xoá lịch sử kênh</span>
+            <span>{t("insp.clearChannel")}</span>
           </button>
           <button
             type="button"
@@ -565,7 +572,7 @@ function MuseInspector(props: {
             onClick={() => props.onAction("delete")}
           >
             <TrashIcon size={14} />
-            <span>Xoá Muse</span>
+            <span>{t("insp.deleteMuse")}</span>
           </button>
         </div>
       </div>
@@ -574,37 +581,34 @@ function MuseInspector(props: {
 }
 
 function OverviewInspector() {
+  const { t } = useLang();
   return (
     <>
       <div className="insp-section">
-        <span className="insp-label">Quy trình Project &amp; Agent</span>
+        <span className="insp-label">{t("insp.ovGuideTitle")}</span>
         <ol className="insp-guide-list">
           <li>
-            <strong>Quản trị Agent:</strong> Thêm <em>Muse Relay</em> (tạo <code>recipient</code>{" "}
-            UUID &amp; <code>RELAY_TOKEN</code>) hoặc <em>OpenAI Compatible</em>.
+            <strong>{t("insp.ovStep1Title")}</strong> {t("insp.ovStep1Body")}
           </li>
           <li>
-            <strong>Tạo Project:</strong> Gom nhóm các Agent (Muse và/hoặc OpenAI) phục vụ cùng
-            một mục tiêu.
+            <strong>{t("insp.ovStep2Title")}</strong> {t("insp.ovStep2Body")}
           </li>
           <li>
-            <strong>Cuộc hội thoại:</strong> Chọn đúng các Agent trong Project — hệ thống tự chạy
-            1:1, Nhóm Muse, OpenAI hoặc Hỗn hợp đa mô hình.
+            <strong>{t("insp.ovStep3Title")}</strong> {t("insp.ovStep3Body")}
           </li>
         </ol>
       </div>
 
       <div className="insp-section">
-        <span className="insp-label">Quy ước Dropbox &amp; Lưu trữ</span>
+        <span className="insp-label">{t("insp.ovDropboxTitle")}</span>
         <div className="insp-note-box">
           <div className="insp-note-line">
             <FolderIcon size={14} />
-            <span>Mỗi Muse có một thư mục gốc riêng dạng <code>/&lt;email&gt;/</code>.</span>
+            <span>
+              {t("insp.ovDropboxLine")} <code>/&lt;email&gt;/</code>.
+            </span>
           </div>
-          <p>
-            Tên file tài nguyên bắt đầu bằng <code>yyyy-mm-dd_hh-mm-ss_&lt;slug&gt;</code> (giờ
-            Asia/Bangkok). Bản local và bản Dropbox được dọn sau <strong>24 giờ</strong>.
-          </p>
+          <p>{t("insp.ovDropboxNote")}</p>
         </div>
       </div>
     </>
@@ -612,6 +616,7 @@ function OverviewInspector() {
 }
 
 function InspectorFileList({ paths, emptyText }: { paths: string[]; emptyText: string }) {
+  const { lang, t } = useLang();
   if (paths.length === 0) {
     return <p className="insp-empty">{emptyText}</p>;
   }
@@ -624,15 +629,15 @@ function InspectorFileList({ paths, emptyText }: { paths: string[]; emptyText: s
           </span>
           <div className="insp-file-info">
             <span className="insp-file-name" title={fileName(p)}>{fileName(p)}</span>
-            <span className="insp-file-kind">{resourceLabel(p)}</span>
+            <span className="insp-file-kind">{resourceLabel(p, lang)}</span>
             <code className="insp-file-path">{p}</code>
           </div>
           <button
             type="button"
             className="btn-quiet btn-icon-copy"
-            title="Copy đường dẫn Dropbox"
-            aria-label={`Copy đường dẫn ${fileName(p)}`}
-            onClick={() => copyText(p, "Đã copy đường dẫn")}
+            title={t("res.copyPathTitle")}
+            aria-label={t("res.copyPathAria", { name: fileName(p) })}
+            onClick={() => copyText(p, t("res.copyPathToast"))}
           >
             <CopyIcon size={13} />
           </button>

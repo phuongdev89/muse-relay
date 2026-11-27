@@ -8,6 +8,7 @@ import {
   listProjects,
 } from "./lib/api";
 import { summarizeMuseFleet } from "./lib/format";
+import { tNow, useLang } from "./lib/i18n";
 import { db } from "./lib/supabase";
 import type {
   ActiveRoom,
@@ -50,6 +51,7 @@ function readDesktopInspectorPref(): boolean {
 }
 
 export default function App() {
+  const { t } = useLang();
   const [booted, setBooted] = useState(false);
   const [ownerEmail, setOwnerEmail] = useState("");
   const [muses, setMuses] = useState<Muse[]>([]);
@@ -105,35 +107,35 @@ export default function App() {
 
   const loadMuses = useCallback(async () => {
     const { data, error } = await listMuses();
-    if (error) toast("Lỗi tải danh sách Muse: " + error);
+    if (error) toast(tNow("app.errLoadMuses", { err: error }));
     setMuses(data);
     return data;
   }, []);
 
   const loadOpenAIAgents = useCallback(async () => {
     const { data, error } = await listOpenAIAgents();
-    if (error) toast("Lỗi tải OpenAI Agents: " + error);
+    if (error) toast(tNow("app.errLoadOpenAI", { err: error }));
     setOpenaiAgents(data);
     return data;
   }, []);
 
   const loadProjects = useCallback(async () => {
     const { data, error } = await listProjects();
-    if (error) toast("Lỗi tải danh sách Project: " + error);
+    if (error) toast(tNow("app.errLoadProjects", { err: error }));
     setProjects(data);
     return data;
   }, []);
 
   const loadProjectAgents = useCallback(async () => {
     const { data, error } = await listProjectAgents();
-    if (error) toast("Lỗi tải Agent của Project: " + error);
+    if (error) toast(tNow("app.errLoadProjectAgents", { err: error }));
     setProjectAgents(data);
     return data;
   }, []);
 
   const loadConversations = useCallback(async () => {
     const { data, error } = await listConversations();
-    if (error) toast("Lỗi tải cuộc hội thoại: " + error);
+    if (error) toast(tNow("app.errLoadConvs", { err: error }));
     setConversations(data);
     return data;
   }, []);
@@ -248,7 +250,7 @@ export default function App() {
 
   function onMuseRenamed(recipient: string, name: string) {
     setMuses((cur) => cur.map((m) => (m.recipient === recipient ? { ...m, name } : m)));
-    toast("Đã đổi tên");
+    toast(t("app.toastRenamed"));
     void loadProjectAgents();
   }
 
@@ -259,7 +261,7 @@ export default function App() {
     if (active?.kind === "muse" && active.recipient === recipient) {
       switchRoom({ kind: "overview" });
     }
-    toast("Đã xoá Muse");
+    toast(t("app.toastDeletedMuse"));
     void loadFleet();
     void loadProjectAgents();
   }
@@ -349,14 +351,14 @@ export default function App() {
 
   const mobileTitle =
     active?.kind === "agents"
-      ? "Quản trị Agent"
+      ? t("app.navAdmin")
       : activeConversation
         ? activeConversation.title
         : activeProject
           ? activeProject.name
           : activeMuse
             ? activeMuse.name
-            : "Tổng quan";
+            : t("app.navOverview");
 
   const effectiveInspectorOpen = isDesktop ? desktopInspectorOpen : mobileInspectorOpen;
 
@@ -385,7 +387,7 @@ export default function App() {
             type="button"
             className="btn-quiet mobile-icon-btn"
             onClick={() => setMobileNavOpen(true)}
-            aria-label="Mở menu điều hướng"
+            aria-label={t("app.openNavAria")}
           >
             <MenuIcon size={18} />
           </button>
@@ -397,7 +399,7 @@ export default function App() {
             type="button"
             className="btn-quiet mobile-icon-btn"
             onClick={() => setMobileInspectorOpen(true)}
-            aria-label="Mở bảng thông tin chi tiết"
+            aria-label={t("app.openInspectorAria")}
           >
             <PanelRightIcon size={17} />
           </button>

@@ -9,6 +9,7 @@ import {
   summarizeMuseFleet,
   type MuseFleetStatus,
 } from "../lib/format";
+import { useLang, type I18nKey } from "../lib/i18n";
 import type { FleetActivityItem, Muse } from "../types";
 import {
   ActivityIcon,
@@ -25,19 +26,19 @@ import { Chip } from "./ui";
 
 type ActivityFilter = "all" | "processing" | "pending" | "done" | "error";
 
-const FILTER_TABS: { key: ActivityFilter; label: string }[] = [
-  { key: "all", label: "Tất cả" },
-  { key: "processing", label: "Đang xử lý" },
-  { key: "pending", label: "Chờ nhận" },
-  { key: "done", label: "Xong" },
-  { key: "error", label: "Lỗi / Hết hạn" },
+const FILTER_TABS: { key: ActivityFilter; labelKey: I18nKey }[] = [
+  { key: "all", labelKey: "ov.filterAll" },
+  { key: "processing", labelKey: "ov.filterProcessing" },
+  { key: "pending", labelKey: "ov.filterPending" },
+  { key: "done", labelKey: "ov.filterDone" },
+  { key: "error", labelKey: "ov.filterError" },
 ];
 
-const FLEET_STATUS_LABEL: Record<MuseFleetStatus, string> = {
-  processing: "đang xử lý",
-  pending: "chờ nhận",
-  error: "cần kiểm tra",
-  idle: "sẵn sàng",
+const FLEET_STATUS_KEY: Record<MuseFleetStatus, I18nKey> = {
+  processing: "fleetStatus.processing",
+  pending: "fleetStatus.pending",
+  error: "fleetStatus.error",
+  idle: "fleetStatus.idle",
 };
 
 const FLEET_STATUS_CHIP: Record<MuseFleetStatus, string> = {
@@ -68,6 +69,7 @@ export function OverviewView(props: {
   onAddMuse: () => void;
 }) {
   const { muses, projectsCount, openaiCount, fleetItems, loading, error, updatedAt } = props;
+  const { lang, t } = useLang();
   const [filter, setFilter] = useState<ActivityFilter>("all");
 
   const museByRecipient = useMemo(
@@ -117,29 +119,33 @@ export function OverviewView(props: {
   const showSkeleton = loading && fleetItems.length === 0 && !error;
 
   return (
-    <section className="overview-pane fade" aria-label="Tổng quan hệ thống">
+    <section className="overview-pane fade" aria-label={t("ov.aria")}>
       <div className="pane-head">
         <div className="pane-title-group">
-          <h2>Tổng quan Command Center</h2>
+          <h2>{t("ov.title")}</h2>
           <span className="sub">
-            {updatedAt ? `cập nhật ${fmtClock(updatedAt)}` : "đang tải…"} · tự làm mới 10s
+            {updatedAt
+              ? t("ov.updated", { time: fmtClock(updatedAt, lang) })
+              : t("ov.loading")}{" "}
+            · {t("ov.autoRefresh")}
           </span>
         </div>
         <span className="grow" />
         <div className="pane-actions">
           <button type="button" className="btn-ghost" onClick={props.onRefresh}>
             <RefreshIcon size={14} />
-            <span>Làm mới</span>
+            <span>{t("common.refresh")}</span>
           </button>
           <button
             type="button"
             className={`btn-ghost btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
             onClick={props.onToggleInspector}
             aria-pressed={props.inspectorOpen}
-            title="Đóng/mở bảng thông tin"
+            title={t("common.toggleInspector")}
+            aria-label={t("common.toggleInspector")}
           >
             <PanelRightIcon size={15} />
-            <span className="hide-xs">Chi tiết</span>
+            <span className="hide-xs">{t("common.details")}</span>
           </button>
         </div>
       </div>
@@ -147,9 +153,9 @@ export function OverviewView(props: {
       <div className="overview-scroll">
         {error && (
           <div className="banner-error" role="alert">
-            <span>Không tải được hoạt động gần đây: {error}</span>
+            <span>{t("ov.loadErr", { err: error })}</span>
             <button type="button" className="btn-ghost btn-sm" onClick={props.onRefresh}>
-              Thử lại
+              {t("common.retry")}
             </button>
           </div>
         )}
@@ -157,42 +163,42 @@ export function OverviewView(props: {
         {/* Fleet KPI Strip */}
         <div className="kpi-grid">
           <div className="kpi-card">
-            <span className="kpi-label">Hệ thống Agent &amp; Project</span>
+            <span className="kpi-label">{t("ov.kpiSystem")}</span>
             <strong className="kpi-value">
-              {muses.length + openaiCount} <span className="kpi-unit">Agent</span> · {projectsCount}{" "}
-              <span className="kpi-unit">Project</span>
+              {muses.length + openaiCount} <span className="kpi-unit">{t("ov.unitAgent")}</span> ·{" "}
+              {projectsCount} <span className="kpi-unit">{t("ov.unitProject")}</span>
             </strong>
           </div>
           <div className="kpi-card kpi-busy">
-            <span className="kpi-label">Đang xử lý</span>
+            <span className="kpi-label">{t("ov.kpiProcessing")}</span>
             <strong className="kpi-value">{showSkeleton ? "—" : kpis.processing}</strong>
           </div>
           <div className="kpi-card kpi-wait">
-            <span className="kpi-label">Đang chờ nhận</span>
+            <span className="kpi-label">{t("ov.kpiPending")}</span>
             <strong className="kpi-value">{showSkeleton ? "—" : kpis.pending}</strong>
           </div>
           <div className="kpi-card kpi-bad">
-            <span className="kpi-label">Lỗi / Hết hạn</span>
+            <span className="kpi-label">{t("ov.kpiErrors")}</span>
             <strong className="kpi-value">{showSkeleton ? "—" : kpis.errorOrExpired}</strong>
           </div>
         </div>
 
         {/* Muse Fleet Status Cards */}
-        <section className="ov-section" aria-label="Trạng thái đội Muse">
+        <section className="ov-section" aria-label={t("ov.fleetAria")}>
           <div className="ov-section-head">
-            <h3>Đội ngũ Muse ({muses.length})</h3>
+            <h3>{t("ov.fleetTitle", { count: muses.length })}</h3>
             <button type="button" className="btn-ghost btn-sm" onClick={props.onAddMuse}>
               <PlusIcon size={14} />
-              <span>Thêm Muse</span>
+              <span>{t("ov.addMuse")}</span>
             </button>
           </div>
 
           {muses.length === 0 ? (
             <div className="ov-empty-card">
-              <p>Chưa có Muse nào được đăng ký vào relay.</p>
+              <p>{t("ov.emptyFleet")}</p>
               <button type="button" className="btn" onClick={props.onAddMuse}>
                 <PlusIcon size={15} />
-                <span>Thêm Muse đầu tiên</span>
+                <span>{t("ov.addFirstMuse")}</span>
               </button>
             </div>
           ) : (
@@ -200,23 +206,13 @@ export function OverviewView(props: {
               {muses.map((m) => {
                 const summary = fleetSummary.get(m.recipient);
                 const status = summary?.status ?? "idle";
-                const conn = museConnectionInfo(m);
-                const connChipLabel =
-                  conn.state === "live"
-                    ? "Đang live"
-                    : conn.state === "standby"
-                      ? "Chờ nhịp"
-                      : conn.state === "reconnecting"
-                        ? "Chờ kết nối lại"
-                        : conn.state === "offline"
-                          ? "Offline"
-                          : "Chưa setup";
+                const conn = museConnectionInfo(m, lang);
                 const latest = summary?.latest ?? null;
                 const latestPreview =
                   latest?.result?.error ||
                   latest?.result?.output?.text ||
                   latest?.message.params.prompt ||
-                  "Chưa có yêu cầu nào";
+                  t("ov.noRequests");
                 return (
                   <button
                     key={m.recipient}
@@ -237,17 +233,17 @@ export function OverviewView(props: {
                           </span>
                         </div>
                       </div>
-                      <Chip state={FLEET_STATUS_CHIP[status]} label={FLEET_STATUS_LABEL[status]} />
+                      <Chip state={FLEET_STATUS_CHIP[status]} label={t(FLEET_STATUS_KEY[status])} />
                     </div>
 
                     <div className="fleet-conn-row">
-                      <Chip state={conn.chipClass} label={connChipLabel} />
+                      <Chip state={conn.chipClass} label={conn.shortLabel} />
                       <span className="fleet-conn-age">
                         {conn.state === "reconnecting"
-                          ? "Chờ claim token mới"
+                          ? t("ov.awaitingToken")
                           : m.last_claim_at
-                            ? `Poll ${fmtRelativeAge(m.last_claim_at)}`
-                            : "Chưa poll"}
+                            ? t("conn.pollDetail", { age: fmtRelativeAge(m.last_claim_at, lang) })
+                            : t("ov.notPolled")}
                       </span>
                     </div>
 
@@ -255,14 +251,18 @@ export function OverviewView(props: {
 
                     <div className="fleet-card-foot">
                       <span className="fleet-time">
-                        {latest ? `Hoạt động ${fmtTime(latest.message.created_at)}` : `Tạo ${fmtTime(m.created_at)}`}
+                        {latest
+                          ? t("ov.activeAt", { time: fmtTime(latest.message.created_at, lang) })
+                          : t("ov.createdAt", { time: fmtTime(m.created_at, lang) })}
                       </span>
                       <span className="fleet-cta">
                         {summary && summary.activeCount > 0 ? (
-                          <span className="fleet-active-pill">{summary.activeCount} việc đang chạy</span>
+                          <span className="fleet-active-pill">
+                            {t("ov.runningJobs", { count: summary.activeCount })}
+                          </span>
                         ) : (
                           <span className="fleet-jump">
-                            Mở phòng <ChevronRightIcon size={13} />
+                            {t("ov.openRoom")} <ChevronRightIcon size={13} />
                           </span>
                         )}
                       </span>
@@ -275,13 +275,13 @@ export function OverviewView(props: {
         </section>
 
         {/* Filterable Recent Activity Feed */}
-        <section className="ov-section" aria-label="Hoạt động gần đây">
+        <section className="ov-section" aria-label={t("ov.recentAria")}>
           <div className="ov-section-head">
             <div className="ov-section-title">
               <ActivityIcon size={16} />
-              <h3>Hoạt động gần đây</h3>
+              <h3>{t("ov.recentTitle")}</h3>
             </div>
-            <div className="filter-pills" role="tablist" aria-label="Lọc trạng thái hoạt động">
+            <div className="filter-pills" role="tablist" aria-label={t("ov.filterAria")}>
               {FILTER_TABS.map((tab) => (
                 <button
                   key={tab.key}
@@ -291,7 +291,7 @@ export function OverviewView(props: {
                   className={`filter-pill${filter === tab.key ? " on" : ""}`}
                   onClick={() => setFilter(tab.key)}
                 >
-                  {tab.label}
+                  {t(tab.labelKey)}
                 </button>
               ))}
             </div>
@@ -308,9 +308,7 @@ export function OverviewView(props: {
             </div>
           ) : filteredActivity.length === 0 ? (
             <div className="ov-empty-feed">
-              {fleetItems.length === 0
-                ? "Chưa có yêu cầu nào được gửi qua relay."
-                : "Không có hoạt động nào khớp bộ lọc này."}
+              {fleetItems.length === 0 ? t("ov.emptyFeed") : t("ov.emptyFeedFiltered")}
             </div>
           ) : (
             <div className="activity-list">
@@ -321,13 +319,15 @@ export function OverviewView(props: {
                   item.message.expires_at,
                   item.message.claim_expires_at,
                 );
-                const promptText = item.message.params.prompt ?? "(Không có nội dung)";
+                const promptText = item.message.params.prompt ?? t("ov.noContent");
                 const replySnippet =
                   st === "failed"
                     ? item.result?.error
                     : item.result?.output?.text ||
                       (item.result?.output?.dropbox_paths?.length
-                        ? `${item.result.output.dropbox_paths.length} tệp Dropbox`
+                        ? t("ov.dropboxFilesCount", {
+                            count: item.result.output.dropbox_paths.length,
+                          })
                         : null);
                 return (
                   <button
@@ -343,7 +343,7 @@ export function OverviewView(props: {
                       <span className="activity-top">
                         <span className="activity-muse">{muse?.name ?? item.recipient.slice(0, 8)}</span>
                         <span className="activity-mode">{item.message.action}</span>
-                        <span className="activity-time">{fmtTime(item.message.created_at)}</span>
+                        <span className="activity-time">{fmtTime(item.message.created_at, lang)}</span>
                       </span>
                       <span className="activity-prompt">{promptText}</span>
                       {replySnippet && (

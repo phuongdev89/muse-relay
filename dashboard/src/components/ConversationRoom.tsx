@@ -11,6 +11,7 @@ import {
 } from "../lib/api";
 import { OWNER_DISPLAY_NAME } from "../lib/config";
 import { fmtClock, fmtTime, memberDotColor, ownerState, paramsSummary } from "../lib/format";
+import { useLang, type I18nKey } from "../lib/i18n";
 import type {
   ActionMode,
   Conversation,
@@ -36,11 +37,11 @@ import { ErrorMsg, Modal, toast } from "./ui";
 
 const POLL_MS = 10000;
 
-const MODE_LABEL: Record<ConversationMode, string> = {
-  muse_single: "1:1 Muse",
-  muse_group: "Nhóm Muse",
-  openai: "OpenAI",
-  mixed: "Hỗn hợp Muse + OpenAI",
+const MODE_KEY: Record<ConversationMode, I18nKey> = {
+  muse_single: "convMode.muse_single",
+  muse_group: "convMode.muse_group",
+  openai: "convMode.openai",
+  mixed: "convMode.mixedFull",
 };
 
 interface OptimisticMuseSend {
@@ -88,6 +89,7 @@ export function ConversationRoom(props: {
   onMessageSent?: () => void;
 }) {
   const { project, conversation, muses, openaiAgents, onPathsChange } = props;
+  const { lang, t } = useLang();
 
   const [museItems, setMuseItems] = useState<ThreadItem[]>([]);
   const [groupBubbles, setGroupBubbles] = useState<GroupBubble[]>([]);
@@ -229,8 +231,8 @@ export function ConversationRoom(props: {
     void load();
     const shouldPoll = usesSingleMuse || usesGroupMuse;
     if (!shouldPoll) return;
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(t);
+    const tmr = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(tmr);
   }, [load, usesSingleMuse, usesGroupMuse]);
 
   // Build unified chronological items
@@ -247,19 +249,19 @@ export function ConversationRoom(props: {
         const promptText = it.message.params.prompt ?? "";
         const statusText =
           st === "pending"
-            ? "đang chờ Muse nhận việc…"
+            ? t("museRoom.statusPending")
             : st === "processing"
-              ? `${singleMuseName} đang xử lý…`
+              ? t("museRoom.statusProcessing", { name: singleMuseName })
               : st === "expired"
-                ? "hết hạn chờ — Muse không nhận hoặc không trả kết quả trong 30 phút."
+                ? t("museRoom.statusExpired")
                 : null;
-        const summary = paramsSummary(it.message.action, it.message.params);
+        const summary = paramsSummary(it.message.action, it.message.params, lang);
 
         list.push({
           id: `m-owner-${it.message.id}`,
           sortMs: new Date(it.message.created_at).getTime(),
           side: "owner",
-          timeLabel: fmtTime(it.message.created_at),
+          timeLabel: fmtTime(it.message.created_at, lang),
           state: st,
           failed: st === "failed",
           statusText: st === "failed" ? null : statusText,
@@ -274,14 +276,14 @@ export function ConversationRoom(props: {
 
         if (it.result) {
           if (it.result.status === "failed") {
-            const errText = it.result.error || "thất bại";
+            const errText = it.result.error || t("api.failed");
             list.push({
               id: `m-res-${it.message.id}`,
               sortMs: new Date(it.result.created_at).getTime(),
               side: "muse",
               who: singleMuseName,
               dotColor: participantColorMap.get(`muse:${singleMuseRef}`),
-              timeLabel: fmtTime(it.result.created_at),
+              timeLabel: fmtTime(it.result.created_at, lang),
               state: "failed",
               failed: true,
               copyValue: errText,
@@ -300,17 +302,19 @@ export function ConversationRoom(props: {
               side: "muse",
               who: singleMuseName,
               dotColor: participantColorMap.get(`muse:${singleMuseRef}`),
-              timeLabel: `trả lời ${fmtTime(it.result.created_at)}`,
+              timeLabel: t("museRoom.replyAt", { time: fmtTime(it.result.created_at, lang) }),
               state: "done",
               copyValue: text || undefined,
-              footer: paths.length > 0 ? `${paths.length} tệp trên Dropbox` : null,
+              footer: paths.length > 0 ? t("museRoom.dropboxFiles", { count: paths.length }) : null,
               text,
               isMarkdown: Boolean(text),
               paths,
               notes: it.result.output?.notes ?? null,
               errorText: null,
               extraLine:
-                it.message.attempts > 1 ? `nhận việc lần ${it.message.attempts}` : null,
+                it.message.attempts > 1
+                  ? t("museRoom.attemptNum", { n: it.message.attempts })
+                  : null,
             });
           }
         }
@@ -321,7 +325,7 @@ export function ConversationRoom(props: {
           id: `opt-${o.tempId}`,
           sortMs: o.sentAt,
           side: "owner",
-          timeLabel: fmtTime(new Date(o.sentAt).toISOString()),
+          timeLabel: fmtTime(new Date(o.sentAt).toISOString(), lang),
           state: "pending",
           copyValue: o.prompt,
           text: o.prompt,
@@ -341,9 +345,9 @@ export function ConversationRoom(props: {
         const failed = b.state === "failed";
         const stateText =
           b.state === "pending"
-            ? "đang chờ các Muse nhận việc…"
+            ? t("convRoom.waitingGroup")
             : b.state === "processing"
-              ? "đang được xử lý…"
+              ? t("convRoom.processingGroup")
               : null;
         return {
           id: `grp-${b.batchId}`,
@@ -353,16 +357,16 @@ export function ConversationRoom(props: {
           dotColor: isOwner
             ? "var(--color-accent)"
             : participantColorMap.get(b.name) ?? "var(--color-busy)",
-          timeLabel: fmtTime(b.time),
+          timeLabel: fmtTime(b.time, lang),
           state: b.state,
           failed,
-          statusText: failed ? (b.text ? b.error ?? "thất bại" : null) : stateText,
+          statusText: failed ? (b.text ? b.error ?? t("api.failed") : null) : stateText,
           copyValue: b.text || undefined,
           text: b.text,
           isMarkdown: !isOwner && Boolean(b.text),
           paths: b.paths,
           notes: b.notes,
-          errorText: failed && !b.text ? b.error ?? "thất bại" : null,
+          errorText: failed && !b.text ? b.error ?? t("api.failed") : null,
         };
       });
     }
@@ -398,11 +402,11 @@ export function ConversationRoom(props: {
               failed = st === "failed";
               statusText =
                 st === "pending"
-                  ? `đang chờ ${singleMuseName} nhận việc…`
+                  ? t("convRoom.waitingNamedMuse", { name: singleMuseName })
                   : st === "processing"
-                    ? `${singleMuseName} đang xử lý…`
+                    ? t("museRoom.statusProcessing", { name: singleMuseName })
                     : st === "expired"
-                      ? `hết hạn chờ ${singleMuseName}`
+                      ? t("convRoom.expiredNamedMuse", { name: singleMuseName })
                       : null;
               if (st === "failed" && match.result?.error) {
                 errorText = match.result.error;
@@ -422,11 +426,11 @@ export function ConversationRoom(props: {
               failed = match.state === "failed";
               statusText =
                 match.state === "pending"
-                  ? "đang chờ các Muse nhận việc…"
+                  ? t("convRoom.waitingGroup")
                   : match.state === "processing"
-                    ? "các Muse đang xử lý…"
+                    ? t("convRoom.musesProcessing")
                     : match.state === "failed"
-                      ? match.error ?? "Muse thất bại"
+                      ? match.error ?? t("convRoom.museFailed")
                       : null;
             }
           }
@@ -438,7 +442,7 @@ export function ConversationRoom(props: {
           side: "owner",
           who: conversation.mode === "mixed" ? m.agent_name : undefined,
           dotColor: "var(--color-accent)",
-          timeLabel: fmtTime(m.created_at),
+          timeLabel: fmtTime(m.created_at, lang),
           state,
           failed,
           statusText,
@@ -451,7 +455,7 @@ export function ConversationRoom(props: {
         });
       } else {
         const failed = m.status === "failed";
-        const errText = failed ? m.error || "lỗi gọi model" : null;
+        const errText = failed ? m.error || t("convRoom.modelError") : null;
         const liveName = (m.agent_ref ? oaiByRef.get(m.agent_ref)?.name : undefined) ?? m.agent_name;
         merged.push({
           id: `oai-agent-${m.id}`,
@@ -462,7 +466,7 @@ export function ConversationRoom(props: {
             (m.agent_ref ? participantColorMap.get(`openai:${m.agent_ref}`) : undefined) ??
             participantColorMap.get(m.agent_name) ??
             "var(--color-busy)",
-          timeLabel: fmtTime(m.created_at),
+          timeLabel: fmtTime(m.created_at, lang),
           state: failed ? "failed" : "done",
           failed,
           copyValue: failed ? errText ?? undefined : m.content,
@@ -491,7 +495,7 @@ export function ConversationRoom(props: {
               side: "owner",
               who: OWNER_DISPLAY_NAME,
               dotColor: "var(--color-accent)",
-              timeLabel: fmtTime(it.message.created_at),
+              timeLabel: fmtTime(it.message.created_at, lang),
               state: st,
               failed: st === "failed",
               copyValue: promptText,
@@ -505,7 +509,7 @@ export function ConversationRoom(props: {
 
           if (it.result) {
             const failed = it.result.status === "failed";
-            const errText = failed ? it.result.error || "thất bại" : null;
+            const errText = failed ? it.result.error || t("api.failed") : null;
             const text = failed ? "" : it.result.output?.text ?? "";
             const paths = failed ? [] : it.result.output?.dropbox_paths ?? [];
             merged.push({
@@ -514,11 +518,11 @@ export function ConversationRoom(props: {
               side: "muse",
               who: singleMuseName,
               dotColor: participantColorMap.get(`muse:${singleMuseRef}`),
-              timeLabel: fmtTime(it.result.created_at),
+              timeLabel: fmtTime(it.result.created_at, lang),
               state: failed ? "failed" : "done",
               failed,
               copyValue: failed ? errText ?? undefined : text || undefined,
-              footer: paths.length > 0 ? `${paths.length} tệp trên Dropbox` : null,
+              footer: paths.length > 0 ? t("museRoom.dropboxFiles", { count: paths.length }) : null,
               text,
               isMarkdown: !failed && Boolean(text),
               paths,
@@ -540,16 +544,16 @@ export function ConversationRoom(props: {
             dotColor: isOwner
               ? "var(--color-accent)"
               : participantColorMap.get(b.name) ?? "var(--color-busy)",
-            timeLabel: fmtTime(b.time),
+            timeLabel: fmtTime(b.time, lang),
             state: b.state,
             failed,
-            statusText: failed && b.text ? b.error ?? "thất bại" : null,
+            statusText: failed && b.text ? b.error ?? t("api.failed") : null,
             copyValue: b.text || undefined,
             text: b.text,
             isMarkdown: !isOwner && Boolean(b.text),
             paths: b.paths,
             notes: b.notes,
-            errorText: failed && !b.text ? b.error ?? "thất bại" : null,
+            errorText: failed && !b.text ? b.error ?? t("api.failed") : null,
           });
         }
       }
@@ -565,6 +569,7 @@ export function ConversationRoom(props: {
   }, [
     conversation.mode,
     groupBubbles,
+    lang,
     museItems,
     oaiByRef,
     openaiMsgs,
@@ -572,6 +577,7 @@ export function ConversationRoom(props: {
     participantColorMap,
     singleMuseName,
     singleMuseRef,
+    t,
     usesGroupMuse,
     usesSingleMuse,
   ]);
@@ -623,10 +629,10 @@ export function ConversationRoom(props: {
     const nowIso = new Date().toISOString();
     setInflightOai((cur) => [
       ...cur,
-      ...targets.map((t) => ({
-        reqId: t.reqId,
-        ref: t.ref,
-        name: t.name,
+      ...targets.map((tgt) => ({
+        reqId: tgt.reqId,
+        ref: tgt.ref,
+        name: tgt.name,
         startedAt: nowIso,
       })),
     ]);
@@ -652,7 +658,7 @@ export function ConversationRoom(props: {
               agent_name: target.name,
               content: "",
               status: "failed",
-              error: `Agent "${target.name}" không còn tồn tại trong Quản trị Agent.`,
+              error: t("convRoom.missingAgentErr", { name: target.name }),
             });
             return;
           }
@@ -677,7 +683,7 @@ export function ConversationRoom(props: {
               agent_name: target.agent.name,
               content: "",
               status: "failed",
-              error: res.error ?? "Không nhận được phản hồi.",
+              error: res.error ?? t("convRoom.noResponse"),
             });
           } else {
             await insertOpenAIMessage({
@@ -707,9 +713,9 @@ export function ConversationRoom(props: {
 
     // 1. Pure single Muse mode (supports Chat, Image, Video + thread_id = conversation.id)
     if (conversation.mode === "muse_single") {
-      if (!singleMuseRef) return "Không tìm thấy Muse trong cuộc hội thoại này.";
+      if (!singleMuseRef) return t("convRoom.noMuseErr");
       if (!singleMuseAlive) {
-        return `Muse "${singleMuseName}" đã bị xoá khỏi Quản trị Agent nên không thể nhận tin nhắn mới.`;
+        return t("convRoom.museDeletedErr", { name: singleMuseName });
       }
       const { error } = await sendMessage({
         recipient: singleMuseRef,
@@ -729,9 +735,9 @@ export function ConversationRoom(props: {
 
     // 2. Pure Muse group mode
     if (conversation.mode === "muse_group") {
-      if (!conversation.group_id) return "Cuộc hội thoại chưa có nhóm Muse liên kết.";
+      if (!conversation.group_id) return t("convRoom.noGroupErr");
       if (activeGroupMuseCount === 0) {
-        return "Tất cả Muse trong nhóm này đã bị xoá khỏi Quản trị Agent.";
+        return t("convRoom.allGroupMusesDeletedErr");
       }
       const { error } = await sendGroupMessage({
         groupId: conversation.group_id,
@@ -766,7 +772,7 @@ export function ConversationRoom(props: {
     if (conversation.mode === "mixed") {
       if (usesSingleMuse && singleMuseRef) {
         if (!singleMuseAlive) {
-          toast(`Muse "${singleMuseName}" đã bị xoá — bỏ qua phần Muse.`);
+          toast(t("convRoom.skipDeletedMuse", { name: singleMuseName }));
         } else {
           const { error: mErr } = await sendMessage({
             recipient: singleMuseRef,
@@ -778,18 +784,18 @@ export function ConversationRoom(props: {
               output_format: "auto",
             },
           });
-          if (mErr) toast("Lỗi gửi tới Muse: " + mErr);
+          if (mErr) toast(t("convRoom.sendMuseErr", { err: mErr }));
         }
       } else if (usesGroupMuse && conversation.group_id) {
         if (activeGroupMuseCount === 0) {
-          toast("Các Muse trong nhóm đã bị xoá — bỏ qua phần Muse.");
+          toast(t("convRoom.skipDeletedGroup"));
         } else {
           const { error: gErr } = await sendGroupMessage({
             groupId: conversation.group_id,
             prompt,
             ownerName: OWNER_DISPLAY_NAME,
           });
-          if (gErr) toast("Lỗi gửi tới nhóm Muse: " + gErr);
+          if (gErr) toast(t("convRoom.sendGroupErr", { err: gErr }));
         }
       }
       props.onMessageSent?.();
@@ -808,10 +814,10 @@ export function ConversationRoom(props: {
     const err = await deleteConversation(conversation.id, conversation.group_id);
     setDeleting(false);
     if (err) {
-      setDelError("Lỗi xoá cuộc hội thoại: " + err);
+      setDelError(t("convRoom.delErr", { err }));
       return;
     }
-    toast("Đã xoá cuộc hội thoại");
+    toast(t("convRoom.delToast"));
     setConfirmDelete(false);
     props.onConversationDeleted(project.id, conversation.id);
   }
@@ -821,17 +827,17 @@ export function ConversationRoom(props: {
   const hasContent = unifiedItems.length > 0 || inflightOai.length > 0;
 
   return (
-    <section className="room-pane fade" aria-label={`Cuộc hội thoại ${conversation.title}`}>
+    <section className="room-pane fade" aria-label={t("convRoom.aria", { title: conversation.title })}>
       <div className="pane-head">
         <div className="pane-title-group">
           <h2>{conversation.title}</h2>
           <span className="sub">
-            {project.name} · {MODE_LABEL[conversation.mode]} ·{" "}
+            {project.name} · {t(MODE_KEY[conversation.mode])} ·{" "}
             {loadError
-              ? `lỗi tải: ${loadError}`
+              ? t("museRoom.loadErr", { err: loadError })
               : updatedAt
-                ? `cập nhật ${fmtClock(updatedAt)}`
-                : "đang tải…"}
+                ? t("ov.updated", { time: fmtClock(updatedAt, lang) })
+                : t("ov.loading")}
           </span>
         </div>
         <span className="grow" />
@@ -843,24 +849,32 @@ export function ConversationRoom(props: {
               setDelError("");
               setConfirmDelete(true);
             }}
-            title="Xoá cuộc hội thoại"
+            title={t("convRoom.deleteTitle")}
+            aria-label={t("convRoom.deleteTitle")}
           >
             <TrashIcon size={14} />
-            <span className="hide-xs">Xoá</span>
+            <span className="hide-xs">{t("common.delete")}</span>
           </button>
-          <button type="button" className="btn-ghost" onClick={load}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={load}
+            title={t("common.refresh")}
+            aria-label={t("common.refresh")}
+          >
             <RefreshIcon size={14} />
-            <span className="hide-xs">Làm mới</span>
+            <span className="hide-xs">{t("common.refresh")}</span>
           </button>
           <button
             type="button"
             className={`btn-ghost btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
             onClick={props.onToggleInspector}
             aria-pressed={props.inspectorOpen}
-            title="Đóng/mở chi tiết cuộc hội thoại"
+            title={t("convRoom.toggleDetailsTitle")}
+            aria-label={t("convRoom.toggleDetailsTitle")}
           >
             <PanelRightIcon size={15} />
-            <span className="hide-xs">Chi tiết</span>
+            <span className="hide-xs">{t("common.details")}</span>
           </button>
         </div>
       </div>
@@ -875,14 +889,14 @@ export function ConversationRoom(props: {
             <span
               key={`${p.kind}:${p.ref}`}
               className={`member-chip${deleted ? " deleted" : ""}`}
-              title={deleted ? "Agent đã bị xoá khỏi Quản trị Agent" : undefined}
+              title={deleted ? t("convRoom.deletedFromAdmin") : undefined}
             >
               <i style={{ background: memberDotColor(idx) }} />
               <span>{liveName}</span>
               <span className={`agent-kind-tag ${p.kind}`}>
                 {p.kind === "muse" ? "Muse" : "OpenAI"}
               </span>
-              {deleted && <span className="deleted-note">đã xoá</span>}
+              {deleted && <span className="deleted-note">{t("convRoom.deletedTag")}</span>}
             </span>
           );
         })}
@@ -896,7 +910,7 @@ export function ConversationRoom(props: {
           aria-live="polite"
         >
           {showSkeleton && (
-            <div className="thread-skeleton" aria-label="Đang tải hội thoại">
+            <div className="thread-skeleton" aria-label={t("museRoom.loadingAria")}>
               <div className="skel-bubble owner" />
               <div className="skel-bubble muse" />
               <div className="skel-bubble owner short" />
@@ -904,9 +918,7 @@ export function ConversationRoom(props: {
           )}
 
           {!loading && !hasContent && !loadError && (
-            <div className="thread-empty">
-              Cuộc hội thoại trống — gửi tin nhắn đầu tiên bên dưới.
-            </div>
+            <div className="thread-empty">{t("convRoom.empty")}</div>
           )}
 
           {unifiedItems.map((it) => (
@@ -947,10 +959,10 @@ export function ConversationRoom(props: {
               who={inf.name}
               dotColor={participantColorMap.get(`openai:${inf.ref}`) ?? "var(--color-busy)"}
               state="processing"
-              timeLabel={fmtTime(inf.startedAt)}
-              statusText={`${inf.name} đang suy nghĩ…`}
+              timeLabel={fmtTime(inf.startedAt, lang)}
+              statusText={t("convRoom.thinking", { name: inf.name })}
             >
-              <div className="body typing-dots" aria-label="Đang tạo phản hồi">
+              <div className="body typing-dots" aria-label={t("convRoom.generatingAria")}>
                 <span />
                 <span />
                 <span />
@@ -964,16 +976,16 @@ export function ConversationRoom(props: {
             type="button"
             className="scroll-bottom-btn"
             onClick={() => scrollToBottom(true)}
-            aria-label="Cuộn xuống tin mới nhất"
+            aria-label={t("museRoom.scrollBottomAria")}
           >
             <ArrowDownIcon size={14} />
-            <span>Xuống cuối</span>
+            <span>{t("museRoom.scrollBottom")}</span>
           </button>
         )}
       </div>
 
       <Composer
-        placeholder={`Nhắn trong "${conversation.title}"… (Enter gửi, Shift+Enter xuống dòng)`}
+        placeholder={t("convRoom.composerPlaceholder", { title: conversation.title })}
         onSend={handleSend}
         mediaModes={conversation.mode === "muse_single"}
         hideThreadInput={conversation.mode === "muse_single"}
@@ -985,9 +997,11 @@ export function ConversationRoom(props: {
           onClose={() => setConfirmDelete(false)}
           labelledBy="room-del-conv-title"
         >
-          <h2 id="room-del-conv-title">Xoá cuộc hội thoại — {conversation.title}</h2>
+          <h2 id="room-del-conv-title">
+            {t("convRoom.delModalTitle", { title: conversation.title })}
+          </h2>
           <p className="lead">
-            Hành động này sẽ xoá cuộc hội thoại khỏi Project <strong>{project.name}</strong>.
+            {t("convRoom.delModalBody")} <strong>{project.name}</strong>.
           </p>
           <ErrorMsg text={delError} />
           <div className="actions">
@@ -997,14 +1011,14 @@ export function ConversationRoom(props: {
               disabled={deleting}
               onClick={handleConfirmDelete}
             >
-              {deleting ? "Đang xoá…" : "Xoá cuộc hội thoại"}
+              {deleting ? t("common.deleting") : t("convRoom.delConfirm")}
             </button>
             <button
               type="button"
               className="btn-ghost"
               onClick={() => setConfirmDelete(false)}
             >
-              Giữ lại
+              {t("common.keep")}
             </button>
           </div>
         </Modal>

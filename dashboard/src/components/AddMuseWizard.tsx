@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createMuse, randomHex, sha256Hex } from "../lib/api";
 import { emailToRoot } from "../lib/dropbox";
+import { useLang } from "../lib/i18n";
 import { buildInstructions } from "../lib/instructions";
 import { db } from "../lib/supabase";
 import type { Muse } from "../types";
@@ -15,6 +16,7 @@ export function AddMuseWizard(props: {
   onClose: () => void;
   onCreated: (muse: Muse) => void;
 }) {
+  const { t } = useLang();
   const [step, setStep] = useState<"form" | "done">("form");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -22,22 +24,22 @@ export function AddMuseWizard(props: {
   const [result, setResult] = useState<{ recipient: string; token: string; instructions: string } | null>(null);
 
   const root = emailToRoot(email);
-  const rootPreview = root ?? (email.trim() ? "email chưa hợp lệ" : "sẽ tự sinh theo email");
+  const rootPreview = root ?? (email.trim() ? t("wiz.rootInvalid") : t("wiz.rootPending"));
 
   async function submit() {
     setError("");
     const trimmedName = name.trim();
     if (trimmedName.length < 1 || trimmedName.length > 64) {
-      setError("Tên Muse phải từ 1–64 ký tự.");
+      setError(t("wiz.nameErr"));
       return;
     }
     const derivedRoot = emailToRoot(email);
     if (!derivedRoot || derivedRoot.length > 256) {
-      setError("Email sở hữu Muse chưa hợp lệ (vd: muse2@domain.com).");
+      setError(t("wiz.emailErr"));
       return;
     }
     const btn = document.getElementById("wiz-create") as HTMLButtonElement | null;
-    const undo = setButtonBusy(btn, "Đang tạo…");
+    const undo = setButtonBusy(btn, t("wiz.creating"));
 
     const recipient = crypto.randomUUID();
     const token = randomHex(32);
@@ -45,7 +47,7 @@ export function AddMuseWizard(props: {
     const { data: { user } } = await db.auth.getUser();
     if (!user) {
       undo();
-      setError("Phiên đăng nhập hết hạn — đăng nhập lại rồi thử lần nữa.");
+      setError(t("wiz.sessionExpired"));
       return;
     }
     const trimmedEmail = email.trim().toLowerCase();
@@ -59,7 +61,7 @@ export function AddMuseWizard(props: {
     });
     undo();
     if (err) {
-      setError("Lỗi tạo Muse: " + err);
+      setError(t("wiz.createErr", { err }));
       return;
     }
     setResult({
@@ -95,65 +97,57 @@ export function AddMuseWizard(props: {
       labelledBy="wiz-title"
       wide
     >
-      <h2 id="wiz-title">Thêm Muse mới</h2>
+      <h2 id="wiz-title">{t("wiz.title")}</h2>
       {step === "form" ? (
         <>
           <div className="steps"><span className="on" /><span /></div>
-          <p className="lead">
-            Đăng ký một Muse vào relay: sinh recipient UUID và relay token mới.
-            Token chỉ hiện <b>một lần duy nhất</b> ở bước sau.
-          </p>
-          <label htmlFor="w-name">Tên Muse (hiển thị trong dashboard)</label>
+          <p className="lead">{t("wiz.lead1")}</p>
+          <label htmlFor="w-name">{t("wiz.nameLabel")}</label>
           <input
             id="w-name"
             value={name}
             maxLength={64}
-            placeholder="vd: Muse 2"
+            placeholder={t("wiz.namePlaceholder")}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
             }}
           />
-          <label htmlFor="w-email">Email sở hữu Muse</label>
+          <label htmlFor="w-email">{t("wiz.emailLabel")}</label>
           <input
             id="w-email"
             type="email"
             value={email}
-            placeholder="vd: muse2@domain.com"
+            placeholder={t("wiz.emailPlaceholder")}
             onChange={(e) => setEmail(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
             }}
           />
           <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
-            Dropbox root tự sinh theo email — <code className="path">{rootPreview}</code>{" "}
-            (mỗi Muse một thư mục gốc riêng; không cần gõ dấu /).
+            {t("wiz.rootHintPrefix")} <code className="path">{rootPreview}</code>{" "}
+            {t("wiz.rootHintSuffix")}
           </p>
           <ErrorMsg text={error} />
           <div className="actions">
-            <button id="wiz-create" className="btn" onClick={submit}>Tạo Muse + sinh token</button>
-            <button className="btn-ghost" onClick={props.onClose}>Huỷ</button>
+            <button id="wiz-create" className="btn" onClick={submit}>{t("wiz.createBtn")}</button>
+            <button className="btn-ghost" onClick={props.onClose}>{t("common.cancel")}</button>
           </div>
         </>
       ) : (
         <>
           <div className="steps"><span /><span className="on" /></div>
-          <p className="lead">
-            Đã đăng ký. Làm theo đúng thứ tự: <b>(1)</b> copy token ở khung trên, dán vào{" "}
-            <b>Secure Vault</b> của Muse — token không bao giờ gửi qua chat; <b>(2)</b> copy khung
-            hướng dẫn bên dưới và gửi cho Muse qua chat của nó. Token chỉ hiện lần này; nếu cần đổi
-            token sau khi đóng, dùng <b>Quản lý ▾ → Rotate token</b>.
-          </p>
+          <p className="lead">{t("wiz.lead2")}</p>
           <TokenPanel token={result?.token ?? ""} />
           <label htmlFor="w-contract" style={{ marginTop: "var(--space-md)" }}>
-            Hướng dẫn kết nối — gửi cho Muse qua chat (không chứa token)
+            {t("wiz.contractLabel")}
           </label>
           <textarea id="w-contract" className="contract" readOnly rows={24} value={result?.instructions ?? ""} />
           <div className="actions">
-            <button className="btn" onClick={() => copyText(result?.instructions ?? "", "Đã copy hướng dẫn")}>
-              Copy hướng dẫn
+            <button className="btn" onClick={() => copyText(result?.instructions ?? "", t("wiz.copiedContract"))}>
+              {t("wiz.copyContract")}
             </button>
-            <button className="btn-ghost" onClick={props.onClose}>Xong — đóng</button>
+            <button className="btn-ghost" onClick={props.onClose}>{t("wiz.doneClose")}</button>
           </div>
         </>
       )}

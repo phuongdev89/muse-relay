@@ -7,13 +7,13 @@ import {
   museConnectionInfo,
   type MuseFleetSummary,
 } from "../lib/format";
+import { useLang } from "../lib/i18n";
 import type { Muse, OpenAIAgent, ProjectAgent } from "../types";
 import {
   BotIcon,
   CheckIcon,
   CopyIcon,
   EditIcon,
-  FolderIcon,
   KeyIcon,
   MessageIcon,
   PanelRightIcon,
@@ -39,24 +39,36 @@ interface ConnectionTestState {
   error?: string;
 }
 
-const FLEET_STATUS_LABEL: Record<string, string> = {
-  processing: "đang xử lý",
-  pending: "chờ nhận",
-  error: "cần kiểm tra",
-  idle: "sẵn sàng",
-};
-
-const FLEET_STATUS_CHIP: Record<string, string> = {
-  processing: "processing",
-  pending: "pending",
-  error: "failed",
-  idle: "idle",
-};
-
 function maskApiKey(key: string): string {
   const trimmed = key.trim();
   if (trimmed.length <= 8) return "••••••••";
   return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
+}
+
+function truncateUuid(uuid: string): string {
+  if (uuid.length <= 14) return uuid;
+  return `${uuid.slice(0, 8)}…${uuid.slice(-4)}`;
+}
+
+type PipeTone = "done" | "busy" | "wait" | "bad" | "muted";
+
+function PipeNode({
+  label,
+  tone,
+  checked,
+}: {
+  label: string;
+  tone: PipeTone;
+  checked?: boolean;
+}) {
+  return (
+    <span className={`pipe-step tone-${tone}`}>
+      <span className="pipe-node" aria-hidden="true">
+        {checked ? <CheckIcon size={10} /> : <span className="pipe-dot" />}
+      </span>
+      <span className="pipe-label">{label}</span>
+    </span>
+  );
 }
 
 export function AgentsAdminView(props: {
@@ -75,6 +87,7 @@ export function AgentsAdminView(props: {
   onOpenAIChanged: () => void;
 }) {
   const { muses, openaiAgents, projectAgents, fleetSummary } = props;
+  const { lang, t } = useLang();
   const [filter, setFilter] = useState<AgentFilter>("all");
   const [query, setQuery] = useState("");
 
@@ -103,6 +116,38 @@ export function AgentsAdminView(props: {
     }
     return map;
   }, [projectAgents]);
+
+  // Fleet KPI metrics
+  const fleetMetrics = useMemo(() => {
+    let live = 0;
+    let standby = 0;
+    let notSetup = 0;
+    let reconnecting = 0;
+    let offline = 0;
+
+    for (const m of muses) {
+      const c = museConnectionInfo(m, lang);
+      if (c.state === "live") live++;
+      else if (c.state === "standby") standby++;
+      else if (c.state === "not_setup") notSetup++;
+      else if (c.state === "reconnecting") reconnecting++;
+      else offline++;
+    }
+
+    let testedOk = 0;
+    for (const a of openaiAgents) {
+      if (testResults[a.id]?.ok) testedOk++;
+    }
+
+    return {
+      live,
+      standby,
+      pendingOrOffline: notSetup + reconnecting + offline,
+      notSetup: notSetup + reconnecting,
+      offline,
+      testedOk,
+    };
+  }, [muses, openaiAgents, testResults, lang]);
 
   const q = query.trim().toLowerCase();
 
@@ -149,111 +194,160 @@ export function AgentsAdminView(props: {
   const visibleCount = filteredMuses.length + filteredOpenAI.length;
 
   return (
-    <section className="admin-pane fade" aria-label="Quản trị Agent">
+    <section className="admin-pane fade" aria-label={t("agents.aria")}>
       <div className="pane-head">
         <div className="pane-title-group">
-          <h2>Quản trị Agent</h2>
+          <h2>{t("agents.title")}</h2>
           <span className="sub">
-            {muses.length} Muse Relay · {openaiAgents.length} OpenAI Compatible
+            {t("agents.sub", { muses: muses.length, openai: openaiAgents.length })}
           </span>
         </div>
         <span className="grow" />
         <div className="pane-actions">
-          <button type="button" className="btn-ghost" onClick={props.onAddMuse}>
-            <PlusIcon size={14} />
-            <span>Thêm Muse</span>
-          </button>
           <button
             type="button"
-            className="btn"
-            onClick={() => setOaiModal({ open: true, agent: null })}
+            className="btn-ghost"
+            onClick={props.onRefresh}
+            title={t("common.refresh")}
+            aria-label={t("common.refresh")}
           >
-            <PlusIcon size={14} />
-            <span>Thêm OpenAI Agent</span>
-          </button>
-          <button type="button" className="btn-ghost" onClick={props.onRefresh} title="Làm mới">
             <RefreshIcon size={14} />
-            <span className="hide-xs">Làm mới</span>
+            <span className="hide-xs">{t("common.refresh")}</span>
           </button>
           <button
             type="button"
             className={`btn-ghost btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
             onClick={props.onToggleInspector}
             aria-pressed={props.inspectorOpen}
-            title="Đóng/mở bảng thông tin"
+            title={t("common.toggleInspector")}
+            aria-label={t("common.toggleInspector")}
           >
             <PanelRightIcon size={15} />
-            <span className="hide-xs">Chi tiết</span>
+            <span className="hide-xs">{t("common.details")}</span>
           </button>
-        </div>
-      </div>
-
-      <div className="admin-toolbar">
-        <div className="filter-pills" role="tablist" aria-label="Lọc loại Agent">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={filter === "all"}
-            className={`filter-pill${filter === "all" ? " on" : ""}`}
-            onClick={() => setFilter("all")}
-          >
-            Tất cả ({totalCount})
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={filter === "muse"}
-            className={`filter-pill${filter === "muse" ? " on" : ""}`}
-            onClick={() => setFilter("muse")}
-          >
-            Muse Relay ({muses.length})
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={filter === "openai"}
-            className={`filter-pill${filter === "openai" ? " on" : ""}`}
-            onClick={() => setFilter("openai")}
-          >
-            OpenAI Compatible ({openaiAgents.length})
-          </button>
-        </div>
-
-        <div className="admin-search">
-          <SearchIcon size={14} className="admin-search-icon" />
-          <input
-            type="search"
-            value={query}
-            placeholder="Tìm theo tên, model, URL, UUID…"
-            aria-label="Tìm kiếm Agent"
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {query && (
-            <button
-              type="button"
-              className="rail-search-clear"
-              onClick={() => setQuery("")}
-              aria-label="Xoá từ khoá tìm kiếm"
-            >
-              <XIcon size={13} />
-            </button>
-          )}
         </div>
       </div>
 
       <div className="overview-scroll">
+        {/* Top 4-Card Fleet Summary Strip */}
+        <div className="admin-kpi-grid">
+          <div className="admin-kpi-card">
+            <span className="admin-kpi-label">{t("agents.kpiTotal")}</span>
+            <strong className="admin-kpi-value">{totalCount}</strong>
+            <span className="admin-kpi-sub">
+              {t("agents.kpiTotalSub", { muses: muses.length, openai: openaiAgents.length })}
+            </span>
+          </div>
+          <div className="admin-kpi-card tone-ok">
+            <span className="admin-kpi-label">{t("agents.kpiLive")}</span>
+            <strong className="admin-kpi-value">{fleetMetrics.live}</strong>
+            <span className="admin-kpi-sub">
+              {fleetMetrics.standby > 0
+                ? t("agents.kpiLiveSubStandby", { count: fleetMetrics.standby })
+                : t("agents.kpiLiveSub")}
+            </span>
+          </div>
+          <div className="admin-kpi-card tone-wait">
+            <span className="admin-kpi-label">{t("agents.kpiPendingOffline")}</span>
+            <strong className="admin-kpi-value">{fleetMetrics.pendingOrOffline}</strong>
+            <span className="admin-kpi-sub">
+              {t("agents.kpiPendingOfflineSub", {
+                notSetup: fleetMetrics.notSetup,
+                offline: fleetMetrics.offline,
+              })}
+            </span>
+          </div>
+          <div className="admin-kpi-card tone-busy">
+            <span className="admin-kpi-label">{t("agents.kpiOpenAI")}</span>
+            <strong className="admin-kpi-value">{openaiAgents.length}</strong>
+            <span className="admin-kpi-sub">
+              {fleetMetrics.testedOk > 0
+                ? t("agents.kpiOpenAITested", { ok: fleetMetrics.testedOk })
+                : t("agents.kpiOpenAISub")}
+            </span>
+          </div>
+        </div>
+
+        {/* Refined Segmented Toolbar */}
+        <div className="admin-toolbar">
+          <div className="filter-bar" role="tablist" aria-label={t("agents.filterAria")}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "all"}
+              className={`filter-bar-tab${filter === "all" ? " on" : ""}`}
+              onClick={() => setFilter("all")}
+            >
+              <span>{t("agents.filterAll")}</span>
+              <span className="filter-bar-count">{totalCount}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "muse"}
+              className={`filter-bar-tab${filter === "muse" ? " on" : ""}`}
+              onClick={() => setFilter("muse")}
+            >
+              <span>{t("agents.filterMuse")}</span>
+              <span className="filter-bar-count">{muses.length}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "openai"}
+              className={`filter-bar-tab${filter === "openai" ? " on" : ""}`}
+              onClick={() => setFilter("openai")}
+            >
+              <span>{t("agents.filterOpenAI")}</span>
+              <span className="filter-bar-count">{openaiAgents.length}</span>
+            </button>
+          </div>
+
+          <div className="admin-search">
+            <SearchIcon size={14} className="admin-search-icon" />
+            <input
+              type="search"
+              value={query}
+              placeholder={t("agents.searchPlaceholder")}
+              aria-label={t("agents.searchAria")}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {query && (
+              <button
+                type="button"
+                className="rail-search-clear"
+                onClick={() => setQuery("")}
+                aria-label={t("sidebar.clearSearchAria")}
+              >
+                <XIcon size={13} />
+              </button>
+            )}
+          </div>
+
+          <div className="admin-toolbar-actions">
+            <button type="button" className="btn-ghost" onClick={props.onAddMuse}>
+              <PlusIcon size={14} />
+              <span>{t("agents.addMuse")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setOaiModal({ open: true, agent: null })}
+            >
+              <PlusIcon size={14} />
+              <span>{t("agents.addOpenAI")}</span>
+            </button>
+          </div>
+        </div>
+
         {visibleCount === 0 ? (
           <div className="ov-empty-card">
-            <p>
-              {totalCount === 0
-                ? "Chưa có Agent nào. Hãy thêm Muse Relay hoặc OpenAI Compatible Agent để dùng trong các Project."
-                : "Không có Agent nào khớp bộ lọc hoặc từ khoá hiện tại."}
-            </p>
+            <p>{totalCount === 0 ? t("agents.emptyAll") : t("agents.emptyFiltered")}</p>
             {totalCount === 0 && (
               <div className="empty-cta-row">
                 <button type="button" className="btn-ghost" onClick={props.onAddMuse}>
                   <PlusIcon size={14} />
-                  <span>Thêm Muse Relay</span>
+                  <span>{t("agents.addMuseRelay")}</span>
                 </button>
                 <button
                   type="button"
@@ -261,7 +355,7 @@ export function AgentsAdminView(props: {
                   onClick={() => setOaiModal({ open: true, agent: null })}
                 >
                   <PlusIcon size={14} />
-                  <span>Thêm OpenAI Agent</span>
+                  <span>{t("agents.addOpenAI")}</span>
                 </button>
               </div>
             )}
@@ -269,139 +363,197 @@ export function AgentsAdminView(props: {
         ) : (
           <>
             {filteredMuses.length > 0 && (
-              <section className="ov-section" aria-label="Danh sách Muse Relay">
+              <section className="ov-section" aria-label={t("agents.museSectionAria")}>
                 <div className="ov-section-head">
                   <div className="ov-section-title">
                     <StarIcon size={15} style={{ color: "var(--color-accent)" }} />
-                    <h3>Muse Relay ({filteredMuses.length})</h3>
+                    <h3>
+                      {t("agents.filterMuse")} ({filteredMuses.length})
+                    </h3>
                   </div>
                 </div>
 
                 <div className="agent-admin-grid">
                   {filteredMuses.map((m) => {
                     const summary = fleetSummary.get(m.recipient);
-                    const status = summary?.status ?? "idle";
+                    const activeCount = summary?.activeCount ?? 0;
                     const pCount = projectCounts.get(`muse:${m.recipient}`) ?? 0;
-                    const conn = museConnectionInfo(m);
+                    const conn = museConnectionInfo(m, lang);
 
-                    const setupText = conn.setupDone ? "Đã setup" : "Chưa setup";
-                    const connectText = conn.connected
-                      ? m.first_connected_at
-                        ? `Đã kết nối · ${fmtTime(m.first_connected_at)}`
-                        : "Đã kết nối"
+                    const setupTone: PipeTone = conn.setupDone ? "done" : "wait";
+                    const connTone: PipeTone = conn.connected
+                      ? "done"
                       : conn.state === "reconnecting"
-                        ? "Chờ kết nối lại"
-                        : conn.state === "offline" && (m.first_connected_at || m.last_claim_at)
-                          ? "Mất kết nối"
-                          : "Chưa kết nối";
-                    const liveText =
+                        ? "wait"
+                        : conn.state === "offline"
+                          ? "bad"
+                          : "muted";
+                    const liveTone: PipeTone =
                       conn.state === "live"
-                        ? `Đang live · ${fmtRelativeAge(m.last_claim_at)}`
+                        ? "done"
                         : conn.state === "standby"
-                          ? `Chờ nhịp · ${fmtRelativeAge(m.last_claim_at)}`
+                          ? "busy"
                           : conn.state === "reconnecting"
-                            ? "Đợi claim token mới"
+                            ? "wait"
                             : conn.state === "offline"
-                              ? `Offline · ${m.last_claim_at ? fmtRelativeAge(m.last_claim_at) : "quá hạn"}`
-                              : "Chưa có nhịp poll";
+                              ? "bad"
+                              : "muted";
 
-                    const setupTone = conn.setupDone ? "ok" : "pending";
-                    const connectTone = conn.connected
-                      ? "ok"
-                      : conn.state === "reconnecting"
-                        ? "pending"
-                        : "bad";
-                    const liveTone =
+                    const edgeTone =
                       conn.state === "live"
                         ? "ok"
                         : conn.state === "standby"
                           ? "busy"
                           : conn.state === "offline"
                             ? "bad"
-                            : "pending";
+                            : "wait";
 
                     return (
-                      <article key={m.recipient} className="agent-card">
+                      <article
+                        key={m.recipient}
+                        className={`agent-card muse-card edge-${edgeTone}`}
+                      >
                         <div className="agent-card-head">
                           <div className="fleet-identity">
-                            <span className={`avatar-monogram status-${status}`}>
-                              {initialsOf(m.name)}
+                            <span className="avatar-wrap">
+                              <span
+                                className={`avatar-monogram status-${summary?.status ?? "idle"}`}
+                              >
+                                {initialsOf(m.name)}
+                              </span>
+                              <span
+                                className={`avatar-status-dot ${conn.dotClass}`}
+                                aria-hidden="true"
+                              />
                             </span>
                             <div className="fleet-name-wrap">
-                              <strong className="fleet-name">{m.name}</strong>
-                              <span className="agent-kind-tag muse">Muse Relay</span>
+                              <strong className="fleet-name" title={m.name}>
+                                {m.name}
+                              </strong>
+                              <div className="agent-sub-tags">
+                                <span className="agent-kind-tag muse">Muse Relay</span>
+                                {activeCount > 0 && (
+                                  <span className="agent-job-pill">
+                                    {t("ov.runningJobs", { count: activeCount })}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          <Chip
-                            state={FLEET_STATUS_CHIP[status]}
-                            label={FLEET_STATUS_LABEL[status]}
+                          <Chip state={conn.chipClass} label={conn.shortLabel} />
+                        </div>
+
+                        {/* Compact 3-step horizontal pipeline */}
+                        <div
+                          className="muse-pipeline"
+                          role="group"
+                          aria-label={`${m.name}: ${conn.label}`}
+                          title={conn.detail}
+                        >
+                          <PipeNode
+                            label={t("agents.pipeSetup")}
+                            tone={setupTone}
+                            checked={conn.setupDone}
+                          />
+                          <span
+                            className={`pipe-line${conn.setupDone ? " filled" : ""}`}
+                            aria-hidden="true"
+                          />
+                          <PipeNode
+                            label={t("agents.pipeConnected")}
+                            tone={connTone}
+                            checked={conn.connected}
+                          />
+                          <span
+                            className={`pipe-line${conn.connected ? " filled" : ""}`}
+                            aria-hidden="true"
+                          />
+                          <PipeNode
+                            label={t("agents.pipeLive")}
+                            tone={liveTone}
+                            checked={conn.state === "live"}
                           />
                         </div>
 
-                        <div className="muse-telemetry-grid" role="group" aria-label={`Telemetry ${m.name}`}>
-                          <div className={`muse-telemetry-cell tone-${setupTone}`}>
-                            <span className="muse-telemetry-k">Setup</span>
-                            <strong className="muse-telemetry-v">{setupText}</strong>
-                          </div>
-                          <div className={`muse-telemetry-cell tone-${connectTone}`}>
-                            <span className="muse-telemetry-k">Kết nối</span>
-                            <strong className="muse-telemetry-v">{connectText}</strong>
-                          </div>
-                          <div className={`muse-telemetry-cell tone-${liveTone}`}>
-                            <span className="muse-telemetry-k">Live</span>
-                            <strong className="muse-telemetry-v">{liveText}</strong>
-                          </div>
-                        </div>
-
-                        <div className="agent-meta-rows">
-                          <div className="agent-meta-row">
-                            <FolderIcon size={12} />
-                            <code title={m.dropbox_root || "/"}>{m.dropbox_root || "/"}</code>
-                          </div>
-                          {m.email_owner && (
-                            <div className="agent-meta-row">
-                              <span className="agent-meta-k">Email</span>
-                              <span className="agent-meta-val" title={m.email_owner}>
-                                {m.email_owner}
-                              </span>
-                            </div>
-                          )}
-                          <div className="agent-meta-row">
-                            <span className="agent-meta-k">UUID</span>
-                            <code title={m.recipient}>{m.recipient}</code>
+                        {!conn.setupDone && (
+                          <div className="agent-setup-callout">
+                            <span className="agent-setup-msg">{t("agents.setupCallout")}</span>
                             <button
                               type="button"
-                              className="btn-quiet btn-icon-copy"
-                              aria-label={`Copy UUID của ${m.name}`}
-                              title="Copy UUID"
-                              onClick={() => copyText(m.recipient, "Đã copy recipient UUID")}
+                              className="btn-ghost btn-sm agent-setup-btn"
+                              onClick={() => setMuseAction({ muse: m, kind: "rotate" })}
                             >
-                              <CopyIcon size={12} />
+                              <KeyIcon size={12} />
+                              <span>{t("agents.getToken")}</span>
                             </button>
                           </div>
-                          {m.last_result_at && (
-                            <div className="agent-meta-row">
-                              <span className="agent-meta-k">Kết quả</span>
-                              <span className="agent-meta-val">
-                                {fmtRelativeAge(m.last_result_at)} ({fmtTime(m.last_result_at)})
-                              </span>
-                            </div>
-                          )}
-                          <div className="agent-meta-sub">
-                            <span>Tạo {fmtTime(m.created_at)}</span>
-                            <span>·</span>
-                            <span>{pCount} Project</span>
+                        )}
+
+                        <div className="agent-meta-grid">
+                          <div className="agent-meta-pair">
+                            <span className="agent-meta-k">{t("agents.metaDropbox")}</span>
+                            <code className="agent-meta-code" title={m.dropbox_root || "/"}>
+                              {m.dropbox_root || "/"}
+                            </code>
+                          </div>
+
+                          <div className="agent-meta-pair">
+                            <span className="agent-meta-k">{t("agents.metaUuid")}</span>
+                            <span className="agent-meta-copy-wrap">
+                              <code className="agent-meta-code" title={m.recipient}>
+                                {truncateUuid(m.recipient)}
+                              </code>
+                              <button
+                                type="button"
+                                className="btn-quiet btn-icon-copy"
+                                aria-label={t("agents.copyUuidAria", { name: m.name })}
+                                title={t("agents.copyUuidAria", { name: m.name })}
+                                onClick={() => copyText(m.recipient, t("agents.copyUuidToast"))}
+                              >
+                                <CopyIcon size={12} />
+                              </button>
+                            </span>
+                          </div>
+
+                          <div className="agent-meta-pair">
+                            <span className="agent-meta-k">{t("agents.metaProjects")}</span>
+                            <span className="agent-meta-v">
+                              {t("agents.projectsValue", {
+                                count: pCount,
+                                date: fmtTime(m.created_at, lang),
+                              })}
+                            </span>
+                          </div>
+
+                          <div className="agent-meta-pair">
+                            <span className="agent-meta-k">
+                              {m.last_result_at
+                                ? t("agents.metaLastResult")
+                                : t("agents.metaEmail")}
+                            </span>
+                            <span
+                              className="agent-meta-v"
+                              title={
+                                m.last_result_at
+                                  ? fmtTime(m.last_result_at, lang)
+                                  : m.email_owner ?? undefined
+                              }
+                            >
+                              {m.last_result_at
+                                ? fmtRelativeAge(m.last_result_at, lang)
+                                : m.email_owner || t("common.none")}
+                            </span>
                           </div>
                         </div>
 
                         <div className="agent-card-actions">
                           <button
                             type="button"
-                            className="btn-ghost btn-sm"
+                            className="btn-ghost btn-sm agent-btn-primary"
                             onClick={() => props.onOpenMuseRoom(m.recipient)}
                           >
                             <MessageIcon size={13} />
-                            <span>Phòng 1:1</span>
+                            <span>{t("agents.openDirectRoom")}</span>
                           </button>
                           <button
                             type="button"
@@ -409,7 +561,7 @@ export function AgentsAdminView(props: {
                             onClick={() => setMuseAction({ muse: m, kind: "rename" })}
                           >
                             <EditIcon size={13} />
-                            <span>Đổi tên</span>
+                            <span>{t("agents.rename")}</span>
                           </button>
                           <button
                             type="button"
@@ -417,15 +569,16 @@ export function AgentsAdminView(props: {
                             onClick={() => setMuseAction({ muse: m, kind: "rotate" })}
                           >
                             <KeyIcon size={13} />
-                            <span>Rotate</span>
+                            <span>{t("agents.rotate")}</span>
                           </button>
                           <button
                             type="button"
-                            className="btn-ghost btn-sm danger-text"
+                            className="btn-ghost btn-sm btn-icon-only danger-text"
+                            aria-label={t("agents.deleteMuseAria", { name: m.name })}
+                            title={t("agents.deleteMuseAria", { name: m.name })}
                             onClick={() => setMuseAction({ muse: m, kind: "delete" })}
                           >
                             <TrashIcon size={13} />
-                            <span>Xoá</span>
                           </button>
                         </div>
                       </article>
@@ -436,11 +589,13 @@ export function AgentsAdminView(props: {
             )}
 
             {filteredOpenAI.length > 0 && (
-              <section className="ov-section" aria-label="Danh sách OpenAI Compatible">
+              <section className="ov-section" aria-label={t("agents.openaiSectionAria")}>
                 <div className="ov-section-head">
                   <div className="ov-section-title">
                     <BotIcon size={16} style={{ color: "var(--color-busy)" }} />
-                    <h3>OpenAI Compatible ({filteredOpenAI.length})</h3>
+                    <h3>
+                      {t("agents.filterOpenAI")} ({filteredOpenAI.length})
+                    </h3>
                   </div>
                 </div>
 
@@ -449,43 +604,70 @@ export function AgentsAdminView(props: {
                     const testState = testResults[a.id];
                     const pCount = projectCounts.get(`openai:${a.id}`) ?? 0;
 
+                    const statusPill = testState?.testing ? (
+                      <span className="test-status-pill testing">{t("agents.testTesting")}</span>
+                    ) : testState?.ok === true ? (
+                      <span className="test-status-pill ok">
+                        {t("agents.testOkPill", { ms: testState.latencyMs ?? 0 })}
+                      </span>
+                    ) : testState?.ok === false ? (
+                      <span className="test-status-pill err">{t("agents.testErrPill")}</span>
+                    ) : (
+                      <span className="test-status-pill untested">{t("agents.testUntested")}</span>
+                    );
+
                     return (
-                      <article key={a.id} className="agent-card">
+                      <article key={a.id} className="agent-card openai-card edge-busy">
                         <div className="agent-card-head">
                           <div className="fleet-identity">
                             <span className="avatar-monogram openai">
                               <BotIcon size={16} />
                             </span>
                             <div className="fleet-name-wrap">
-                              <strong className="fleet-name">{a.name}</strong>
+                              <strong className="fleet-name" title={a.name}>
+                                {a.name}
+                              </strong>
                               <span className="agent-kind-tag openai">OpenAI Compatible</span>
                             </div>
                           </div>
-                          <span className="model-pill" title={a.model}>
-                            {a.model}
-                          </span>
+                          <div className="openai-header-pills">
+                            <span className="model-pill" title={a.model}>
+                              {a.model}
+                            </span>
+                            {statusPill}
+                          </div>
                         </div>
 
-                        <div className="agent-meta-rows">
-                          <div className="agent-meta-row">
-                            <span className="agent-meta-k">URL</span>
-                            <code title={a.base_url}>{a.base_url}</code>
+                        <div className="agent-meta-grid">
+                          <div className="agent-meta-pair span-2">
+                            <span className="agent-meta-k">{t("agents.metaEndpoint")}</span>
+                            <code className="agent-meta-code" title={a.base_url}>
+                              {a.base_url}
+                            </code>
                           </div>
-                          <div className="agent-meta-row">
-                            <span className="agent-meta-k">Key</span>
-                            <code>{maskApiKey(a.api_key)}</code>
+
+                          <div className="agent-meta-pair">
+                            <span className="agent-meta-k">{t("agents.metaApiKey")}</span>
+                            <code className="agent-meta-code">{maskApiKey(a.api_key)}</code>
                           </div>
-                          {a.system_prompt && (
-                            <p className="agent-sys-snippet" title={a.system_prompt}>
-                              Prompt: {a.system_prompt}
-                            </p>
-                          )}
-                          <div className="agent-meta-sub">
-                            <span>Tạo {fmtTime(a.created_at)}</span>
-                            <span>·</span>
-                            <span>{pCount} Project</span>
+
+                          <div className="agent-meta-pair">
+                            <span className="agent-meta-k">{t("agents.metaProjects")}</span>
+                            <span className="agent-meta-v">
+                              {t("agents.projectsValue", {
+                                count: pCount,
+                                date: fmtTime(a.created_at, lang),
+                              })}
+                            </span>
                           </div>
                         </div>
+
+                        {a.system_prompt && (
+                          <div className="agent-prompt-box" title={a.system_prompt}>
+                            <span className="agent-prompt-label">{t("agents.metaPrompt")}</span>
+                            <p className="agent-prompt-text">{a.system_prompt}</p>
+                          </div>
+                        )}
 
                         {testState && !testState.testing && (
                           <div
@@ -496,12 +678,14 @@ export function AgentsAdminView(props: {
                               <>
                                 <CheckIcon size={13} />
                                 <span>
-                                  Kết nối OK ({testState.latencyMs}ms)
+                                  {t("agents.testOkMsg", { ms: testState.latencyMs ?? 0 })}
                                   {testState.reply ? ` · "${testState.reply.slice(0, 36)}"` : ""}
                                 </span>
                               </>
                             ) : (
-                              <span>Lỗi: {testState.error}</span>
+                              <span>
+                                {t("common.errorPrefix", { err: testState.error ?? "" })}
+                              </span>
                             )}
                           </div>
                         )}
@@ -509,13 +693,13 @@ export function AgentsAdminView(props: {
                         <div className="agent-card-actions">
                           <button
                             type="button"
-                            className={`btn-ghost btn-sm${testState?.testing ? " is-loading" : ""}`}
+                            className={`btn-ghost btn-sm agent-btn-primary${testState?.testing ? " is-loading" : ""}`}
                             disabled={testState?.testing}
                             onClick={() => void runConnectionTest(a)}
                           >
                             <PlugIcon size={13} />
                             <span>
-                              {testState?.testing ? "Đang kiểm tra…" : "Kiểm tra kết nối"}
+                              {testState?.testing ? t("agents.testTesting") : t("agents.testBtn")}
                             </span>
                           </button>
                           <button
@@ -524,15 +708,16 @@ export function AgentsAdminView(props: {
                             onClick={() => setOaiModal({ open: true, agent: a })}
                           >
                             <EditIcon size={13} />
-                            <span>Sửa</span>
+                            <span>{t("common.edit")}</span>
                           </button>
                           <button
                             type="button"
-                            className="btn-ghost btn-sm danger-text"
+                            className="btn-ghost btn-sm btn-icon-only danger-text"
+                            aria-label={t("agents.deleteOpenAIAria", { name: a.name })}
+                            title={t("agents.deleteOpenAIAria", { name: a.name })}
                             onClick={() => setOaiDelete(a)}
                           >
                             <TrashIcon size={13} />
-                            <span>Xoá</span>
                           </button>
                         </div>
                       </article>

@@ -17,6 +17,7 @@ import type {
   RelayResult,
   ThreadItem,
 } from "../types";
+import { tNow } from "./i18n";
 import { db } from "./supabase";
 
 // ---- crypto helpers (wizard + token rotation) -----------------------------
@@ -41,7 +42,7 @@ async function requireUserId(): Promise<{ userId?: string; error: string | null 
   const {
     data: { user },
   } = await db.auth.getUser();
-  if (!user) return { error: "phiên hết hạn — đăng nhập lại" };
+  if (!user) return { error: tNow("api.sessionExpired") };
   return { userId: user.id, error: null };
 }
 
@@ -309,7 +310,7 @@ function batchState(
   let processing = false;
   for (const r of rows) {
     if (r.status === "failed") {
-      failedErr = results.get(r.id)?.error ?? "thất bại";
+      failedErr = results.get(r.id)?.error ?? tNow("api.failed");
       return { state: "failed", error: failedErr };
     }
     if (r.status === "pending") pending = true;
@@ -374,7 +375,7 @@ export async function fetchGroupThread(groupId: string): Promise<{
       const st = first?.status ?? "pending";
       state = st === "failed" ? "failed" : st === "processing" ? "processing" : st === "pending" ? "pending" : "done";
       if (state === "done" && result?.output?.text) text = result.output.text;
-      if (state === "failed") error = result?.error ?? "thất bại";
+      if (state === "failed") error = result?.error ?? tNow("api.failed");
       notes = result?.output?.notes ?? null;
       paths = result?.output?.dropbox_paths ?? [];
     }
@@ -482,7 +483,7 @@ function parseJsonSafe(raw: string): { data?: unknown; error?: string } {
   try {
     return { data: JSON.parse(raw) as unknown };
   } catch {
-    return { error: "Endpoint trả về dữ liệu không phải JSON hợp lệ." };
+    return { error: tNow("api.invalidJson") };
   }
 }
 
@@ -556,21 +557,21 @@ export async function testOpenAIAgentConnection(
       return { ok: false, latencyMs, error: parsed.error };
     }
     if (!hasValidChoices(parsed.data)) {
-      return { ok: false, latencyMs, error: "Endpoint trả về JSON nhưng không có choices hợp lệ." };
+      return { ok: false, latencyMs, error: tNow("api.noChoices") };
     }
     const reply = extractCompletionContent(parsed.data).trim();
     return { ok: true, latencyMs, reply: reply || "OK" };
   } catch (err) {
     const latencyMs = Math.round(performance.now() - started);
     if (isAbortError(err)) {
-      return { ok: false, latencyMs, error: "Quá thời gian chờ (20s)" };
+      return { ok: false, latencyMs, error: tNow("api.timeout20") };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
       latencyMs,
       error: msg.includes("Failed to fetch")
-        ? "Không thể kết nối (kiểm tra URL hoặc cấu hình CORS của endpoint)"
+        ? tNow("api.corsTest")
         : msg,
     };
   } finally {
@@ -612,17 +613,17 @@ export async function callOpenAIChatCompletion(input: {
     }
     const text = extractCompletionContent(parsed.data);
     if (!text.trim()) {
-      return { error: "Endpoint trả về nội dung rỗng." };
+      return { error: tNow("api.emptyReply") };
     }
     return { content: text };
   } catch (err) {
     if (isAbortError(err)) {
-      return { error: "Quá thời gian chờ phản hồi từ model (90s)." };
+      return { error: tNow("api.timeout90") };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return {
       error: msg.includes("Failed to fetch")
-        ? "Lỗi kết nối mạng hoặc CORS khi gọi endpoint OpenAI."
+        ? tNow("api.corsCall")
         : msg,
     };
   } finally {
@@ -854,7 +855,7 @@ export async function createConversation(input: {
     })
     .select("id,project_id,title,mode,group_id,participants,created_at")
     .single();
-  if (error || !data) return { error: error?.message ?? "không tạo được cuộc hội thoại" };
+  if (error || !data) return { error: error?.message ?? tNow("api.createConvFailed") };
   return { data: normalizeConversation(data as Record<string, unknown>), error: null };
 }
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { deleteConversation, deleteProject, removeProjectAgent } from "../lib/api";
 import { fmtTime, initialsOf, memberDotColor, type MuseFleetSummary } from "../lib/format";
+import { useLang, type I18nKey } from "../lib/i18n";
 import type {
   Conversation,
   ConversationMode,
@@ -22,11 +23,11 @@ import {
 } from "./Icons";
 import { Chip, ErrorMsg, Modal, toast } from "./ui";
 
-const MODE_LABEL: Record<ConversationMode, string> = {
-  muse_single: "1:1 Muse",
-  muse_group: "Nhóm Muse",
-  openai: "OpenAI",
-  mixed: "Hỗn hợp",
+const MODE_KEY: Record<ConversationMode, I18nKey> = {
+  muse_single: "convMode.muse_single",
+  muse_group: "convMode.muse_group",
+  openai: "convMode.openai",
+  mixed: "convMode.mixed",
 };
 
 export function ProjectView(props: {
@@ -46,6 +47,7 @@ export function ProjectView(props: {
   onConversationsChanged: () => void;
 }) {
   const { project, projectAgents, conversations, muses, openaiAgents, fleetSummary } = props;
+  const { lang, t } = useLang();
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [confirmDeleteConv, setConfirmDeleteConv] = useState<Conversation | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,10 +59,10 @@ export function ProjectView(props: {
   async function handleRemoveAgent(pa: ProjectAgent) {
     const err = await removeProjectAgent(project.id, pa.agent_kind, pa.agent_ref);
     if (err) {
-      toast("Không gỡ được Agent: " + err);
+      toast(t("proj.removeAgentErr", { err }));
       return;
     }
-    toast(`Đã gỡ ${pa.agent_name} khỏi Project`);
+    toast(t("proj.removeAgentOk", { name: pa.agent_name }));
     props.onProjectAgentsChanged();
   }
 
@@ -71,10 +73,10 @@ export function ProjectView(props: {
     const err = await deleteProject(project.id);
     setBusy(false);
     if (err) {
-      setDelErr("Lỗi xoá Project: " + err);
+      setDelErr(t("proj.delErr", { err }));
       return;
     }
-    toast("Đã xoá Project");
+    toast(t("proj.delOk"));
     setConfirmDeleteProject(false);
     props.onProjectDeleted(project.id);
   }
@@ -86,10 +88,10 @@ export function ProjectView(props: {
     const err = await deleteConversation(confirmDeleteConv.id, confirmDeleteConv.group_id);
     setBusy(false);
     if (err) {
-      setDelErr("Lỗi xoá cuộc hội thoại: " + err);
+      setDelErr(t("convRoom.delErr", { err }));
       return;
     }
-    toast("Đã xoá cuộc hội thoại");
+    toast(t("convRoom.delToast"));
     setConfirmDeleteConv(null);
     props.onConversationsChanged();
   }
@@ -100,19 +102,28 @@ export function ProjectView(props: {
         <div className="pane-title-group">
           <h2>{project.name}</h2>
           <span className="sub">
-            {projectAgents.length} Agent · {conversations.length} cuộc hội thoại · tạo{" "}
-            {fmtTime(project.created_at)}
+            {t("proj.meta", {
+              agents: projectAgents.length,
+              convs: conversations.length,
+              time: fmtTime(project.created_at, lang),
+            })}
           </span>
         </div>
         <span className="grow" />
         <div className="pane-actions">
           <button type="button" className="btn" onClick={props.onNewConversation}>
             <PlusIcon size={14} />
-            <span>Cuộc hội thoại mới</span>
+            <span>{t("proj.newConv")}</span>
           </button>
-          <button type="button" className="btn-ghost" onClick={props.onEditProject}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={props.onEditProject}
+            title={t("proj.settings")}
+            aria-label={t("proj.settings")}
+          >
             <SettingsIcon size={14} />
-            <span className="hide-xs">Cài đặt</span>
+            <span className="hide-xs">{t("proj.settings")}</span>
           </button>
           <button
             type="button"
@@ -121,20 +132,22 @@ export function ProjectView(props: {
               setDelErr("");
               setConfirmDeleteProject(true);
             }}
-            title="Xoá Project"
+            title={t("proj.delTitle")}
+            aria-label={t("proj.delTitle")}
           >
             <TrashIcon size={14} />
-            <span className="hide-xs">Xoá</span>
+            <span className="hide-xs">{t("common.delete")}</span>
           </button>
           <button
             type="button"
             className={`btn-ghost btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
             onClick={props.onToggleInspector}
             aria-pressed={props.inspectorOpen}
-            title="Đóng/mở thông tin Project"
+            title={t("proj.toggleInfoTitle")}
+            aria-label={t("proj.toggleInfoTitle")}
           >
             <PanelRightIcon size={15} />
-            <span className="hide-xs">Chi tiết</span>
+            <span className="hide-xs">{t("common.details")}</span>
           </button>
         </div>
       </div>
@@ -145,21 +158,21 @@ export function ProjectView(props: {
         )}
 
         {/* Assigned Agents */}
-        <section className="ov-section" aria-label="Agent trong Project">
+        <section className="ov-section" aria-label={t("proj.agentsAria")}>
           <div className="ov-section-head">
-            <h3>Agent trong Project ({projectAgents.length})</h3>
+            <h3>{t("proj.agentsTitle", { count: projectAgents.length })}</h3>
             <button type="button" className="btn-ghost btn-sm" onClick={props.onEditProject}>
               <PlusIcon size={14} />
-              <span>Thêm / Bớt Agent</span>
+              <span>{t("proj.manageAgents")}</span>
             </button>
           </div>
 
           {projectAgents.length === 0 ? (
             <div className="ov-empty-card">
-              <p>Project chưa có Agent nào. Gán Muse Relay hoặc OpenAI Agent để bắt đầu tạo cuộc hội thoại.</p>
+              <p>{t("proj.emptyAgents")}</p>
               <button type="button" className="btn-ghost" onClick={props.onEditProject}>
                 <SettingsIcon size={14} />
-                <span>Chọn Agent cho Project</span>
+                <span>{t("proj.pickAgents")}</span>
               </button>
             </div>
           ) : (
@@ -195,8 +208,8 @@ export function ProjectView(props: {
                       <button
                         type="button"
                         className="btn-quiet danger-text"
-                        title={`Gỡ ${displayName} khỏi Project`}
-                        aria-label={`Gỡ ${displayName} khỏi Project`}
+                        title={t("proj.removeAgentAria", { name: displayName })}
+                        aria-label={t("proj.removeAgentAria", { name: displayName })}
                         onClick={() => void handleRemoveAgent(pa)}
                       >
                         <TrashIcon size={13} />
@@ -210,24 +223,24 @@ export function ProjectView(props: {
         </section>
 
         {/* Conversations */}
-        <section className="ov-section" aria-label="Cuộc hội thoại trong Project">
+        <section className="ov-section" aria-label={t("proj.convsAria")}>
           <div className="ov-section-head">
             <div className="ov-section-title">
               <MessageIcon size={15} />
-              <h3>Cuộc hội thoại ({conversations.length})</h3>
+              <h3>{t("proj.convsTitle", { count: conversations.length })}</h3>
             </div>
             <button type="button" className="btn btn-sm" onClick={props.onNewConversation}>
               <PlusIcon size={14} />
-              <span>Cuộc hội thoại mới</span>
+              <span>{t("proj.newConv")}</span>
             </button>
           </div>
 
           {conversations.length === 0 ? (
             <div className="ov-empty-card">
-              <p>Chưa có cuộc hội thoại nào trong Project này.</p>
+              <p>{t("proj.emptyConvs")}</p>
               <button type="button" className="btn" onClick={props.onNewConversation}>
                 <PlusIcon size={15} />
-                <span>Tạo cuộc hội thoại đầu tiên</span>
+                <span>{t("proj.firstConv")}</span>
               </button>
             </div>
           ) : (
@@ -252,8 +265,8 @@ export function ProjectView(props: {
                       <span className="conv-row-body">
                         <span className="conv-row-top">
                           <strong className="conv-row-title">{c.title}</strong>
-                          <Chip state="idle" label={MODE_LABEL[c.mode]} />
-                          <span className="conv-row-time">{fmtTime(c.created_at)}</span>
+                          <Chip state="idle" label={t(MODE_KEY[c.mode])} />
+                          <span className="conv-row-time">{fmtTime(c.created_at, lang)}</span>
                         </span>
                         <span className="conv-row-parts">
                           {c.participants.map((p, idx) => {
@@ -265,11 +278,13 @@ export function ProjectView(props: {
                               <span
                                 key={`${p.kind}:${p.ref}`}
                                 className={`conv-part-pill${deleted ? " deleted" : ""}`}
-                                title={deleted ? "Agent đã bị xoá khỏi Quản trị Agent" : undefined}
+                                title={deleted ? t("convRoom.deletedFromAdmin") : undefined}
                               >
                                 <i style={{ background: memberDotColor(idx) }} />
                                 <span>{liveName}</span>
-                                {deleted && <span className="deleted-note">(đã xoá)</span>}
+                                {deleted && (
+                                  <span className="deleted-note">({t("convRoom.deletedTag")})</span>
+                                )}
                               </span>
                             );
                           })}
@@ -280,8 +295,8 @@ export function ProjectView(props: {
                     <button
                       type="button"
                       className="btn-quiet conv-del-btn danger-text"
-                      title={`Xoá "${c.title}"`}
-                      aria-label={`Xoá cuộc hội thoại ${c.title}`}
+                      title={t("proj.delConvAria", { title: c.title })}
+                      aria-label={t("proj.delConvAria", { title: c.title })}
                       onClick={() => {
                         setDelErr("");
                         setConfirmDeleteConv(c);
@@ -303,11 +318,8 @@ export function ProjectView(props: {
           onClose={() => setConfirmDeleteProject(false)}
           labelledBy="del-proj-title"
         >
-          <h2 id="del-proj-title">Xoá Project — {project.name}</h2>
-          <p className="lead">
-            Hành động này không thể hoàn tác. Toàn bộ cuộc hội thoại và tin nhắn OpenAI trong
-            Project này sẽ bị xoá vĩnh viễn. Các Agent gốc trong Quản trị Agent vẫn được giữ nguyên.
-          </p>
+          <h2 id="del-proj-title">{t("proj.delModalTitle", { name: project.name })}</h2>
+          <p className="lead">{t("proj.delLead")}</p>
           <ErrorMsg text={delErr} />
           <div className="actions">
             <button
@@ -316,14 +328,14 @@ export function ProjectView(props: {
               disabled={busy}
               onClick={handleConfirmDeleteProject}
             >
-              {busy ? "Đang xoá…" : "Xoá Project"}
+              {busy ? t("common.deleting") : t("proj.delTitle")}
             </button>
             <button
               type="button"
               className="btn-ghost"
               onClick={() => setConfirmDeleteProject(false)}
             >
-              Giữ lại
+              {t("common.keep")}
             </button>
           </div>
         </Modal>
@@ -335,11 +347,10 @@ export function ProjectView(props: {
           onClose={() => setConfirmDeleteConv(null)}
           labelledBy="del-conv-title"
         >
-          <h2 id="del-conv-title">Xoá cuộc hội thoại — {confirmDeleteConv.title}</h2>
-          <p className="lead">
-            Xoá cuộc hội thoại này khỏi Project? Nếu cuộc hội thoại sử dụng nhóm Muse liên kết,
-            nhóm đó cũng sẽ được dọn sạch.
-          </p>
+          <h2 id="del-conv-title">
+            {t("convRoom.delModalTitle", { title: confirmDeleteConv.title })}
+          </h2>
+          <p className="lead">{t("proj.delConvLead")}</p>
           <ErrorMsg text={delErr} />
           <div className="actions">
             <button
@@ -348,14 +359,14 @@ export function ProjectView(props: {
               disabled={busy}
               onClick={handleConfirmDeleteConv}
             >
-              {busy ? "Đang xoá…" : "Xoá cuộc hội thoại"}
+              {busy ? t("common.deleting") : t("convRoom.delConfirm")}
             </button>
             <button
               type="button"
               className="btn-ghost"
               onClick={() => setConfirmDeleteConv(null)}
             >
-              Giữ lại
+              {t("common.keep")}
             </button>
           </div>
         </Modal>

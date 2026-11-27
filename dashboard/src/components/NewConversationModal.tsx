@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { createConversation, createGroup, deleteGroup } from "../lib/api";
+import { useLang, type I18nKey } from "../lib/i18n";
 import type {
   Conversation,
   ConversationMode,
@@ -11,11 +12,11 @@ import type {
 } from "../types";
 import { ErrorMsg, Modal, toast } from "./ui";
 
-const MODE_HINT: Record<ConversationMode, string> = {
-  muse_single: "1:1 Muse — hỗ trợ đầy đủ Chat, Ảnh, Video qua Relay (theo thread riêng).",
-  muse_group: "Nhóm Muse — tạo nhóm Relay riêng để các Muse thảo luận luân phiên (Chat).",
-  openai: "OpenAI Compatible — chat trực tiếp và lưu hội thoại tức thì.",
-  mixed: "Hỗn hợp Muse + OpenAI — gửi đồng thời tới Muse và model OpenAI trong một luồng chung.",
+const MODE_HINT_KEY: Record<ConversationMode, I18nKey> = {
+  muse_single: "modeHint.muse_single",
+  muse_group: "modeHint.muse_group",
+  openai: "modeHint.openai",
+  mixed: "modeHint.mixed",
 };
 
 export function resolveConversationMode(
@@ -39,6 +40,7 @@ export function NewConversationModal(props: {
   onEditProjectAgents?: () => void;
   onCreated: (conversation: Conversation) => void;
 }) {
+  const { t } = useLang();
   const [title, setTitle] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -97,11 +99,11 @@ export function NewConversationModal(props: {
     setError("");
     const trimmed = title.trim();
     if (trimmed.length < 1 || trimmed.length > 80) {
-      setError("Tiêu đề cuộc hội thoại phải từ 1–80 ký tự.");
+      setError(t("newConv.titleErr"));
       return;
     }
     if (!resolvedMode) {
-      setError("Chọn ít nhất 1 Agent tham gia cuộc hội thoại.");
+      setError(t("newConv.pickErr"));
       return;
     }
 
@@ -120,7 +122,7 @@ export function NewConversationModal(props: {
       );
       if (gErr || !id) {
         setSaving(false);
-        setError("Lỗi tạo nhóm Muse liên kết: " + (gErr ?? "không rõ"));
+        setError(t("newConv.groupErr", { err: gErr ?? t("common.unknown") }));
         return;
       }
       groupId = id;
@@ -139,35 +141,33 @@ export function NewConversationModal(props: {
       if (groupId) {
         await deleteGroup(groupId);
       }
-      setError("Lỗi tạo cuộc hội thoại: " + (cErr ?? "không rõ"));
+      setError(t("newConv.createErr", { err: cErr ?? t("common.unknown") }));
       return;
     }
 
-    toast("Đã tạo cuộc hội thoại mới");
+    toast(t("newConv.createdToast"));
     props.onCreated(data);
     props.onClose();
   }
 
   return (
     <Modal open onClose={props.onClose} labelledBy="new-conv-title">
-      <h2 id="new-conv-title">Cuộc hội thoại mới — {props.project.name}</h2>
-      <p className="lead">
-        Chọn các Agent thuộc Project này để tham gia. Hệ thống sẽ tự xác định chế độ chạy phù hợp.
-      </p>
+      <h2 id="new-conv-title">{t("newConv.title", { name: props.project.name })}</h2>
+      <p className="lead">{t("newConv.lead")}</p>
 
-      <label htmlFor="conv-title">Tiêu đề cuộc hội thoại</label>
+      <label htmlFor="conv-title">{t("newConv.titleLabel")}</label>
       <input
         id="conv-title"
         value={title}
         maxLength={80}
-        placeholder="vd: Lên ý tưởng kịch bản tuần 48"
+        placeholder={t("newConv.titlePlaceholder")}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") void submit();
         }}
       />
 
-      <label>Agent trong Project ({participants.length} đã chọn)</label>
+      <label>{t("newConv.agentsLabel", { count: participants.length })}</label>
       <div className="check-list">
         {availableAgents.map((item) => {
           const key = `${item.kind}:${item.ref}`;
@@ -192,7 +192,7 @@ export function NewConversationModal(props: {
         })}
         {availableAgents.length === 0 && (
           <div className="empty-inline-box">
-            <span className="hint">Project này chưa được gán Agent nào.</span>
+            <span className="hint">{t("newConv.emptyAgents")}</span>
             {props.onEditProjectAgents && (
               <button
                 type="button"
@@ -202,7 +202,7 @@ export function NewConversationModal(props: {
                   props.onEditProjectAgents?.();
                 }}
               >
-                Gán Agent vào Project
+                {t("newConv.assignBtn")}
               </button>
             )}
           </div>
@@ -211,7 +211,7 @@ export function NewConversationModal(props: {
 
       {resolvedMode && (
         <div className="mode-preview-box">
-          <strong>Chế độ tự nhận diện:</strong> {MODE_HINT[resolvedMode]}
+          <strong>{t("newConv.modeDetected")}</strong> {t(MODE_HINT_KEY[resolvedMode])}
         </div>
       )}
 
@@ -223,10 +223,10 @@ export function NewConversationModal(props: {
           disabled={saving || availableAgents.length === 0}
           onClick={submit}
         >
-          {saving ? "Đang tạo…" : "Bắt đầu hội thoại"}
+          {saving ? t("newConv.creating") : t("newConv.startBtn")}
         </button>
         <button type="button" className="btn-ghost" onClick={props.onClose}>
-          Huỷ
+          {t("common.cancel")}
         </button>
       </div>
     </Modal>

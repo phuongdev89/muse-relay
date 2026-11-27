@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { buildChatCompletionsUrl, createOpenAIAgent, deleteOpenAIAgent, updateOpenAIAgent } from "../lib/api";
+import { useLang } from "../lib/i18n";
 import type { OpenAIAgent } from "../types";
 import { EyeIcon, EyeOffIcon } from "./Icons";
 import { ErrorMsg, Modal, toast } from "./ui";
@@ -18,6 +19,7 @@ export function OpenAIAgentModal(props: {
   onClose: () => void;
   onSaved: (saved?: OpenAIAgent) => void;
 }) {
+  const { t } = useLang();
   const isEdit = Boolean(props.agent);
   const [name, setName] = useState(props.agent?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(props.agent?.base_url ?? "https://api.openai.com/v1");
@@ -38,19 +40,19 @@ export function OpenAIAgentModal(props: {
     const trimmedPrompt = systemPrompt.trim();
 
     if (trimmedName.length < 1 || trimmedName.length > 64) {
-      setError("Tên Agent phải từ 1–64 ký tự.");
+      setError(t("oai.nameErr"));
       return;
     }
     if (!trimmedUrl || trimmedUrl.length > 512 || !isValidHttpUrl(trimmedUrl)) {
-      setError("Base URL chưa hợp lệ (phải bắt đầu bằng http:// hoặc https://, tối đa 512 ký tự).");
+      setError(t("oai.urlErr"));
       return;
     }
     if (trimmedModel.length < 1 || trimmedModel.length > 128) {
-      setError("Model ID phải từ 1–128 ký tự.");
+      setError(t("oai.modelErr"));
       return;
     }
     if (trimmedKey.length < 1 || trimmedKey.length > 512) {
-      setError("API Key phải từ 1–512 ký tự.");
+      setError(t("oai.keyErr"));
       return;
     }
 
@@ -65,10 +67,10 @@ export function OpenAIAgentModal(props: {
       });
       setSaving(false);
       if (err) {
-        setError("Lỗi cập nhật: " + err);
+        setError(t("oai.updateErr", { err }));
         return;
       }
-      toast("Đã cập nhật OpenAI Agent");
+      toast(t("oai.updatedToast"));
       props.onSaved();
       props.onClose();
       return;
@@ -83,10 +85,10 @@ export function OpenAIAgentModal(props: {
     });
     setSaving(false);
     if (err || !data) {
-      setError("Lỗi tạo Agent: " + (err ?? "không rõ"));
+      setError(t("oai.createErr", { err: err ?? t("common.unknown") }));
       return;
     }
-    toast("Đã thêm OpenAI Agent");
+    toast(t("oai.createdToast"));
     props.onSaved(data);
     props.onClose();
   }
@@ -94,23 +96,20 @@ export function OpenAIAgentModal(props: {
   return (
     <Modal open onClose={props.onClose} labelledBy="oai-modal-title">
       <h2 id="oai-modal-title">
-        {isEdit ? `Sửa OpenAI Agent — ${props.agent?.name}` : "Thêm OpenAI Compatible Agent"}
+        {isEdit ? t("oai.editTitle", { name: props.agent?.name ?? "" }) : t("oai.createTitle")}
       </h2>
-      <p className="lead">
-        Kết nối trực tiếp với bất kỳ endpoint tương thích chuẩn OpenAI{" "}
-        <code>/chat/completions</code> (OpenAI, OpenRouter, Groq, DeepSeek, Ollama, vLLM…).
-      </p>
+      <p className="lead">{t("oai.lead")}</p>
 
-      <label htmlFor="oai-name">Tên Agent</label>
+      <label htmlFor="oai-name">{t("oai.nameLabel")}</label>
       <input
         id="oai-name"
         value={name}
         maxLength={64}
-        placeholder="vd: GPT-4o Reviewer"
+        placeholder={t("oai.namePlaceholder")}
         onChange={(e) => setName(e.target.value)}
       />
 
-      <label htmlFor="oai-url">Base URL</label>
+      <label htmlFor="oai-url">{t("oai.urlLabel")}</label>
       <input
         id="oai-url"
         value={baseUrl}
@@ -119,20 +118,20 @@ export function OpenAIAgentModal(props: {
         onChange={(e) => setBaseUrl(e.target.value)}
       />
       <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
-        Dashboard sẽ gọi{" "}
+        {t("oai.urlHint")}{" "}
         <code>{baseUrl.trim() ? buildChatCompletionsUrl(baseUrl) : "…/chat/completions"}</code>.
       </p>
 
-      <label htmlFor="oai-model">Model ID</label>
+      <label htmlFor="oai-model">{t("oai.modelLabel")}</label>
       <input
         id="oai-model"
         value={model}
         maxLength={128}
-        placeholder="vd: gpt-4o-mini, deepseek-chat, claude-3-5-sonnet"
+        placeholder={t("oai.modelPlaceholder")}
         onChange={(e) => setModel(e.target.value)}
       />
 
-      <label htmlFor="oai-key">API Key</label>
+      <label htmlFor="oai-key">{t("oai.keyLabel")}</label>
       <div className="input-secret-wrap">
         <input
           id="oai-key"
@@ -147,19 +146,19 @@ export function OpenAIAgentModal(props: {
           type="button"
           className="btn-quiet input-secret-toggle"
           onClick={() => setShowKey((v) => !v)}
-          aria-label={showKey ? "Ẩn API Key" : "Hiện API Key"}
-          title={showKey ? "Ẩn API Key" : "Hiện API Key"}
+          aria-label={showKey ? t("oai.hideKey") : t("oai.showKey")}
+          title={showKey ? t("oai.hideKey") : t("oai.showKey")}
         >
           {showKey ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
         </button>
       </div>
 
-      <label htmlFor="oai-sys">System prompt (tuỳ chọn)</label>
+      <label htmlFor="oai-sys">{t("oai.sysLabel")}</label>
       <textarea
         id="oai-sys"
         rows={3}
         value={systemPrompt}
-        placeholder="vd: Bạn là chuyên gia biên tập ngắn gọn, trả lời bằng tiếng Việt…"
+        placeholder={t("oai.sysPlaceholder")}
         onChange={(e) => setSystemPrompt(e.target.value)}
       />
 
@@ -171,10 +170,10 @@ export function OpenAIAgentModal(props: {
           disabled={saving}
           onClick={submit}
         >
-          {saving ? "Đang lưu…" : isEdit ? "Lưu thay đổi" : "Thêm Agent"}
+          {saving ? t("common.saving") : isEdit ? t("common.saveChanges") : t("oai.addBtn")}
         </button>
         <button type="button" className="btn-ghost" onClick={props.onClose}>
-          Huỷ
+          {t("common.cancel")}
         </button>
       </div>
     </Modal>
@@ -186,6 +185,7 @@ export function DeleteOpenAIDialog(props: {
   onClose: () => void;
   onDeleted: (id: string) => void;
 }) {
+  const { t } = useLang();
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
@@ -196,21 +196,18 @@ export function DeleteOpenAIDialog(props: {
     const err = await deleteOpenAIAgent(props.agent.id);
     setDeleting(false);
     if (err) {
-      setError("Lỗi xoá: " + err);
+      setError(t("oai.delErr", { err }));
       return;
     }
-    toast("Đã xoá OpenAI Agent");
+    toast(t("oai.delOk"));
     props.onDeleted(props.agent.id);
     props.onClose();
   }
 
   return (
     <Modal open onClose={props.onClose} labelledBy="del-oai-title">
-      <h2 id="del-oai-title">Xoá OpenAI Agent — {props.agent.name}</h2>
-      <p className="lead">
-        Agent này sẽ bị xoá khỏi danh sách quản trị và tự động gỡ khỏi mọi Project đang sử dụng nó.
-        Lịch sử tin nhắn cũ trong các cuộc hội thoại vẫn được giữ lại.
-      </p>
+      <h2 id="del-oai-title">{t("oai.delTitle", { name: props.agent.name })}</h2>
+      <p className="lead">{t("oai.delLead")}</p>
       <ErrorMsg text={error} />
       <div className="actions">
         <button
@@ -219,10 +216,10 @@ export function DeleteOpenAIDialog(props: {
           disabled={deleting}
           onClick={remove}
         >
-          {deleting ? "Đang xoá…" : "Xoá Agent"}
+          {deleting ? t("common.deleting") : t("oai.delBtn")}
         </button>
         <button type="button" className="btn-ghost" onClick={props.onClose}>
-          Giữ lại
+          {t("common.keep")}
         </button>
       </div>
     </Modal>
