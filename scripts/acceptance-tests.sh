@@ -38,6 +38,14 @@ JWT=$(curl -s -m 20 -X POST "$BASE/auth/v1/verify" \
 [ -n "$JWT" ] || { echo "FAIL: owner JWT not obtained (verify endpoint rejected token)"; exit 1; }
 echo "owner JWT obtained"
 
+echo "== T-L: no privileged muse (fail-closed, per owner ruling) =="
+GTC=$(curl -s -m 20 -o /tmp/atla -w '%{http_code}' -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: 0000000000000000000000000000000000000000000000000000000000000000" -H 'content-type: application/json' -d '{}')
+[ "$GTC" = "401" ] && ok "T-La unknown token -> 401 (nothing falls back)" || bad "T-La got $GTC: $(head -c 120 /tmp/atla)"
+c=$(curl -s -m 20 -o /tmp/atlb -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d '{"action":"chat","params":{"prompt":"[ACCEPTANCE] tl no recipient"}}')
+[ "$c" = "400" ] && ok "T-Lb submit without recipient -> 400 (no default muse)" || bad "T-Lb got $c: $(head -c 120 /tmp/atlb)"
+
 echo "== T-MM: multi-muse registry + queue isolation =="
 MM_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 MM_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
@@ -238,13 +246,13 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($GA_REC,$GB_REC
 echo "== end T-G =="
 
 echo "== T2: signed submit -> 201 + message_id + pending row =="
-SUB_BODY='{"action":"image","params":{"prompt":"[ACCEPTANCE] t2 image","aspect_ratio":"1:1","count":1,"reference_storage_paths":[]}}'
+SUB_BODY="{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t2 image\",\"aspect_ratio\":\"1:1\",\"count\":1,\"reference_storage_paths\":[]}}"
 SUB=$(curl -s -m 20 -o /tmp/at2 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d "$SUB_BODY")
 MSG_A=$(cat /tmp/at2 | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 SUB2=$(curl -s -m 20 -o /tmp/at2b -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d '{"action":"video","params":{"prompt":"[ACCEPTANCE] t3 tamper","aspect_ratio":"16:9","duration_seconds":5,"reference_storage_paths":[]}}')
+  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"video\",\"params\":{\"prompt\":\"[ACCEPTANCE] t3 tamper\",\"aspect_ratio\":\"16:9\",\"duration_seconds\":5,\"reference_storage_paths\":[]}}")
 MSG_B=$(cat /tmp/at2b | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 if [ "$SUB" = "201" ] && [ -n "$MSG_A" ] && [ "$SUB2" = "201" ] && [ -n "$MSG_B" ]; then
   ok "T2 submit -> 201, message_id A=$MSG_A / B=$MSG_B"
@@ -300,7 +308,7 @@ AA=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=status&id=eq.$MSG_A" -H 
 echo "== T6: chat action end-to-end =="
 SUBC=$(curl -s -m 20 -o /tmp/at6 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d '{"action":"chat","params":{"prompt":"[ACCEPTANCE] t6 chat"}}')
+  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] t6 chat\"}}")
 MSG_C=$(cat /tmp/at6 | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 if [ "$SUBC" = "201" ] && [ -n "$MSG_C" ]; then
   ok "T6a chat submit -> 201, message_id C=$MSG_C"
@@ -350,7 +358,7 @@ echo "$CT" | grep -q "UTF8_EXACT" && [ "$COK" = "True" ] && ok "T6c chat result 
 echo "== T7: invalid action must be 400 =="
 c=$(curl -s -m 20 -o /tmp/at7 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d '{"action":"audio","params":{"prompt":"x"}}')
+  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"audio\",\"params\":{\"prompt\":\"x\"}}")
 [ "$c" = "400" ] && ok "T7 action 'audio' -> 400" || bad "T7 got $c: $(head -c 200 /tmp/at7)"
 
 echo "== T8: dropbox_paths outside new prefix must be 400 =="
@@ -362,12 +370,12 @@ c=$(curl -s -m 20 -o /tmp/at8 -w '%{http_code}' -X POST "$BASE/functions/v1/subm
 echo "== T9: thread_id accepted + bad thread_id rejected =="
 SUBT=$(curl -s -m 20 -o /tmp/at9a -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d '{"action":"image","params":{"prompt":"[ACCEPTANCE] t9 thread","thread_id":"cat-climbing-01","reference_storage_paths":[]}}')
+  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t9 thread\",\"thread_id\":\"cat-climbing-01\",\"reference_storage_paths\":[]}}")
 MSG_T=$(cat /tmp/at9a | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 [ "$SUBT" = "201" ] && [ -n "$MSG_T" ] && ok "T9a submit with thread_id -> 201" || bad "T9a got $SUBC: $(head -c 200 /tmp/at9a)"
 c=$(curl -s -m 20 -o /tmp/at9b -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d '{"action":"image","params":{"prompt":"[ACCEPTANCE] t9 bad","thread_id":"bad id!!","reference_storage_paths":[]}}')
+  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t9 bad\",\"thread_id\":\"bad id!!\",\"reference_storage_paths\":[]}}")
 [ "$c" = "400" ] && ok "T9b bad thread_id -> 400" || bad "T9b got $c: $(head -c 200 /tmp/at9b)"
 
 echo "== T10: recipient mismatch -> 403 / match -> 201 =="

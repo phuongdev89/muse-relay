@@ -4,7 +4,6 @@ import {
   corsHeaders,
   fanoutGroupMessage,
   jsonResponse,
-  recipientId,
   recipientIsKnown,
   signMessage,
   userClient,
@@ -103,14 +102,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const legacyRecipient = recipientId();
-    let recipient = legacyRecipient;
-    if (body.recipient !== undefined) {
-      if (typeof body.recipient !== "string") {
-        return jsonResponse({ error: "recipient_mismatch" }, 403);
-      }
-      recipient = body.recipient.trim().toLowerCase();
+    // Every request must address its recipient explicitly — there is no
+    // default muse. Unregistered recipients and registry lookup failures are
+    // rejected (fail-closed).
+    if (typeof body.recipient !== "string" || body.recipient.trim().length < 1) {
+      return jsonResponse({ error: "recipient is required" }, 400);
     }
+    const recipient = body.recipient.trim().toLowerCase();
     if (!(await recipientIsKnown(adminClient(), recipient))) {
       return jsonResponse({ error: "recipient_mismatch" }, 403);
     }

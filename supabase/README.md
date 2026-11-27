@@ -1,6 +1,6 @@
 # Supabase Relay cho Muse (Nyx)
 
-Luồng: app của anh (đã đăng nhập Supabase Auth) gọi `submit_message` → Edge Function kiểm tra JWT, validate yêu cầu và ký HMAC → Muse gọi `claim_message` bằng relay token riêng, tạo ảnh/video, lưu local vào Files Management tại `uploads/Relay/<thread_id>/` và tải lên Dropbox `/nolanthomas825cxoz@lappies.net/<thread_id>/` → Muse gọi `submit_result` → app đọc trạng thái từ `relay_messages` / `relay_results`. Mọi tên file tài nguyên đều có tiền tố `yyyy-mm-dd_hh-mm-ss_<slug tên file>`.
+Luồng: app của anh (đã đăng nhập Supabase Auth) gọi `submit_message` → Edge Function kiểm tra JWT, validate yêu cầu và ký HMAC → Muse gọi `claim_message` bằng relay token riêng, tạo ảnh/video, lưu local vào Files Management tại `uploads/Relay/<thread_id>/` và tải lên Dropbox root riêng của nó (mỗi Muse một root, khai báo trong `relay_muses`) → Muse gọi `submit_result` → app đọc trạng thái từ `relay_messages` / `relay_results`. Mọi tên file tài nguyên đều có tiền tố `yyyy-mm-dd_hh-mm-ss_<slug tên file>`.
 
 Phạm vi thực thi bị khóa cứng: `action` chỉ gồm `chat`, `image` hoặc `video`, tham số theo schema cố định. `chat` là action full tính năng trong phạm vi relay: nếu nội dung chat yêu cầu tạo tài nguyên ảnh/video hoặc tài liệu an toàn (`md`, `txt`, `csv`, `docx`, `xlsx`) hay `zip` chứa các file an toàn vừa tạo, kết quả trả về gồm cả `output.text` và `output.dropbox_paths`; nếu chỉ nói chuyện, kết quả chỉ có `output.text`. Kết quả tài nguyên ghi vào thư mục Dropbox cố định. Mọi việc khác như deploy, cấp quyền, truy cập tài khoản, thao tác file tùy ý hay chạy code đều nằm ngoài relay và phải làm trong app Muse chính. Secret key của Supabase không rời khỏi Supabase; Muse chỉ giữ relay token riêng trong kho an toàn.
 
@@ -16,26 +16,17 @@ Mở SQL Editor, dán toàn bộ `supabase/migrations/20261127000000_relay.sql` 
 
 ## 3. Đặt secrets cho Edge Functions
 
-Tạo 2 chuỗi ngẫu nhiên dài riêng biệt (ví dụ `openssl rand -hex 32` chạy 2 lần), rồi đặt:
+Tạo chuỗi ngẫu nhiên dài (ví dụ `openssl rand -hex 32`), rồi đặt — server chỉ cần đúng 2 secret này:
 
 ```bash
-supabase secrets set RELAY_SIGNING_SECRET=<chuỗi-ngẫu-nhiên-1>
-supabase secrets set RELAY_TOKEN=<chuỗi-ngẫu-nhiên-2>
+supabase secrets set RELAY_SIGNING_SECRET=<chuỗi-ngẫu-nhiên>
 supabase secrets set RELAY_OWNER_ID=<uuid-user-của-anh>
-supabase secrets set RELAY_RECIPIENT_ID=<recipient-uuid>
 ```
 
-Tạo `RELAY_RECIPIENT_ID` bằng đoạn code này rồi báo mã UUID cho Muse:
+- `RELAY_SIGNING_SECRET`: chỉ ở trong Supabase, không đưa cho ai — con dấu HMAC của server khi ký bản tin.
+- `RELAY_OWNER_ID`: chỉ user này mới gửi được yêu cầu.
 
-```js
-const recipientId = crypto.randomUUID();
-console.log(recipientId);
-```
-
-- `RELAY_SIGNING_SECRET`: chỉ ở trong Supabase, không đưa cho ai.
-- `RELAY_TOKEN`: lát nữa anh nhập vào link an toàn của Muse, không gửi trong chat.
-- `RELAY_OWNER_ID`: chỉ user này mới gửi được yêu cầu và được claim.
-- `RELAY_RECIPIENT_ID`: mã recipient dạng UUID giống `RELAY_OWNER_ID`; app gửi kèm `recipient` này khi gọi `submit_message`.
+Token và recipient của từng Muse **không** nằm ở server: mỗi Muse có 1 token riêng (tự sinh khi thêm Muse), server chỉ lưu hash SHA-256 trong bảng `relay_muses`; recipient là UUID của hàng registry tương ứng. Server không đặc quyền cho Muse nào.
 
 ## 4. Deploy Edge Functions
 
@@ -59,7 +50,7 @@ supabase functions deploy submit_result
 
 ## 6. Bật action chat full tính năng và recipient UUID trên bản đã deploy
 
-Nếu project đã chạy bản đầu (chỉ `image`/`video`), chạy thêm `supabase/migrations/20261127000100_relay_chat.sql` trong SQL Editor. Sau đó đặt `RELAY_RECIPIENT_ID` như mục 3 và deploy lại cả 3 hàm:
+Nếu project đã chạy bản đầu (chỉ `image`/`video`), chạy thêm `supabase/migrations/20261127000100_relay_chat.sql` trong SQL Editor rồi deploy lại cả 3 hàm:
 
 ```bash
 supabase functions deploy submit_message
@@ -74,11 +65,13 @@ Sau khi deploy xong, anh gửi cho Muse:
 - Project ref (chuỗi `<ref>` trong `https://<ref>.supabase.co`).
 - Publishable key (khóa công khai, an toàn để chia sẻ).
 
-Không gửi secret key và không gửi relay token trong chat. Muse sẽ tạo link nhập relay token vào kho an toàn và xử lý relay theo luồng claim → chat/tạo ảnh/video → tải lên Dropbox `/nolanthomas825cxoz@lappies.net/<thread_id>/` → ghi result. Quyền ghi Dropbox đã được cấp.
+Không gửi secret key và không gửi relay token trong chat. Muse sẽ tạo link nhập relay token vào kho an toàn và xử lý relay theo luồng claim → chat/tạo ảnh/video → tải lên Dropbox root riêng của nó → ghi result. Quyền ghi Dropbox đã được cấp.
 
-## 8. Thêm Muse mới (multi-muse, từ v5)
+## 8. Thêm Muse mới (multi-muse)
 
-Nyx là đường **legacy**: token nằm ở secrets `RELAY_TOKEN` / `RELAY_RECIPIENT_ID`, không đụng vào, daemon đang live. Các Muse mới đăng ký qua bảng `relay_muses`:
+**Không Muse nào là Muse chính** (nguyên tắc của owner): mọi Muse — kể cả Nyx — đều là một hàng trong bảng `relay_muses`, xác thực qua token hash, claim chỉ thấy hàng của mình. `RELAY_TOKEN` / `RELAY_RECIPIENT_ID` env không còn tồn tại trên server; token xuất trình mà registry không nhận ra → 401, tin thiếu `recipient` → 400, recipient chưa đăng ký → 403 — hết đường fallback.
+
+Mỗi hàng registry: `recipient` (UUID), `name`, `token_hash` (SHA-256 — không bao giờ lưu plaintext), `dropbox_root` riêng. Quy trình thêm Muse mới:
 
 1. Trong dashboard, bấm **＋ Thêm Muse** → điền tên + Dropbox root của nó (thư mục gốc xuất kết quả, dạng `/ten@domain.com/`).
 2. Wizard tự sinh recipient UUID + relay token mới, lưu **chỉ hash SHA-256** của token vào bảng `relay_muses` (RLS: chỉ owner đọc/ghi).
@@ -92,7 +85,7 @@ Cơ chế đảm bảo mỗi Muse độc lập:
 - `claim_message` resolve `x-relay-token` → hash → đúng 1 hàng `relay_muses`, chỉ claim được tin có `recipient` của mình. Token của Muse A không bao giờ thấy hàng đợi của Muse B.
 - `submit_result` kiểm hàng tin thuộc về Muse đang gọi; Dropbox path phải nằm dưới **root riêng của Muse đó** (không ghi chéo thư mục của nhau).
 - Muse mới có thể trả lỗi dạng `error` hoặc `error_code` (vd `out_of_scope`) — server nhận cả hai.
-- Nếu bảng `relay_muses` lỗi, chỉ các Muse mới bị từ chối — đường legacy của Nyx vẫn hoạt động.
+- Registry lỗi → **mọi Muse bị từ chối tạm thời** (fail-closed, không có Muse dự phòng) — hồi phục khi bảng hoạt động lại.
 
 ## 9. Group chat giữa các Muse (v6, owner khởi xướng)
 
@@ -117,8 +110,7 @@ Test riêng cho nhóm nằm trong `scripts/acceptance-tests.sh` (khối T-G: 14 
 - Mỗi yêu cầu chỉ claim được trong 30 phút từ lúc gửi; quá hạn sẽ bị bỏ qua.
 - Claim có thời hạn 30 phút; nếu Muse không ghi result trong thời gian đó, `submit_result` sẽ bị từ chối với `claim_expired`.
 - Ảnh tham chiếu: tải lên bucket `relay-inputs` dưới thư mục `<uuid-của-anh>/...`, rồi truyền đường dẫn vào `reference_storage_paths`. Muse nhận link ký tạm thời 1 giờ qua `claim_message`.
-- Thu hồi quyền của Nyx: đổi `RELAY_TOKEN` trong secrets, Muse mất quyền claim ngay.
-- Thu hồi quyền của Muse mới: xoá hàng tương ứng trong `relay_muses` (SQL Editor hoặc service key) — mất quyền claim ngay, token cũ vô nghĩa.
+- Thu hồi quyền của **bất kỳ Muse nào** (kể cả Nyx): xoá hàng tương ứng trong `relay_muses` (SQL Editor hoặc service key) — mất quyền claim ngay, token cũ vô nghĩa. Muốn đổi token của một Muse: xoá hàng rồi tạo lại qua wizard (token mới chỉ hiện một lần).
 - **KHÔNG sửa schema `relay_messages` / `relay_results`**: Nyx đang chạy production theo schema này; mọi thay đổi phải backward-compatible tuyệt đối.
-- Bảng `relay_muses` là một phần của schema: 3 functions đọc nó ở mỗi claim/submit. Không drop, không đổi tên cột; nếu lỡ lỗi, Nyx không chết (fallback legacy) nhưng các Muse mới sẽ không claim được cho đến khi bảng hoạt động trở lại.
-- Mọi tài nguyên tạo qua relay đều lưu local vào Files Management tại `uploads/Relay/<thread_id>/` và tải lên Dropbox `/nolanthomas825cxoz@lappies.net/<thread_id>/`; result chỉ chứa đường dẫn Dropbox, không đính kèm file. File làm việc local bị xóa ngay sau khi ghi result thành công; bản local trong Files Management và bản trên Dropbox đều bị xóa khi quá 24 giờ tuổi.
+- Bảng `relay_muses` giờ là **nguồn xác thực duy nhất**: 3 functions đọc nó ở mỗi claim/submit. Không drop, không đổi tên cột. Nó lỗi thì mọi Muse (kể cả Nyx) bị từ chối tạm thời — đúng nguyên tắc fail-closed, không Muse đặc quyền — và hồi phục khi bảng hoạt động lại.
+- Mọi tài nguyên tạo qua relay đều lưu local vào Files Management tại `uploads/Relay/<thread_id>/` và tải lên Dropbox root riêng của Muse tương ứng (khai báo trong `relay_muses`); result chỉ chứa đường dẫn Dropbox, không đính kèm file. File làm việc local bị xóa ngay sau khi ghi result thành công; bản local trong Files Management và bản trên Dropbox đều bị xóa khi quá 24 giờ tuổi.

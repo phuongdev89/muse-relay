@@ -1,19 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-export function recipientId(): string {
-  const value = Deno.env.get("RELAY_RECIPIENT_ID")?.trim().toLowerCase();
-  if (!value) return "nyx";
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-      .test(value)
-  ) {
-    throw new Error("RELAY_RECIPIENT_ID must be a UUID");
-  }
-  return value;
-}
-
 export const INPUT_BUCKET = "relay-inputs";
-export const DROPBOX_OUTPUT_PREFIX = "/nolanthomas825cxoz@lappies.net/";
 
 export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -166,15 +153,13 @@ export interface ResolvedMuse {
   recipient: string;
   name: string;
   dropboxRoot: string;
-  legacy: boolean;
 }
 
-// Resolve the presented x-relay-token to exactly one muse. Muses created
-// through the dashboard wizard are looked up in the relay_muses registry by
-// token hash (service role bypasses RLS); the legacy env pair keeps Nyx's
-// existing daemon working without touching its vault. A registry lookup
-// failure must NEVER take the legacy path down with it — Nyx's live daemon
-// depends on that path, so lookup errors fall through to the env pair.
+// Resolve the presented x-relay-token to exactly one muse via the
+// relay_muses registry (tokens stored only as SHA-256, service role bypasses
+// RLS). There is NO privileged muse: per owner ruling, a lookup miss or a
+// registry error FAILS the request (401) — nothing ever falls back to a
+// default muse identity.
 export async function resolveMuse(req: Request): Promise<ResolvedMuse | null> {
   const presented = req.headers.get("x-relay-token");
   if (!presented) return null;
@@ -185,36 +170,21 @@ export async function resolveMuse(req: Request): Promise<ResolvedMuse | null> {
     .select("recipient, name, dropbox_root")
     .eq("token_hash", tokenHash)
     .maybeSingle();
-  if (!lookupError && row) {
-    return {
-      recipient: String(row.recipient).toLowerCase(),
-      name: String(row.name),
-      dropboxRoot: String(row.dropbox_root),
-      legacy: false,
-    };
-  }
-
-  const legacyToken = Deno.env.get("RELAY_TOKEN");
-  if (legacyToken && (await timingSafeEqual(presented, legacyToken))) {
-    return {
-      recipient: recipientId(),
-      name: "Nyx",
-      dropboxRoot: DROPBOX_OUTPUT_PREFIX,
-      legacy: true,
-    };
-  }
-  return null;
+  if (lookupError || !row) return null;
+  return {
+    recipient: String(row.recipient).toLowerCase(),
+    name: String(row.name),
+    dropboxRoot: String(row.dropbox_root),
+  };
 }
 
-// True when submit_message may address this recipient: the legacy env recipient
-// (checked first, no registry dependency) or a registered muse row. Registry
-// lookup failures reject only the NEW recipient — they must never break
-// submissions addressed to the legacy recipient.
+// True when submit_message may address this recipient: any registered muse
+// row. Registry lookup errors REJECT the submission (fail-closed) — there is
+// no privileged recipient that bypasses the registry.
 export async function recipientIsKnown(
   supabase: ReturnType<typeof adminClient>,
   recipient: string,
 ): Promise<boolean> {
-  if (recipient === recipientId()) return true;
   const { data, error } = await supabase
     .from("relay_muses")
     .select("recipient")
