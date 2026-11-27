@@ -2,6 +2,7 @@ import {
   adminClient,
   allowedOwnerId,
   corsHeaders,
+  fanoutGroupMessage,
   jsonResponse,
   recipientId,
   recipientIsKnown,
@@ -35,9 +36,72 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json().catch(() => null) as
-      | { recipient?: unknown; action?: unknown; params?: unknown }
+      | { recipient?: unknown; action?: unknown; params?: unknown; group_id?: unknown; owner_name?: unknown }
       | null;
     if (!body) return jsonResponse({ error: "invalid_json" }, 400);
+
+    // ---- v6 group path: body.group_id addresses an owner-initiated group.
+    // The utterance fans out as one ordinary pending `chat` row per member —
+    // muses see the exact same claim shape as any other request. When
+    // group_id is absent, the legacy single-recipient path below runs
+    // unchanged.
+    if (body.group_id !== undefined) {
+      if (typeof body.group_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.group_id)) {
+        return jsonResponse({ error: "group_id must be a UUID" }, 400);
+      }
+      if (body.action !== "chat") {
+        return jsonResponse({ error: "group messages must use action 'chat'" }, 400);
+      }
+      const { data: group, error: groupError } = await adminClient()
+        .from("relay_groups")
+        .select("id")
+        .eq("id", body.group_id)
+        .eq("owner_id", user.id)
+        .maybeSingle();
+      if (groupError) throw groupError;
+      if (!group) return jsonResponse({ error: "group_not_found" }, 404);
+
+      let ownerName = "Owner";
+      if (body.owner_name !== undefined) {
+        if (typeof body.owner_name !== "string" || body.owner_name.trim().length < 1 || body.owner_name.trim().length > 64) {
+          return jsonResponse({ error: "owner_name must be a string of 1-64 characters" }, 400);
+        }
+        ownerName = body.owner_name.trim();
+      }
+
+      const validated = validateParams("chat", body.params, user.id);
+      const { data: members, error: membersError } = await adminClient()
+        .from("relay_group_members")
+        .select("muse_recipient, name")
+        .eq("group_id", body.group_id);
+      if (membersError) throw membersError;
+      const targets = (members ?? []).map((m) => ({
+        recipient: String(m.muse_recipient).toLowerCase(),
+        name: String(m.name),
+      }));
+      if (targets.length < 1) {
+        return jsonResponse({ error: "group_has_no_members" }, 400);
+      }
+
+      const fanout = await fanoutGroupMessage(adminClient(), {
+        groupId: String(group.id),
+        ownerId: user.id,
+        fromKind: "owner",
+        fromName: ownerName,
+        turn: 1,
+        utterance: String(validated.params.prompt),
+        targets,
+      });
+      return new Response(
+        JSON.stringify({
+          group_id: String(group.id),
+          message_ids: fanout.messageIds,
+          status: "pending",
+          expires_at: fanout.expiresAt,
+        }),
+        { status: 201, headers: { ...corsHeaders, "content-type": "application/json" } },
+      );
+    }
 
     const legacyRecipient = recipientId();
     let recipient = legacyRecipient;

@@ -430,6 +430,100 @@ export function validateParams(
   throw new Error("action must be 'chat', 'image' or 'video'");
 }
 
+// ---- v6 group chat -------------------------------------------------------
+// Group conversations reuse the existing claim mechanism: one utterance
+// becomes an ordinary pending `chat` row per recipient (muse-side contract is
+// byte-for-byte unchanged), and each generated row is recorded in
+// relay_group_posts so the dashboard can render the conversation.
+
+export const GROUP_TURN_LIMIT = 12;
+
+export interface GroupFanoutTarget {
+  recipient: string;
+  name: string;
+}
+
+export function truncateUtterance(text: string, max = 3800): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+// One fan-out event = one batch: N pending chat rows + N post rows sharing a
+// batch_id (the dashboard renders one bubble per batch). On a mid-way failure
+// the already-inserted rows of this batch are removed best-effort so a group
+// never shows a half-spoken utterance.
+export async function fanoutGroupMessage(
+  supabase: ReturnType<typeof adminClient>,
+  opts: {
+    groupId: string;
+    ownerId: string;
+    fromKind: "owner" | "muse";
+    fromName: string;
+    turn: number;
+    utterance: string;
+    targets: GroupFanoutTarget[];
+  },
+): Promise<{ batchId: string; messageIds: string[]; expiresAt: string }> {
+  const batchId = crypto.randomUUID();
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const expiresAtUnix = nowUnix + 30 * 60;
+  const expiresAt = new Date(expiresAtUnix * 1000).toISOString();
+  const prompt = `[${opts.fromName}]: ${opts.utterance}`;
+  const inserted: string[] = [];
+
+  try {
+    for (const target of opts.targets) {
+      const id = crypto.randomUUID();
+      const nonce = crypto.randomUUID();
+      const signature = await signMessage({
+        id,
+        owner_id: opts.ownerId,
+        recipient: target.recipient,
+        action: "chat",
+        params: { prompt },
+        nonce,
+        expires_at_unix: expiresAtUnix,
+      });
+      const { error } = await supabase.from("relay_messages").insert({
+        id,
+        owner_id: opts.ownerId,
+        recipient: target.recipient,
+        action: "chat",
+        params: { prompt },
+        status: "pending",
+        nonce,
+        expires_at: expiresAt,
+        expires_at_unix: expiresAtUnix,
+        signature,
+      });
+      if (error) throw error;
+      inserted.push(id);
+      const { error: postError } = await supabase
+        .from("relay_group_posts")
+        .insert({
+          message_id: id,
+          group_id: opts.groupId,
+          owner_id: opts.ownerId,
+          from_kind: opts.fromKind,
+          from_name: opts.fromName,
+          turn: opts.turn,
+          batch_id: batchId,
+        });
+      if (postError) throw postError;
+    }
+  } catch (error) {
+    if (inserted.length > 0) {
+      await supabase
+        .from("relay_group_posts")
+        .delete()
+        .in("message_id", inserted);
+      await supabase.from("relay_messages").delete().in("id", inserted);
+    }
+    throw error;
+  }
+
+  return { batchId, messageIds: inserted, expiresAt };
+}
+
 export function validateResultBody(
   body: unknown,
   dropboxRoot: string,

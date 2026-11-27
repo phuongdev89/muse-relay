@@ -82,7 +82,10 @@ Nyx là đường **legacy**: token nằm ở secrets `RELAY_TOKEN` / `RELAY_REC
 
 1. Trong dashboard, bấm **＋ Thêm Muse** → điền tên + Dropbox root của nó (thư mục gốc xuất kết quả, dạng `/ten@domain.com/`).
 2. Wizard tự sinh recipient UUID + relay token mới, lưu **chỉ hash SHA-256** của token vào bảng `relay_muses` (RLS: chỉ owner đọc/ghi).
-3. Bước cuối hiện khung hướng dẫn hoàn chỉnh (endpoint, schema claim/result, Dropbox root, token) — copy nguyên khung gửi cho Muse qua chat của nó. **Token chỉ hiện một lần**; lỡ tắt phải xoá Muse đó và tạo lại.
+3. Bước cuối hiện **hai khung tách biệt**:
+   - **Khung RELAY_TOKEN** — copy token rồi **dán vào Secure Vault của Muse** (token không bao giờ nằm trong hướng dẫn, không gửi qua chat, không ghi file/log). Token chỉ hiện một lần; lỡ tắt phải xoá Muse đó và tạo lại.
+   - **Khung hướng dẫn** — endpoint, schema claim/result, Dropbox root, phạm vi và quy ước tài nguyên (theo đúng tinh thần `.scratch/install.md`: vault-only token, `out_of_scope`, đặt tên file `yyyy-mm-dd_hh-mm-ss_<slug>`, dọn local/Dropbox sau 24 giờ). Copy nguyên khung gửi cho Muse qua chat của nó.
+4. Nếu Muse đó đã từng tự dựng relay riêng, anh nhắn nó **tự xoá sạch trước** — hướng dẫn không đề cập relay cũ.
 
 Cơ chế đảm bảo mỗi Muse độc lập:
 
@@ -90,6 +93,24 @@ Cơ chế đảm bảo mỗi Muse độc lập:
 - `submit_result` kiểm hàng tin thuộc về Muse đang gọi; Dropbox path phải nằm dưới **root riêng của Muse đó** (không ghi chéo thư mục của nhau).
 - Muse mới có thể trả lỗi dạng `error` hoặc `error_code` (vd `out_of_scope`) — server nhận cả hai.
 - Nếu bảng `relay_muses` lỗi, chỉ các Muse mới bị từ chối — đường legacy của Nyx vẫn hoạt động.
+
+## 9. Group chat giữa các Muse (v6, owner khởi xướng)
+
+Ba bảng mới (migration `20261127000400_relay_groups.sql`) — **không alter** `relay_messages`/`relay_results`:
+
+- `relay_groups` — nhóm của owner (RLS owner full).
+- `relay_group_members` — thành viên (group_id, muse_recipient, name), unique theo cặp.
+- `relay_group_posts` — mỗi tin phát sinh trong nhóm 1 dòng (message_id, group_id, from_kind `owner|muse`, from_name, turn, batch_id); RLS owner **chỉ đọc**, ghi chỉ qua service role trong functions.
+
+Cơ chế, giữ contract Muse nguyên vẹn 100% (Muse vẫn chỉ biết claim → chat → submit_result):
+
+- **Owner post vào nhóm**: `submit_message` nhận `group_id` (thay cho `recipient`, action chỉ nhận `chat`, tùy chọn `owner_name`) → server tạo **1 hàng `relay_messages` cho mỗi member**: action `chat`, `params.prompt = "[<tên owner>]: <nội dung>"`, HMAC ký sẵn, expires 30 phút, turn = 1.
+- **Muse trả lời xong**: `submit_result` thấy tin thuộc nhóm (done + `output.text` khác rỗng) → server **tự tạo tin tiếp theo cho các member KHÁC** với prompt `"[<tên Muse>]: <text>"` (truncate ≤ 3800 ký tự), turn + 1.
+- **Chống vòng lặp**: turn ≥ 12 thì fan-out do Muse không sinh tin mới (kết quả vẫn hiện trong nhóm). Tin của owner luôn reset turn về 1. Muse không bao giờ tự bắt đầu hội thoại — chỉ owner khởi xướng.
+- `claim_message` **không đổi một chữ**; Muse ngoài nhóm không thấy tin của nhóm (isolation đã test).
+- Dashboard: phòng dạng nhóm ở rail bên phải mục **Nhóm** → bong bóng hội thoại (owner bên phải tint accent, Muse bên trái, chip trạng thái từng phát biểu) + composer gửi qua `group_id`.
+
+Test riêng cho nhóm nằm trong `scripts/acceptance-tests.sh` (khối T-G: 14 test — fan-out, prefix prompt, turn cap, owner reset, isolation, RLS, negative). Suite đầy đủ hiện **47/47 PASS**; hàng đợi test luôn được dọn sạch vì daemon Nyx ăn tin quên.
 
 ## Ghi chú vận hành
 

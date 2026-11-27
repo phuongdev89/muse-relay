@@ -1,7 +1,10 @@
 import {
+  GROUP_TURN_LIMIT,
   adminClient,
+  fanoutGroupMessage,
   jsonResponse,
   resolveMuse,
+  truncateUtterance,
   validateResultBody,
 } from "../_shared/relay.ts";
 
@@ -79,6 +82,50 @@ Deno.serve(async (req: Request) => {
       .eq("claim_id", result.claim_id)
       .eq("status", "processing");
     if (updateError) throw updateError;
+
+    // ---- v6 group chain: a completed group `chat` (done + non-empty text,
+    // turn below the cap) automatically spawns the next turn for the OTHER
+    // members. Strictly best-effort: the muse's own result is already
+    // recorded above, so a fan-out failure must never surface as an error to
+    // the muse — it would only retry a job that is already done.
+    if (result.status === "done" && message.action === "chat") {
+      try {
+        const replyText = result.output["text"];
+        if (typeof replyText === "string" && replyText.trim().length > 0) {
+          const { data: post, error: postError } = await supabase
+            .from("relay_group_posts")
+            .select("group_id, turn")
+            .eq("message_id", result.message_id)
+            .maybeSingle();
+          if (postError) throw postError;
+          if (post && post.turn < GROUP_TURN_LIMIT) {
+            const { data: members, error: membersError } = await supabase
+              .from("relay_group_members")
+              .select("muse_recipient")
+              .eq("group_id", post.group_id);
+            if (membersError) throw membersError;
+            const museRecipient = muse.recipient.toLowerCase();
+            const targets = (members ?? [])
+              .map((m) => String(m.muse_recipient).toLowerCase())
+              .filter((r) => r !== museRecipient)
+              .map((r) => ({ recipient: r, name: "" }));
+            if (targets.length > 0) {
+              await fanoutGroupMessage(supabase, {
+                groupId: post.group_id,
+                ownerId: message.owner_id,
+                fromKind: "muse",
+                fromName: muse.name.slice(0, 64),
+                turn: post.turn + 1,
+                utterance: truncateUtterance(replyText.trim()),
+                targets,
+              });
+            }
+          }
+        }
+      } catch (chainError) {
+        console.error("group chain failed:", chainError);
+      }
+    }
 
     return jsonResponse({ ok: true, message_id: result.message_id, status: result.status });
   } catch (error) {

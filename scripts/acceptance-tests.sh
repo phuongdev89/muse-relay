@@ -108,6 +108,135 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?id=eq.$MSG_M2" -H "apikey:
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=eq.$MM_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-MM =="
 
+echo "== T-G: group chat (owner-initiated muse-to-muse) =="
+GA_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+GB_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+GC_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+GA_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+GB_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+GC_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export GA_TOKEN GB_TOKEN GC_TOKEN
+GA_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GA_TOKEN'].encode()).hexdigest())")
+GB_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GB_TOKEN'].encode()).hexdigest())")
+GC_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GC_TOKEN'].encode()).hexdigest())")
+MMB=".scratch/acceptance-tg-muses.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance GA","token_hash":"%s","dropbox_root":"/acceptance-ga/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GB","token_hash":"%s","dropbox_root":"/acceptance-gb/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GC","token_hash":"%s","dropbox_root":"/acceptance-gc/"}\n' \
+  "$RELAY_OWNER_ID" "$GA_REC" "$GA_HASH" "$RELAY_OWNER_ID" "$GB_REC" "$GB_HASH" "$RELAY_OWNER_ID" "$GC_REC" "$GC_HASH" > "$MMB"
+ND_ROWS=0
+while IFS= read -r line; do
+  printf '%s' "$line" > "$MMB.one"
+  rc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_muses" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$MMB.one")
+  [ "$rc" = "201" ] && ND_ROWS=$((ND_ROWS+1))
+done < "$MMB"
+rm -f "$MMB" "$MMB.one"
+[ "$ND_ROWS" = "3" ] && ok "T-Ga 3 test muses seeded -> 201 x3" || bad "T-Ga seeded only $ND_ROWS/3"
+
+ANONG=$(curl -s -m 20 -o /tmp/atgg -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
+  -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d '{"owner_id":"00000000-0000-0000-0000-000000000000","name":"anon group"}')
+[ "$ANONG" != "201" ] && ok "T-Gb anonymous group insert blocked by RLS ($ANONG)" || bad "T-Gb anon group insert unexpectedly created a row"
+
+GGB=".scratch/acceptance-tg-group.json"
+G_ID=$(python -I -c "import uuid; print(uuid.uuid4())")
+printf '{"id":"%s","owner_id":"%s","name":"Acceptance Group"}' "$G_ID" "$RELAY_OWNER_ID" > "$GGB"
+rc=$(curl -s -m 20 -o /tmp/atgg2 -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$GGB")
+[ "$rc" = "201" ] && ok "T-Gc owner creates group -> 201" || bad "T-Gc got $rc: $(head -c 200 /tmp/atgg2)"
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GA"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GB"}\n' \
+  "$G_ID" "$GA_REC" "$G_ID" "$GB_REC" > "$GGB"
+ND_ROWS=0
+while IFS= read -r line; do
+  printf '%s' "$line" > "$GGB.one"
+  rc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_group_members" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$GGB.one")
+  [ "$rc" = "201" ] && ND_ROWS=$((ND_ROWS+1))
+done < "$GGB"
+rm -f "$GGB" "$GGB.one"
+[ "$ND_ROWS" = "2" ] && ok "T-Gd 2 members joined -> 201 x2" || bad "T-Gd joined only $ND_ROWS/2"
+
+GQ=".scratch/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg hello group"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o /tmp/atgq -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
+G_IDS=$(cat /tmp/atgq | jqpy "import json,sys; print(' '.join(json.load(sys.stdin).get('message_ids',[])))")
+set -- $G_IDS
+GM_A=${1:-}; GM_B=${2:-}
+[ "$GSUB" = "201" ] && [ -n "$GM_A" ] && [ -n "$GM_B" ] && [ "${3:-}" = "" ] && ok "T-Ge owner post -> 201 with exactly 2 message_ids" || bad "T-Ge got $GSUB ids=[$G_IDS]: $(head -c 200 /tmp/atgq)"
+
+GISO=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GC_TOKEN" -H 'content-type: application/json' -d '{}')
+GISON=$(echo "$GISO" | jqpy "import json,sys; print(json.load(sys.stdin).get('message') is None)")
+[ "$GISON" = "True" ] && ok "T-Gf muse OUTSIDE group cannot claim group rows" || bad "T-Gf outsider claimed: $(echo "$GISO" | head -c 200)"
+
+GCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d '{}')
+GA_ID=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GA_CLAIM=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+GA_PROMPT=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print((m.get('params') or {}).get('prompt',''))")
+echo "$GA_PROMPT" | grep -q '^\[Owner\]: \[ACCEPTANCE\] tg hello group$' && [ "$GA_ID" = "$GM_A" ] && [ -n "$GA_CLAIM" ] && ok "T-Gg GA claims own row, prompt prefixed [Owner]:" || bad "T-Gg id=$GA_ID prompt=[$GA_PROMPT]"
+
+GREP=".scratch/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GA reply for group"},"error":null}' "$GM_A" "$GA_CLAIM" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+CHAIN=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id,recipient,params&recipient=eq.$GB_REC&status=eq.pending&params->>prompt=like.%5BAcceptance%20GA%5D*" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+CHAIN_OK=$(echo "$CHAIN" | jqpy "import json,sys; rows=json.load(sys.stdin); print(len(rows)==1 and '[Acceptance GA]: GA reply for group'==rows[0]['params']['prompt'])")
+[ "$GOK" = "True" ] && [ "$CHAIN_OK" = "True" ] && ok "T-Gh GA done -> fan-out turn 2 to GB only, prefixed [Acceptance GA]:" || bad "T-Gh res=$GRES chain=$CHAIN"
+
+TURN_POST=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id,turn&group_id=eq.$G_ID&from_kind=eq.muse" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+TURN_OK=$(echo "$TURN_POST" | jqpy "import json,sys; rows=json.load(sys.stdin); print(len(rows)==1 and rows[0]['turn']==2)")
+[ "$TURN_OK" = "True" ] && ok "T-Gi post row recorded (from_kind muse, turn 2)" || bad "T-Gi posts=$TURN_POST"
+
+# GB must first consume the older turn-1 owner row (GM_B), then the turn-2
+# fan-out row is the next pending row for it.
+GB_SKIP=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d '{}')
+GB_SKIP_ID=$(echo "$GB_SKIP" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GB_CLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d '{}')
+GB_ID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GB_CLAIMID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+GB_PROMPT=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print((m.get('params') or {}).get('prompt',''))")
+[ "$GB_SKIP_ID" = "$GM_B" ] && [ -n "$GB_ID" ] && [ "$GB_ID" != "$GM_B" ] && echo "$GB_PROMPT" | grep -q '^\[Acceptance GA\]: ' && ok "T-Gj GB consumes turn-1 row, then claims the turn-2 fan-out row" || bad "T-Gj skip=$GB_SKIP_ID id=$GB_ID prompt=[$GB_PROMPT]"
+# Force the cap: bump GB's post row to turn=12, then its reply must NOT fan out.
+curl -s -m 20 -X PATCH "$BASE/rest/v1/relay_group_posts?message_id=eq.$GB_ID" \
+  -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
+  -d '{"turn":12}' > /dev/null
+GREP2=".scratch/acceptance-tg-rep2.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GB reply at cap"},"error":null}' "$GB_ID" "$GB_CLAIMID" > "$GREP2"
+GRES2=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d @"$GREP2")
+rm -f "$GREP2"
+GOK2=$(echo "$GRES2" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+CAPCOUNT=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id&group_id=eq.$G_ID&from_kind=eq.muse&turn=eq.3" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK2" = "True" ] && [ "$CAPCOUNT" = "0" ] && ok "T-Gk turn cap: reply at turn 12 -> ok, no turn-3 fan-out" || bad "T-Gk res=$GRES2 capcount=$CAPCOUNT"
+
+GQ2=".scratch/acceptance-tg-q2.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg owner reset"}}' "$G_ID" > "$GQ2"
+GSUB2=$(curl -s -m 20 -o /tmp/atgq2 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ2")
+rm -f "$GQ2"
+T1COUNT=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id&group_id=eq.$G_ID&from_kind=eq.owner&turn=eq.1" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GSUB2" = "201" ] && [ "$T1COUNT" = "4" ] && ok "T-Gl owner post resets turn to 1 (4 owner post rows total)" || bad "T-Gl got $GSUB2 owner-turn1 rows=$T1COUNT"
+
+GNEG=$(curl -s -m 20 -o /tmp/atgn -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"group_id\":\"$G_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] tg neg\"}}")
+[ "$GNEG" = "400" ] && ok "T-Gm group + action image -> 400" || bad "T-Gm got $GNEG: $(head -c 200 /tmp/atgn)"
+GNEG2=$(curl -s -m 20 -o /tmp/atgn2 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d '{"group_id":"00000000-0000-0000-0000-000000000000","action":"chat","params":{"prompt":"[ACCEPTANCE] tg neg2"}}')
+[ "$GNEG2" = "404" ] && ok "T-Gn foreign group_id -> 404 group_not_found" || bad "T-Gn got $GNEG2: $(head -c 200 /tmp/atgn2)"
+
+echo "== cleanup T-G rows =="
+# Everything addressed to the three test muses goes at once (covers owner
+# rows, fan-out rows and abandoned claims), then the group cascades members,
+# and finally the muse registry rows themselves.
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=in.($GA_REC,$GB_REC,$GC_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$G_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($GA_REC,$GB_REC,$GC_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+echo "== end T-G =="
+
 echo "== T2: signed submit -> 201 + message_id + pending row =="
 SUB_BODY='{"action":"image","params":{"prompt":"[ACCEPTANCE] t2 image","aspect_ratio":"1:1","count":1,"reference_storage_paths":[]}}'
 SUB=$(curl -s -m 20 -o /tmp/at2 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
