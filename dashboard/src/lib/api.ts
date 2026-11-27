@@ -5,9 +5,7 @@ import type {
   ConversationMode,
   ConversationParticipant,
   FleetActivityItem,
-  Group,
   GroupBubble,
-  GroupMember,
   GroupPost,
   MessageParams,
   Muse,
@@ -138,19 +136,6 @@ export async function deleteMuse(recipient: string): Promise<string | null> {
 
 // ---- groups ----------------------------------------------------------------
 
-export async function listGroups(): Promise<{
-  groups: Group[];
-  members: GroupMember[];
-  error: string | null;
-}> {
-  const [{ data: gs, error: ge }, { data: ms, error: me }] = await Promise.all([
-    db.from("relay_groups").select("id,name,created_at").order("created_at", { ascending: true }),
-    db.from("relay_group_members").select("group_id,muse_recipient,name"),
-  ]);
-  const error = ge?.message ?? me?.message ?? null;
-  return { groups: gs ?? [], members: ms ?? [], error };
-}
-
 export async function createGroup(
   name: string,
   members: { muse_recipient: string; name: string }[],
@@ -183,11 +168,33 @@ export async function clearMuseThread(
   recipient: string,
   threadId?: string,
 ): Promise<string | null> {
-  let query = db.from("relay_messages").delete().eq("recipient", recipient);
   if (threadId) {
-    query = query.eq("params->>thread_id", threadId);
+    const { error } = await db
+      .from("relay_messages")
+      .delete()
+      .eq("recipient", recipient)
+      .eq("params->>thread_id", threadId);
+    return error?.message ?? null;
   }
-  const { error } = await query;
+
+  // Clear direct-channel history without deleting messages scoped to Project Conversations.
+  const [{ data: convs, error: convErr }, { data: msgs, error: msgErr }] = await Promise.all([
+    db.from("relay_conversations").select("id"),
+    db.from("relay_messages").select("id,params").eq("recipient", recipient),
+  ]);
+  if (convErr) return convErr.message;
+  if (msgErr) return msgErr.message;
+
+  const convIds = new Set((convs ?? []).map((c) => String(c.id)));
+  const directIds = (msgs ?? [])
+    .filter((m) => {
+      const tid = (m.params as { thread_id?: unknown } | null)?.thread_id;
+      return typeof tid !== "string" || !convIds.has(tid);
+    })
+    .map((m) => String(m.id));
+  if (directIds.length === 0) return null;
+
+  const { error } = await db.from("relay_messages").delete().in("id", directIds);
   return error?.message ?? null;
 }
 

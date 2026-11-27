@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   clearMuseThread,
-  deleteGroup,
   deleteMuse,
   randomHex,
   renameMuse,
   rotateMuseToken,
   sha256Hex,
 } from "../lib/api";
-import type { Group, Muse } from "../types";
+import type { Muse } from "../types";
 import { ChevronDownIcon, EditIcon, KeyIcon, TrashIcon } from "./Icons";
 import { TokenPanel } from "./TokenPanel";
 import { ErrorMsg, Modal, setButtonBusy, toast } from "./ui";
@@ -280,47 +279,6 @@ export function ClearMuseHistoryDialog(props: {
         </button>
         <button type="button" className="btn-ghost" disabled={busy} onClick={props.onClose}>
           Huỷ
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-export function DeleteGroupDialog(props: {
-  group: Group;
-  onClose: () => void;
-  onDeleted: (groupId: string) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function remove() {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    const err = await deleteGroup(props.group.id);
-    setBusy(false);
-    if (err) {
-      setError("Lỗi xoá nhóm: " + err);
-      return;
-    }
-    toast("Đã xoá nhóm cũ");
-    props.onDeleted(props.group.id);
-    props.onClose();
-  }
-  return (
-    <Modal open onClose={props.onClose} labelledBy="dg-title">
-      <h2 id="dg-title">Xoá nhóm cũ — {props.group.name}</h2>
-      <p className="lead">
-        Xoá vĩnh viễn nhóm <strong>{props.group.name}</strong> cùng danh sách thành viên và lịch sử
-        hội thoại của nhóm này (không ảnh hưởng tới các Muse hay Project khác).
-      </p>
-      <ErrorMsg text={error} />
-      <div className="actions">
-        <button type="button" className="btn btn-danger" disabled={busy} onClick={remove}>
-          {busy ? "Đang xoá…" : "Xoá nhóm"}
-        </button>
-        <button type="button" className="btn-ghost" disabled={busy} onClick={props.onClose}>
-          Giữ lại
         </button>
       </div>
     </Modal>

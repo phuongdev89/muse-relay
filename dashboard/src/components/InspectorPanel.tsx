@@ -12,8 +12,6 @@ import type {
   ActiveRoom,
   Conversation,
   ConversationMode,
-  Group,
-  GroupMember,
   Muse,
   OpenAIAgent,
   Project,
@@ -31,7 +29,6 @@ import {
   ResourceKindIcon,
   SettingsIcon,
   TrashIcon,
-  UsersIcon,
   XIcon,
 } from "./Icons";
 import { Chip, copyText } from "./ui";
@@ -75,8 +72,6 @@ export function InspectorPanel(props: {
   active: ActiveRoom;
   muse: Muse | null;
   museSummary: MuseFleetSummary | null;
-  group: Group | null;
-  groupMembers: GroupMember[];
   musesCount: number;
   openaiCount: number;
   project: Project | null;
@@ -87,7 +82,6 @@ export function InspectorPanel(props: {
   openaiAgents: OpenAIAgent[];
   threadPaths: string[];
   onMuseAction: (action: "rename" | "rotate" | "delete" | "clear") => void;
-  onDeleteGroup?: () => void;
   onEditProject?: () => void;
   onNewConversation?: () => void;
 }) {
@@ -98,8 +92,6 @@ export function InspectorPanel(props: {
     active,
     muse,
     museSummary,
-    group,
-    groupMembers,
     project,
     projectAgents,
     projectConversationsCount,
@@ -129,9 +121,7 @@ export function InspectorPanel(props: {
           ? "Chi tiết Project"
           : muse
             ? "Hồ sơ Muse"
-            : group
-              ? "Chi tiết Nhóm"
-              : "Hướng dẫn Relay";
+            : "Hướng dẫn Relay";
 
   return (
     <>
@@ -188,16 +178,6 @@ export function InspectorPanel(props: {
               summary={museSummary}
               paths={threadPaths}
               onAction={props.onMuseAction}
-            />
-          ) : group ? (
-            <GroupInspector
-              group={group}
-              members={groupMembers}
-              paths={threadPaths}
-              onDeleteGroup={() => {
-                onCloseMobile();
-                props.onDeleteGroup?.();
-              }}
             />
           ) : (
             <OverviewInspector />
@@ -589,88 +569,6 @@ function MuseInspector(props: {
           </button>
         </div>
       </div>
-    </>
-  );
-}
-
-function GroupInspector(props: {
-  group: Group;
-  members: GroupMember[];
-  paths: string[];
-  onDeleteGroup?: () => void;
-}) {
-  const { group, members, paths, onDeleteGroup } = props;
-  return (
-    <>
-      <div className="insp-card insp-identity">
-        <span className="avatar-monogram lg group">
-          <UsersIcon size={18} />
-        </span>
-        <div className="insp-identity-info">
-          <strong className="insp-name">{group.name}</strong>
-          <span className="insp-sub">{members.length} thành viên · tạo {fmtTime(group.created_at)}</span>
-        </div>
-      </div>
-
-      <div className="insp-section">
-        <span className="insp-label">Quy tắc điều phối</span>
-        <div className="insp-note-box">
-          Owner là người khởi xướng duy nhất. Các Muse tự luân phiên phản hồi tối đa{" "}
-          <strong>12 lượt tự động</strong> rồi dừng chờ chỉ đạo tiếp theo của owner.
-        </div>
-      </div>
-
-      <div className="insp-section">
-        <span className="insp-label">Thành viên ({members.length})</span>
-        {members.length === 0 ? (
-          <p className="insp-empty">Nhóm chưa có thành viên nào.</p>
-        ) : (
-          <div className="insp-member-list">
-            {members.map((m, i) => (
-              <div key={`${m.group_id}:${m.muse_recipient}`} className="insp-member-row">
-                <span
-                  className="insp-member-dot"
-                  style={{ background: memberDotColor(i) }}
-                />
-                <div className="insp-member-meta">
-                  <span className="insp-member-name">{m.name}</span>
-                  <code className="insp-member-id">{m.muse_recipient}</code>
-                </div>
-                <button
-                  type="button"
-                  className="btn-quiet btn-icon-copy"
-                  title="Copy muse_recipient"
-                  aria-label={`Copy UUID của ${m.name}`}
-                  onClick={() => copyText(m.muse_recipient, `Đã copy UUID của ${m.name}`)}
-                >
-                  <CopyIcon size={13} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="insp-section">
-        <span className="insp-label">Tệp Dropbox trong nhóm ({paths.length})</span>
-        <InspectorFileList paths={paths} emptyText="Chưa có tệp nào trong luồng nhóm." />
-      </div>
-
-      {onDeleteGroup && (
-        <div className="insp-section">
-          <span className="insp-label">Quản lý nhóm</span>
-          <div className="insp-actions">
-            <button
-              type="button"
-              className="btn-ghost insp-action-btn danger"
-              onClick={onDeleteGroup}
-            >
-              <TrashIcon size={14} />
-              <span>Xoá nhóm cũ</span>
-            </button>
-          </div>
-        </div>
-      )}
     </>
   );
 }

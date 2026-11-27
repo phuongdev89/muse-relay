@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchFleetActivity,
   listConversations,
-  listGroups,
   listMuses,
   listOpenAIAgents,
   listProjectAgents,
@@ -14,8 +13,6 @@ import type {
   ActiveRoom,
   Conversation,
   FleetActivityItem,
-  Group,
-  GroupMember,
   Muse,
   OpenAIAgent,
   Project,
@@ -24,14 +21,12 @@ import type {
 import { AddMuseWizard } from "./components/AddMuseWizard";
 import { AgentsAdminView } from "./components/AgentsAdminView";
 import { ConversationRoom } from "./components/ConversationRoom";
-import { GroupRoom } from "./components/GroupRoom";
 import { MenuIcon, PanelRightIcon, StarIcon } from "./components/Icons";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { LoginView } from "./components/LoginView";
 import {
   ClearMuseHistoryDialog,
   DeleteDialog,
-  DeleteGroupDialog,
   RenameDialog,
   RotateDialog,
 } from "./components/MuseManage";
@@ -62,8 +57,6 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectAgents, setProjectAgents] = useState<ProjectAgent[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [members, setMembers] = useState<Map<string, GroupMember[]>>(new Map());
   const [active, setActive] = useState<ActiveRoom>(null);
 
   const [fleetItems, setFleetItems] = useState<FleetActivityItem[]>([]);
@@ -81,7 +74,6 @@ export default function App() {
     null,
   );
   const [museRefreshTick, setMuseRefreshTick] = useState(0);
-  const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [desktopInspectorOpen, setDesktopInspectorOpen] = useState<boolean>(() =>
@@ -146,20 +138,6 @@ export default function App() {
     return data;
   }, []);
 
-  const loadGroups = useCallback(async () => {
-    const { groups: gs, members: ms, error } = await listGroups();
-    if (error) toast("Lỗi tải nhóm: " + error);
-    const byGroup = new Map<string, GroupMember[]>();
-    for (const m of ms) {
-      const list = byGroup.get(m.group_id) ?? [];
-      list.push(m);
-      byGroup.set(m.group_id, list);
-    }
-    setGroups(gs);
-    setMembers(byGroup);
-    return gs;
-  }, []);
-
   const loadFleet = useCallback(async () => {
     const { items, error } = await fetchFleetActivity(80);
     setFleetLoading(false);
@@ -182,7 +160,6 @@ export default function App() {
         loadProjects(),
         loadProjectAgents(),
         loadConversations(),
-        loadGroups(),
         loadFleet(),
       ]);
       setActive((cur) => cur ?? { kind: "overview" });
@@ -193,7 +170,6 @@ export default function App() {
       loadProjects,
       loadProjectAgents,
       loadConversations,
-      loadGroups,
       loadFleet,
     ],
   );
@@ -226,8 +202,6 @@ export default function App() {
     setProjects([]);
     setProjectAgents([]);
     setConversations([]);
-    setGroups([]);
-    setMembers(new Map());
     setFleetItems([]);
     setFleetError("");
     setFleetUpdatedAt(null);
@@ -286,7 +260,6 @@ export default function App() {
       switchRoom({ kind: "overview" });
     }
     toast("Đã xoá Muse");
-    void loadGroups();
     void loadFleet();
     void loadProjectAgents();
   }
@@ -294,16 +267,6 @@ export default function App() {
   function onOpenAIChanged() {
     void loadOpenAIAgents();
     void loadProjectAgents();
-  }
-
-  function onGroupDeleted(groupId: string) {
-    setGroups((cur) => cur.filter((g) => g.id !== groupId));
-    setDeleteGroupTarget(null);
-    if (active?.kind === "group" && active.id === groupId) {
-      switchRoom({ kind: "overview" });
-    }
-    void loadGroups();
-    void loadFleet();
   }
 
   // ---- project & conversation mutations ------------------------------------
@@ -327,13 +290,11 @@ export default function App() {
     void loadProjects();
     void loadProjectAgents();
     void loadConversations();
-    void loadGroups();
   }
 
   function onConversationCreated(conv: Conversation) {
     setConversations((cur) => [...cur, conv]);
     void loadConversations();
-    void loadGroups();
     switchRoom({
       kind: "conversation",
       projectId: conv.project_id,
@@ -344,7 +305,6 @@ export default function App() {
   function onConversationDeleted(projectId: string, conversationId: string) {
     setConversations((cur) => cur.filter((c) => c.id !== conversationId));
     void loadConversations();
-    void loadGroups();
     switchRoom({ kind: "project", projectId });
   }
 
@@ -367,10 +327,6 @@ export default function App() {
   const activeMuse =
     active?.kind === "muse"
       ? muses.find((m) => m.recipient === active.recipient) ?? null
-      : null;
-  const activeGroup =
-    active?.kind === "group"
-      ? groups.find((g) => g.id === active.id) ?? null
       : null;
 
   const activeProjectId =
@@ -400,9 +356,7 @@ export default function App() {
           ? activeProject.name
           : activeMuse
             ? activeMuse.name
-            : activeGroup
-              ? activeGroup.name
-              : "Tổng quan";
+            : "Tổng quan";
 
   const effectiveInspectorOpen = isDesktop ? desktopInspectorOpen : mobileInspectorOpen;
 
@@ -507,10 +461,7 @@ export default function App() {
                 }
                 onProjectDeleted={onProjectDeleted}
                 onProjectAgentsChanged={() => void loadProjectAgents()}
-                onConversationsChanged={() => {
-                  void loadConversations();
-                  void loadGroups();
-                }}
+                onConversationsChanged={() => void loadConversations()}
               />
             ) : activeMuse ? (
               <MuseRoom
@@ -522,16 +473,6 @@ export default function App() {
                 onPathsChange={setThreadPaths}
                 onMessageSent={() => void loadFleet()}
                 refreshTrigger={museRefreshTick}
-              />
-            ) : activeGroup ? (
-              <GroupRoom
-                key={activeGroup.id}
-                group={activeGroup}
-                members={members.get(activeGroup.id) ?? []}
-                inspectorOpen={effectiveInspectorOpen}
-                onToggleInspector={toggleInspector}
-                onDeleteGroup={() => setDeleteGroupTarget(activeGroup)}
-                onPathsChange={setThreadPaths}
               />
             ) : (
               <OverviewView
@@ -550,7 +491,6 @@ export default function App() {
                   void loadProjects();
                   void loadProjectAgents();
                   void loadConversations();
-                  void loadGroups();
                   void loadFleet();
                 }}
                 onOpenMuse={(recipient) => switchRoom({ kind: "muse", recipient })}
@@ -566,8 +506,6 @@ export default function App() {
             active={active}
             muse={activeMuse}
             museSummary={activeMuse ? fleetSummary.get(activeMuse.recipient) ?? null : null}
-            group={activeGroup}
-            groupMembers={activeGroup ? members.get(activeGroup.id) ?? [] : []}
             musesCount={muses.length}
             openaiCount={openaiAgents.length}
             project={activeProject}
@@ -581,14 +519,6 @@ export default function App() {
               setMobileInspectorOpen(false);
               setMuseDialog(action);
             }}
-            onDeleteGroup={
-              activeGroup
-                ? () => {
-                    setMobileInspectorOpen(false);
-                    setDeleteGroupTarget(activeGroup);
-                  }
-                : undefined
-            }
             onEditProject={
               activeProject
                 ? () => setProjectWizard({ open: true, project: activeProject })
@@ -631,13 +561,6 @@ export default function App() {
             setThreadPaths([]);
             void loadFleet();
           }}
-        />
-      )}
-      {deleteGroupTarget && (
-        <DeleteGroupDialog
-          group={deleteGroupTarget}
-          onClose={() => setDeleteGroupTarget(null)}
-          onDeleted={onGroupDeleted}
         />
       )}
 
