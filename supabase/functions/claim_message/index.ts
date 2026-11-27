@@ -41,9 +41,10 @@ Deno.serve(async (req: Request) => {
     // muse hook claims every 10s with a 10-minute watchdog claim as backstop,
     // so a fresh last_claim_at on relay_muses reads as "live"). Best-effort:
     // never block an actual claim on a heartbeat write failure.
+    const nowIso = new Date().toISOString();
     await supabase
       .from("relay_muses")
-      .update({ last_claim_at: new Date().toISOString() })
+      .update({ last_claim_at: nowIso, setup_done: true })
       .eq("id", muse.id);
 
     let query = supabase

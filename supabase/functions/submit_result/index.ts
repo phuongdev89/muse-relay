@@ -83,6 +83,12 @@ Deno.serve(async (req: Request) => {
       .eq("status", "processing");
     if (updateError) throw updateError;
 
+    // Best-effort stamp of last_result_at on relay_muses (never fail result submission).
+    await supabase
+      .from("relay_muses")
+      .update({ last_result_at: new Date().toISOString() })
+      .eq("id", muse.id);
+
     // ---- v6 group chain: a completed group `chat` (done + non-empty text,
     // turn below the cap) automatically spawns the next turn for the OTHER
     // members. Strictly best-effort: the muse's own result is already

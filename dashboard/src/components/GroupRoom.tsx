@@ -4,7 +4,7 @@ import { OWNER_DISPLAY_NAME } from "../lib/config";
 import { fmtClock, fmtTime, memberDotColor } from "../lib/format";
 import type { ActionMode, Group, GroupBubble, GroupMember, MessageParams } from "../types";
 import { Composer } from "./Composer";
-import { ArrowDownIcon, PanelRightIcon, RefreshIcon } from "./Icons";
+import { ArrowDownIcon, PanelRightIcon, RefreshIcon, TrashIcon } from "./Icons";
 import { MarkdownBody } from "./MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "./MessageBubble";
 
@@ -22,6 +22,7 @@ export function GroupRoom(props: {
   members: GroupMember[];
   inspectorOpen: boolean;
   onToggleInspector: () => void;
+  onDeleteGroup: () => void;
   onPathsChange: (paths: string[]) => void;
 }) {
   const { group, members, onPathsChange } = props;
@@ -141,6 +142,16 @@ export function GroupRoom(props: {
         </div>
         <span className="grow" />
         <div className="pane-actions">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={props.onDeleteGroup}
+            title="Xoá nhóm cũ"
+            aria-label="Xoá nhóm cũ"
+          >
+            <TrashIcon size={14} />
+            <span className="hide-xs">Xoá nhóm</span>
+          </button>
           <button type="button" className="btn-ghost" onClick={load}>
             <RefreshIcon size={14} />
             <span className="hide-xs">Làm mới</span>

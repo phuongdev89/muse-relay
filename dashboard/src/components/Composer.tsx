@@ -17,10 +17,12 @@ const MAX_PROMPT_LEN = 4000;
 export function Composer(props: {
   placeholder: string;
   onSend: (action: ActionMode, params: MessageParams) => Promise<string | null>;
-  /** image/video modes are disabled in group rooms (server: chat only) */
+  /** image/video modes are disabled in group / openai / mixed rooms */
   mediaModes?: boolean;
+  /** hides the manual thread_id field when a conversation locks thread_id */
+  hideThreadInput?: boolean;
 }) {
-  const { mediaModes = true } = props;
+  const { mediaModes = true, hideThreadInput = false } = props;
   const [mode, setMode] = useState<ActionMode>("chat");
   const [prompt, setPrompt] = useState("");
   const [ar, setAr] = useState("9:16");
@@ -48,7 +50,7 @@ export function Composer(props: {
     if (p.length < 1 || p.length > MAX_PROMPT_LEN) {
       return `Nội dung phải từ 1–${MAX_PROMPT_LEN} ký tự.`;
     }
-    const th = thread.trim();
+    const th = hideThreadInput ? "" : thread.trim();
     if (th && !THREAD_RE.test(th)) {
       return "Thread chỉ gồm chữ/số/-/_ (1–64 ký tự).";
     }
@@ -94,38 +96,15 @@ export function Composer(props: {
     charCount > MAX_PROMPT_LEN ? "over" : charCount > 3600 ? "warn" : "";
 
   const modeTabs: { value: ActionMode; label: string; icon: JSX.Element }[] = [
-    { value: "chat", label: "Chat", icon: <MessageIcon size={14} /> },
-    { value: "image", label: "Ảnh", icon: <ImageIcon size={14} /> },
-    { value: "video", label: "Video", icon: <VideoIcon size={14} /> },
+    { value: "chat", label: "Chat", icon: <MessageIcon size={13} /> },
+    { value: "image", label: "Ảnh", icon: <ImageIcon size={13} /> },
+    { value: "video", label: "Video", icon: <VideoIcon size={13} /> },
   ];
+
+  const activeThread = !hideThreadInput ? thread.trim() : "";
 
   return (
     <div className="composer-block">
-      {mediaModes && (
-        <div className="composer-top">
-          <div className="mode-tabs" role="tablist" aria-label="Chế độ gửi">
-            {modeTabs.map((t) => (
-              <button
-                key={t.value}
-                type="button"
-                role="tab"
-                aria-selected={mode === t.value}
-                className={`mode-tab${mode === t.value ? " on" : ""}`}
-                onClick={() => switchMode(t.value)}
-              >
-                {t.icon}
-                <span>{t.label}</span>
-              </button>
-            ))}
-          </div>
-          {thread.trim() && (
-            <span className="composer-thread-pill" title="Thread đang gắn">
-              #{thread.trim()}
-            </span>
-          )}
-        </div>
-      )}
-
       <div className="composer-shell">
         <textarea
           rows={2}
@@ -162,14 +141,16 @@ export function Composer(props: {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    Thread (tuỳ chọn)
-                    <input
-                      value={thread}
-                      placeholder="vd: bao-cao-tuan"
-                      onChange={(e) => setThread(e.target.value)}
-                    />
-                  </label>
+                  {!hideThreadInput && (
+                    <label>
+                      Thread (tuỳ chọn)
+                      <input
+                        value={thread}
+                        placeholder="vd: bao-cao-tuan"
+                        onChange={(e) => setThread(e.target.value)}
+                      />
+                    </label>
+                  )}
                 </>
               ) : (
                 <>
@@ -207,14 +188,16 @@ export function Composer(props: {
                       />
                     </label>
                   )}
-                  <label>
-                    Thread (tuỳ chọn)
-                    <input
-                      value={thread}
-                      placeholder="vd: cat-climbing-01"
-                      onChange={(e) => setThread(e.target.value)}
-                    />
-                  </label>
+                  {!hideThreadInput && (
+                    <label>
+                      Thread (tuỳ chọn)
+                      <input
+                        value={thread}
+                        placeholder="vd: cat-climbing-01"
+                        onChange={(e) => setThread(e.target.value)}
+                      />
+                    </label>
+                  )}
                 </>
               )}
             </div>
@@ -222,40 +205,60 @@ export function Composer(props: {
         )}
 
         <div className="composer-bar">
-          <div className="composer-bar-left">
-            {mediaModes && (
-              <button
-                type="button"
-                className={`composer-opt-btn${optsOpen ? " on" : ""}`}
-                aria-expanded={optsOpen}
-                onClick={() => setOptsOpen((v) => !v)}
-              >
-                <SlidersIcon size={14} />
-                <span>Tuỳ chọn</span>
-                <ChevronDownIcon
-                  size={13}
-                  className={`opt-chevron${optsOpen ? " open" : ""}`}
-                />
-              </button>
-            )}
-            <span className="composer-kbd-hint">Enter để gửi · Shift+Enter xuống dòng</span>
-          </div>
-
-          <div className="composer-bar-right">
-            <span className={`char-counter${charState ? ` ${charState}` : ""}`}>
-              {charCount} / {MAX_PROMPT_LEN}
+          {mediaModes && activeThread && (
+            <span className="composer-thread-pill" title="Thread đang gắn">
+              #{activeThread}
             </span>
+          )}
+
+          <span className={`char-counter${charState ? ` ${charState}` : ""}`}>
+            {charCount} / {MAX_PROMPT_LEN}
+          </span>
+
+          {mediaModes && (
+            <div className="mode-tabs" role="tablist" aria-label="Chế độ gửi">
+              {modeTabs.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === t.value}
+                  className={`mode-tab${mode === t.value ? " on" : ""}`}
+                  onClick={() => switchMode(t.value)}
+                >
+                  {t.icon}
+                  <span>{t.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {mediaModes && (
             <button
-              id="composer-send"
               type="button"
-              className={`btn btn-send${sending ? " is-loading" : ""}`}
-              disabled={sending}
-              onClick={submit}
+              className={`composer-opt-btn${optsOpen ? " on" : ""}`}
+              aria-expanded={optsOpen}
+              onClick={() => setOptsOpen((v) => !v)}
             >
-              <SendIcon size={14} />
-              <span>{sending ? "Đang gửi…" : "Gửi"}</span>
+              <SlidersIcon size={14} />
+              <span>Tuỳ chọn</span>
+              <ChevronDownIcon
+                size={13}
+                className={`opt-chevron${optsOpen ? " open" : ""}`}
+              />
             </button>
-          </div>
+          )}
+
+          <button
+            id="composer-send"
+            type="button"
+            className={`btn btn-send${sending ? " is-loading" : ""}`}
+            disabled={sending}
+            onClick={submit}
+          >
+            <SendIcon size={14} />
+            <span>{sending ? "Đang gửi…" : "Gửi"}</span>
+          </button>
         </div>
       </div>
 

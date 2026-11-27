@@ -9,6 +9,7 @@ const TIME_OPTS: Intl.DateTimeFormatOptions = {
 /** Today → `14:05`; older → `27/11 14:05`. */
 export function fmtTime(iso: string): string {
   const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "chưa rõ";
   const now = new Date();
   const sameDay =
     d.getFullYear() === now.getFullYear() &&
@@ -148,4 +149,115 @@ const MEMBER_HUES = [75, 155, 240, 25, 320, 190, 280];
 export function memberDotColor(index: number): string {
   const hue = index >= 0 ? MEMBER_HUES[index % MEMBER_HUES.length] : 200;
   return `oklch(70% 0.12 ${hue})`;
+}
+
+/** Human-readable relative age in Vietnamese (e.g. "vừa xong", "12 giây trước"). */
+export function fmtRelativeAge(iso: string | null, nowMs = Date.now()): string {
+  if (!iso) return "chưa có";
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return "chưa rõ";
+  const diffSec = Math.max(0, Math.floor((nowMs - ts) / 1000));
+  if (diffSec < 5) return "vừa xong";
+  if (diffSec < 60) return `${diffSec} giây trước`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} phút trước`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} giờ trước`;
+  const diffDay = Math.floor(diffHour / 24);
+  return `${diffDay} ngày trước`;
+}
+
+export type MuseConnectionState =
+  | "not_setup"
+  | "reconnecting"
+  | "live"
+  | "standby"
+  | "offline";
+
+export interface MuseConnectionInfo {
+  setupDone: boolean;
+  connected: boolean;
+  state: MuseConnectionState;
+  shortLabel: string;
+  label: string;
+  detail: string;
+  chipClass: "pending" | "idle" | "processing" | "failed";
+  dotClass: "dot-pending" | "dot-live" | "dot-standby" | "dot-error";
+}
+
+/** Derives setup, connection, and live heartbeat telemetry for a Muse. */
+export function museConnectionInfo(muse: Muse, nowMs = Date.now()): MuseConnectionInfo {
+  if (!muse.setup_done && !muse.last_claim_at) {
+    return {
+      setupDone: false,
+      connected: false,
+      state: "not_setup",
+      shortLabel: "Chưa setup",
+      label: "Chưa setup / Chưa kết nối",
+      detail: "Chưa claim lần nào — cần dán token vào vault & khởi chạy daemon",
+      chipClass: "pending",
+      dotClass: "dot-pending",
+    };
+  }
+
+  const rotatedMs = muse.token_rotated_at ? new Date(muse.token_rotated_at).getTime() : NaN;
+  const claimMs = muse.last_claim_at ? new Date(muse.last_claim_at).getTime() : NaN;
+
+  if (
+    muse.token_rotated_at &&
+    Number.isFinite(rotatedMs) &&
+    (!muse.last_claim_at || !Number.isFinite(claimMs) || rotatedMs > claimMs)
+  ) {
+    return {
+      setupDone: true,
+      connected: false,
+      state: "reconnecting",
+      shortLabel: "Chờ kết nối lại",
+      label: "Đã đổi token — chờ kết nối lại",
+      detail: `Đổi token ${fmtRelativeAge(muse.token_rotated_at, nowMs)} · chưa claim lại`,
+      chipClass: "pending",
+      dotClass: "dot-pending",
+    };
+  }
+
+  const age = Number.isFinite(claimMs) ? Math.max(0, nowMs - claimMs) : Infinity;
+
+  if (age <= 3 * 60_000) {
+    return {
+      setupDone: true,
+      connected: true,
+      state: "live",
+      shortLabel: "Live",
+      label: "Đang live",
+      detail: `Poll ${fmtRelativeAge(muse.last_claim_at, nowMs)}`,
+      chipClass: "idle",
+      dotClass: "dot-live",
+    };
+  }
+
+  if (age <= 15 * 60_000) {
+    return {
+      setupDone: true,
+      connected: true,
+      state: "standby",
+      shortLabel: "Chờ nhịp",
+      label: "Đã kết nối (nhịp chờ)",
+      detail: `Poll ${fmtRelativeAge(muse.last_claim_at, nowMs)}`,
+      chipClass: "processing",
+      dotClass: "dot-standby",
+    };
+  }
+
+  return {
+    setupDone: true,
+    connected: false,
+    state: "offline",
+    shortLabel: "Offline",
+    label: "Mất kết nối",
+    detail: muse.last_claim_at
+      ? `Lần poll cuối ${fmtRelativeAge(muse.last_claim_at, nowMs)}`
+      : "Chưa có nhịp poll gần đây",
+    chipClass: "failed",
+    dotClass: "dot-error",
+  };
 }

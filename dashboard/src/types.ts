@@ -9,6 +9,12 @@ export interface Muse {
   recipient: string;
   name: string;
   dropbox_root: string;
+  email_owner?: string | null;
+  setup_done: boolean;
+  first_connected_at: string | null;
+  last_claim_at: string | null;
+  last_result_at: string | null;
+  token_rotated_at: string | null;
   created_at: string;
 }
 
@@ -62,18 +68,6 @@ export interface FleetActivityItem {
   result: RelayResult | null;
 }
 
-export interface Group {
-  id: string;
-  name: string;
-  created_at: string;
-}
-
-export interface GroupMember {
-  group_id: string;
-  muse_recipient: string;
-  name: string;
-}
-
 export interface GroupPost {
   message_id: string;
   group_id: string;
@@ -100,8 +94,75 @@ export interface GroupBubble {
   error: string | null;
 }
 
+// ---- v7: OpenAI Compatible Agents, Projects & Conversations ----------------
+
+export type AgentKind = "muse" | "openai";
+
+export interface OpenAIAgent {
+  id: string;
+  owner_id?: string;
+  name: string;
+  base_url: string;
+  model: string;
+  api_key: string;
+  system_prompt: string;
+  created_at: string;
+}
+
+export interface Project {
+  id: string;
+  owner_id?: string;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
+export interface ProjectAgent {
+  id: string;
+  project_id: string;
+  owner_id?: string;
+  agent_kind: AgentKind;
+  agent_ref: string;
+  agent_name: string;
+  created_at: string;
+}
+
+export type ConversationMode = "muse_single" | "muse_group" | "openai" | "mixed";
+
+export interface ConversationParticipant {
+  kind: AgentKind;
+  ref: string;
+  name: string;
+}
+
+export interface Conversation {
+  id: string;
+  project_id: string;
+  owner_id?: string;
+  title: string;
+  mode: ConversationMode;
+  group_id: string | null;
+  participants: ConversationParticipant[];
+  created_at: string;
+}
+
+export interface OpenAIMessage {
+  id: string;
+  conversation_id: string;
+  owner_id?: string;
+  role: "owner" | "agent";
+  agent_ref: string | null;
+  agent_name: string;
+  content: string;
+  status: "done" | "failed";
+  error: string | null;
+  created_at: string;
+}
+
 export type ActiveRoom =
   | { kind: "overview" }
+  | { kind: "agents" }
+  | { kind: "project"; projectId: string }
+  | { kind: "conversation"; projectId: string; conversationId: string }
   | { kind: "muse"; recipient: string }
-  | { kind: "group"; id: string }
   | null;

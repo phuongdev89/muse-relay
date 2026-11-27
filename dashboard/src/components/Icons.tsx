@@ -313,6 +313,62 @@ export function FolderIcon({ size = 15, className, style }: IconProps) {
   );
 }
 
+export function BotIcon({ size = 15, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M12 8V4H8" />
+      <rect x="4" y="8" width="16" height="12" rx="2.5" />
+      <path d="M2 14h2M20 14h2M9 13v2M15 13v2" />
+    </svg>
+  );
+}
+
+export function LayersIcon({ size = 15, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5M2 12l10 5 10-5" />
+    </svg>
+  );
+}
+
+export function SettingsIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+export function EyeIcon({ size = 15, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+export function EyeOffIcon({ size = 15, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <path d="M1 1l22 22" />
+    </svg>
+  );
+}
+
+export function PlugIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M12 22v-5" />
+      <path d="M9 8V2M15 8V2" />
+      <path d="M18 8v5a6 6 0 0 1-12 0V8z" />
+    </svg>
+  );
+}
+
 export function ResourceKindIcon({ path, size = 18, className, style }: { path: string } & IconProps) {
   const kind: ResourceKind = resourceKind(path);
   switch (kind) {

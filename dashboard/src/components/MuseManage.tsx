@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { randomHex, rotateMuseToken, renameMuse, deleteMuse, sha256Hex } from "../lib/api";
-import type { Muse } from "../types";
+import {
+  clearMuseThread,
+  deleteGroup,
+  deleteMuse,
+  randomHex,
+  renameMuse,
+  rotateMuseToken,
+  sha256Hex,
+} from "../lib/api";
+import type { Group, Muse } from "../types";
 import { ChevronDownIcon, EditIcon, KeyIcon, TrashIcon } from "./Icons";
 import { TokenPanel } from "./TokenPanel";
 import { ErrorMsg, Modal, setButtonBusy, toast } from "./ui";
@@ -232,6 +240,88 @@ export function DeleteDialog(props: {
       <div className="actions">
         <button id="delete-btn" className="btn btn-danger" onClick={remove}>Xoá hẳn Muse này</button>
         <button className="btn-ghost" onClick={props.onClose}>Giữ lại</button>
+      </div>
+    </Modal>
+  );
+}
+
+export function ClearMuseHistoryDialog(props: {
+  muse: Muse;
+  onClose: () => void;
+  onCleared: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function clear() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    const err = await clearMuseThread(props.muse.recipient);
+    setBusy(false);
+    if (err) {
+      setError("Lỗi xoá lịch sử: " + err);
+      return;
+    }
+    toast("Đã làm mới lịch sử kênh trực tiếp");
+    props.onCleared();
+    props.onClose();
+  }
+  return (
+    <Modal open onClose={props.onClose} labelledBy="cl-title">
+      <h2 id="cl-title">Xoá lịch sử kênh trực tiếp — {props.muse.name}</h2>
+      <p className="lead">
+        Xoá toàn bộ tin nhắn và kết quả cũ của <strong>{props.muse.name}</strong> để làm mới dữ liệu.
+        Bản thân Muse, token trong Secure Vault và Dropbox root vẫn được giữ nguyên.
+      </p>
+      <ErrorMsg text={error} />
+      <div className="actions">
+        <button type="button" className="btn btn-danger" disabled={busy} onClick={clear}>
+          {busy ? "Đang xoá…" : "Xoá sạch lịch sử"}
+        </button>
+        <button type="button" className="btn-ghost" disabled={busy} onClick={props.onClose}>
+          Huỷ
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export function DeleteGroupDialog(props: {
+  group: Group;
+  onClose: () => void;
+  onDeleted: (groupId: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function remove() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    const err = await deleteGroup(props.group.id);
+    setBusy(false);
+    if (err) {
+      setError("Lỗi xoá nhóm: " + err);
+      return;
+    }
+    toast("Đã xoá nhóm cũ");
+    props.onDeleted(props.group.id);
+    props.onClose();
+  }
+  return (
+    <Modal open onClose={props.onClose} labelledBy="dg-title">
+      <h2 id="dg-title">Xoá nhóm cũ — {props.group.name}</h2>
+      <p className="lead">
+        Xoá vĩnh viễn nhóm <strong>{props.group.name}</strong> cùng danh sách thành viên và lịch sử
+        hội thoại của nhóm này (không ảnh hưởng tới các Muse hay Project khác).
+      </p>
+      <ErrorMsg text={error} />
+      <div className="actions">
+        <button type="button" className="btn btn-danger" disabled={busy} onClick={remove}>
+          {busy ? "Đang xoá…" : "Xoá nhóm"}
+        </button>
+        <button type="button" className="btn-ghost" disabled={busy} onClick={props.onClose}>
+          Giữ lại
+        </button>
       </div>
     </Modal>
   );

@@ -1,6 +1,15 @@
 import { useMemo, useState } from "react";
-import { fmtClock, fmtTime, initialsOf, ownerState, summarizeMuseFleet, type MuseFleetStatus } from "../lib/format";
-import type { FleetActivityItem, Group, Muse } from "../types";
+import {
+  fmtClock,
+  fmtRelativeAge,
+  fmtTime,
+  initialsOf,
+  museConnectionInfo,
+  ownerState,
+  summarizeMuseFleet,
+  type MuseFleetStatus,
+} from "../lib/format";
+import type { FleetActivityItem, Muse } from "../types";
 import {
   ActivityIcon,
   ChevronRightIcon,
@@ -46,7 +55,8 @@ function ActionIcon({ action }: { action: string }) {
 
 export function OverviewView(props: {
   muses: Muse[];
-  groups: Group[];
+  projectsCount: number;
+  openaiCount: number;
   fleetItems: FleetActivityItem[];
   loading: boolean;
   error: string;
@@ -57,7 +67,7 @@ export function OverviewView(props: {
   onOpenMuse: (recipient: string) => void;
   onAddMuse: () => void;
 }) {
-  const { muses, groups, fleetItems, loading, error, updatedAt } = props;
+  const { muses, projectsCount, openaiCount, fleetItems, loading, error, updatedAt } = props;
   const [filter, setFilter] = useState<ActivityFilter>("all");
 
   const museByRecipient = useMemo(
@@ -147,10 +157,10 @@ export function OverviewView(props: {
         {/* Fleet KPI Strip */}
         <div className="kpi-grid">
           <div className="kpi-card">
-            <span className="kpi-label">Tổng Muse &amp; Nhóm</span>
+            <span className="kpi-label">Hệ thống Agent &amp; Project</span>
             <strong className="kpi-value">
-              {muses.length} <span className="kpi-unit">Muse</span> · {groups.length}{" "}
-              <span className="kpi-unit">Nhóm</span>
+              {muses.length + openaiCount} <span className="kpi-unit">Agent</span> · {projectsCount}{" "}
+              <span className="kpi-unit">Project</span>
             </strong>
           </div>
           <div className="kpi-card kpi-busy">
@@ -190,6 +200,17 @@ export function OverviewView(props: {
               {muses.map((m) => {
                 const summary = fleetSummary.get(m.recipient);
                 const status = summary?.status ?? "idle";
+                const conn = museConnectionInfo(m);
+                const connChipLabel =
+                  conn.state === "live"
+                    ? "Đang live"
+                    : conn.state === "standby"
+                      ? "Chờ nhịp"
+                      : conn.state === "reconnecting"
+                        ? "Chờ kết nối lại"
+                        : conn.state === "offline"
+                          ? "Offline"
+                          : "Chưa setup";
                 const latest = summary?.latest ?? null;
                 const latestPreview =
                   latest?.result?.error ||
@@ -217,6 +238,17 @@ export function OverviewView(props: {
                         </div>
                       </div>
                       <Chip state={FLEET_STATUS_CHIP[status]} label={FLEET_STATUS_LABEL[status]} />
+                    </div>
+
+                    <div className="fleet-conn-row">
+                      <Chip state={conn.chipClass} label={connChipLabel} />
+                      <span className="fleet-conn-age">
+                        {conn.state === "reconnecting"
+                          ? "Chờ claim token mới"
+                          : m.last_claim_at
+                            ? `Poll ${fmtRelativeAge(m.last_claim_at)}`
+                            : "Chưa poll"}
+                      </span>
                     </div>
 
                     <p className="fleet-preview">{latestPreview}</p>

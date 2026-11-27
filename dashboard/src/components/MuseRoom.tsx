@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMuseThread, sendMessage } from "../lib/api";
-import { fmtClock, fmtTime, ownerState, paramsSummary } from "../lib/format";
+import { fmtClock, fmtTime, museConnectionInfo, ownerState, paramsSummary } from "../lib/format";
 import type { ActionMode, MessageParams, Muse, ThreadItem } from "../types";
 import { Composer } from "./Composer";
-import { ArrowDownIcon, PanelRightIcon, RefreshIcon } from "./Icons";
+import { ArrowDownIcon, PanelRightIcon, RefreshIcon, TrashIcon } from "./Icons";
 import { MarkdownBody } from "./MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "./MessageBubble";
 import { MuseManageMenu } from "./MuseManage";
+import { Chip } from "./ui";
 
 interface OptimisticSend {
   tempId: string;
@@ -21,9 +22,10 @@ export function MuseRoom(props: {
   muse: Muse;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
-  onOpenAction: (action: "rename" | "rotate" | "delete") => void;
+  onOpenAction: (action: "rename" | "rotate" | "delete" | "clear") => void;
   onPathsChange: (paths: string[]) => void;
   onMessageSent?: () => void;
+  refreshTrigger?: number;
 }) {
   const { muse, onPathsChange } = props;
   const [items, setItems] = useState<ThreadItem[]>([]);
@@ -74,7 +76,7 @@ export function MuseRoom(props: {
     );
   }, [muse.recipient]);
 
-  // Poll + reload on room switch
+  // Poll + reload on room switch or explicit clear
   useEffect(() => {
     setItems([]);
     setPending([]);
@@ -87,7 +89,7 @@ export function MuseRoom(props: {
     void load();
     const t = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, props.refreshTrigger]);
 
   // Smart auto-scroll
   useEffect(() => {
@@ -152,22 +154,36 @@ export function MuseRoom(props: {
 
   const showSkeleton = loading && items.length === 0 && pending.length === 0 && !loadError;
   const hasContent = items.length > 0 || pending.length > 0;
+  const conn = museConnectionInfo(muse);
 
   return (
     <section className="room-pane fade" aria-label={`Phòng ${muse.name}`}>
       <div className="pane-head">
         <div className="pane-title-group">
-          <h2>{muse.name}</h2>
+          <div className="pane-title-row">
+            <h2>{muse.name}</h2>
+            <Chip state={conn.chipClass} label={conn.label} />
+          </div>
           <span className="sub">
             {loadError
               ? `lỗi tải: ${loadError}`
               : updatedAt
-                ? `cập nhật ${fmtClock(updatedAt)} · tự cập nhật 10s`
-                : "đang tải…"}
+                ? `${conn.detail} · cập nhật ${fmtClock(updatedAt)}`
+                : `${conn.detail} · đang tải…`}
           </span>
         </div>
         <span className="grow" />
         <div className="pane-actions">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => props.onOpenAction("clear")}
+            title="Xoá lịch sử tin nhắn kênh trực tiếp"
+            aria-label="Xoá lịch sử kênh trực tiếp"
+          >
+            <TrashIcon size={14} />
+            <span className="hide-xs">Xoá lịch sử</span>
+          </button>
           <MuseManageMenu
             onRename={() => props.onOpenAction("rename")}
             onRotate={() => props.onOpenAction("rotate")}

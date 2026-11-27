@@ -132,12 +132,12 @@
   --color-vault-ink: #92400e;
 
   /* Semantic Statuses */
-  --color-ok: #047857;
+  --color-ok: #065f46;
   --color-ok-bg: rgba(4, 120, 87, 0.11);
-  --color-bad: #e11d48;
+  --color-bad: #be123c;
   --color-bad-solid: #dc2626;
   --color-bad-bg: rgba(225, 29, 72, 0.1);
-  --color-wait: #b45309;
+  --color-wait: #92400e;
   --color-wait-bg: rgba(217, 119, 6, 0.12);
   --color-busy: #0369a1;
   --color-busy-bg: rgba(3, 105, 161, 0.11);

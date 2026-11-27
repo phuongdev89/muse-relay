@@ -1,37 +1,70 @@
 import { useEffect, useMemo, useState } from "react";
-import type { MuseFleetSummary } from "../lib/format";
+import { museConnectionInfo, type MuseFleetSummary } from "../lib/format";
 import { useTheme } from "../lib/theme";
-import type { ActiveRoom, Group, GroupMember, Muse } from "../types";
+import type {
+  ActiveRoom,
+  Conversation,
+  ConversationMode,
+  Muse,
+  Project,
+  ProjectAgent,
+} from "../types";
 import {
+  BotIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  LayersIcon,
   LogOutIcon,
+  MessageIcon,
   MoonIcon,
   OverviewIcon,
   PlusIcon,
   SearchIcon,
+  SettingsIcon,
   StarIcon,
   SunIcon,
-  UsersIcon,
   XIcon,
 } from "./Icons";
 
 export type { ActiveRoom };
 
+const CONV_MODE_SHORT: Record<ConversationMode, string> = {
+  muse_single: "1 Muse",
+  muse_group: "Nhóm",
+  openai: "OpenAI",
+  mixed: "Mix",
+};
+
 export function Sidebar(props: {
   muses: Muse[];
-  groups: Group[];
-  groupMembers: Map<string, GroupMember[]>;
+  projects: Project[];
+  projectAgents: ProjectAgent[];
+  conversations: Conversation[];
   fleetSummary: Map<string, MuseFleetSummary>;
   active: ActiveRoom;
   ownerEmail: string;
   mobileOpen: boolean;
   onCloseMobile: () => void;
   onSwitchRoom: (room: ActiveRoom) => void;
-  onAddMuse: () => void;
-  onAddGroup: () => void;
+  onAddProject: () => void;
+  onEditProject: (project: Project) => void;
+  onNewConversation: (project: Project) => void;
   onLogout: () => void;
 }) {
-  const { muses, groups, groupMembers, fleetSummary, active, ownerEmail, mobileOpen, onCloseMobile } = props;
+  const {
+    muses,
+    projects,
+    projectAgents,
+    conversations,
+    fleetSummary,
+    active,
+    ownerEmail,
+    mobileOpen,
+    onCloseMobile,
+  } = props;
+
   const [query, setQuery] = useState("");
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
   const { theme, setTheme } = useTheme();
 
   useEffect(() => {
@@ -49,29 +82,78 @@ export function Sidebar(props: {
     return total;
   }, [fleetSummary]);
 
+  const agentCountByProject = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const pa of projectAgents) {
+      map.set(pa.project_id, (map.get(pa.project_id) ?? 0) + 1);
+    }
+    return map;
+  }, [projectAgents]);
+
+  const convsByProject = useMemo(() => {
+    const map = new Map<string, Conversation[]>();
+    for (const c of conversations) {
+      const list = map.get(c.project_id) ?? [];
+      list.push(c);
+      map.set(c.project_id, list);
+    }
+    return map;
+  }, [conversations]);
+
   const q = query.trim().toLowerCase();
-  const filteredMuses = useMemo(
-    () => (q ? muses.filter((m) => m.name.toLowerCase().includes(q)) : muses),
-    [muses, q],
-  );
-  const filteredGroups = useMemo(
-    () => (q ? groups.filter((g) => g.name.toLowerCase().includes(q)) : groups),
-    [groups, q],
-  );
+
+  const filteredProjects = useMemo(() => {
+    if (!q) {
+      return projects.map((p) => ({
+        project: p,
+        convs: convsByProject.get(p.id) ?? [],
+      }));
+    }
+    const res: { project: Project; convs: Conversation[] }[] = [];
+    for (const p of projects) {
+      const allConvs = convsByProject.get(p.id) ?? [];
+      const projMatches = p.name.toLowerCase().includes(q);
+      const matchingConvs = allConvs.filter((c) => c.title.toLowerCase().includes(q));
+      if (projMatches || matchingConvs.length > 0) {
+        res.push({
+          project: p,
+          convs: projMatches ? allConvs : matchingConvs,
+        });
+      }
+    }
+    return res;
+  }, [projects, convsByProject, q]);
+
+  const filteredMuses = useMemo(() => {
+    if (!q) return muses;
+    return muses.filter(
+      (m) =>
+        m.name.toLowerCase().includes(q) ||
+        m.dropbox_root.toLowerCase().includes(q),
+    );
+  }, [muses, q]);
 
   function selectRoom(room: ActiveRoom) {
     props.onSwitchRoom(room);
     onCloseMobile();
   }
 
-  function handleAddMuse() {
-    onCloseMobile();
-    props.onAddMuse();
+  function toggleProjectExpand(projectId: string) {
+    setCollapsedProjects((cur) => {
+      const next = new Set(cur);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
   }
 
-  function handleAddGroup() {
-    onCloseMobile();
-    props.onAddGroup();
+  function expandProject(projectId: string) {
+    setCollapsedProjects((cur) => {
+      if (!cur.has(projectId)) return cur;
+      const next = new Set(cur);
+      next.delete(projectId);
+      return next;
+    });
   }
 
   return (
@@ -103,27 +185,38 @@ export function Sidebar(props: {
           </button>
         </div>
 
-        <button
-          type="button"
-          className={`rail-nav-item${active?.kind === "overview" ? " active" : ""}`}
-          onClick={() => selectRoom({ kind: "overview" })}
-        >
-          <OverviewIcon size={16} />
-          <span className="nm">Tổng quan</span>
-          {totalActiveJobs > 0 && (
-            <span className="rail-badge busy" title={`${totalActiveJobs} việc đang chạy`}>
-              {totalActiveJobs}
-            </span>
-          )}
-        </button>
+        <nav className="rail-top-nav" aria-label="Điều hướng cấp cao">
+          <button
+            type="button"
+            className={`rail-nav-item${active?.kind === "overview" ? " active" : ""}`}
+            onClick={() => selectRoom({ kind: "overview" })}
+          >
+            <OverviewIcon size={16} />
+            <span className="nm">Tổng quan</span>
+            {totalActiveJobs > 0 && (
+              <span className="rail-badge busy" title={`${totalActiveJobs} việc đang chạy`}>
+                {totalActiveJobs}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`rail-nav-item${active?.kind === "agents" ? " active" : ""}`}
+            onClick={() => selectRoom({ kind: "agents" })}
+          >
+            <BotIcon size={16} />
+            <span className="nm">Quản trị Agent</span>
+          </button>
+        </nav>
 
         <div className="rail-search">
           <SearchIcon size={14} className="rail-search-icon" />
           <input
             type="search"
             value={query}
-            placeholder="Tìm Muse hoặc nhóm…"
-            aria-label="Tìm Muse hoặc nhóm"
+            placeholder="Tìm Project, hội thoại, Muse…"
+            aria-label="Tìm Project, cuộc hội thoại hoặc Muse"
             onChange={(e) => setQuery(e.target.value)}
           />
           {query && (
@@ -139,85 +232,178 @@ export function Sidebar(props: {
         </div>
 
         <div className="rail-scroll">
-          <nav className="rail-section" aria-label="Phòng Muse">
+          {/* Project-Centric Tree */}
+          <nav className="rail-section" aria-label="Danh sách Project">
             <div className="rail-label-row">
-              <span className="rail-label">Muse ({muses.length})</span>
+              <span className="rail-label">PROJECT ({projects.length})</span>
               <button
                 type="button"
                 className="rail-add-icon"
-                onClick={handleAddMuse}
-                title="Thêm Muse mới"
-                aria-label="Thêm Muse mới"
+                onClick={() => {
+                  onCloseMobile();
+                  props.onAddProject();
+                }}
+                title="Tạo project mới"
+                aria-label="Tạo project mới"
               >
                 <PlusIcon size={14} />
               </button>
             </div>
 
-            <div className="rail-rooms">
-              {filteredMuses.map((m) => {
-                const isActive = active?.kind === "muse" && active.recipient === m.recipient;
-                const summary = fleetSummary.get(m.recipient);
-                const status = summary?.status ?? "idle";
-                const activeCount = summary?.activeCount ?? 0;
+            <div className="proj-tree">
+              {filteredProjects.map(({ project, convs }) => {
+                const isProjActive =
+                  active?.kind === "project" && active.projectId === project.id;
+                const hasActiveConv =
+                  active?.kind === "conversation" && active.projectId === project.id;
+                const isExpanded =
+                  Boolean(q) || hasActiveConv || !collapsedProjects.has(project.id);
+                const agentCount = agentCountByProject.get(project.id) ?? 0;
+
                 return (
-                  <button
-                    key={m.recipient}
-                    type="button"
-                    className={`room${isActive ? " active" : ""}`}
-                    onClick={() => selectRoom({ kind: "muse", recipient: m.recipient })}
-                  >
-                    <span className={`dot dot-${status}`} />
-                    <span className="nm">{m.name}</span>
-                    {activeCount > 0 && (
-                      <span className="rail-badge busy">{activeCount}</span>
+                  <div key={project.id} className="proj-node">
+                    <div className={`proj-head${isProjActive ? " active" : ""}`}>
+                      <button
+                        type="button"
+                        className="proj-chevron"
+                        aria-expanded={isExpanded}
+                        aria-label={isExpanded ? `Thu gọn ${project.name}` : `Mở rộng ${project.name}`}
+                        onClick={() => toggleProjectExpand(project.id)}
+                      >
+                        {isExpanded ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="proj-link"
+                        onClick={() => {
+                          expandProject(project.id);
+                          selectRoom({ kind: "project", projectId: project.id });
+                        }}
+                      >
+                        <LayersIcon size={14} className="proj-icon" />
+                        <span className="nm">{project.name}</span>
+                        <span className="rail-badge" title={`${agentCount} Agent trong Project`}>
+                          {agentCount}
+                        </span>
+                      </button>
+
+                      <div className="proj-quick-actions">
+                        <button
+                          type="button"
+                          className="proj-action-btn"
+                          title="Cuộc hội thoại mới"
+                          aria-label={`Cuộc hội thoại mới trong ${project.name}`}
+                          onClick={() => {
+                            onCloseMobile();
+                            props.onNewConversation(project);
+                          }}
+                        >
+                          <PlusIcon size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="proj-action-btn"
+                          title="Cài đặt Project"
+                          aria-label={`Cài đặt ${project.name}`}
+                          onClick={() => {
+                            onCloseMobile();
+                            props.onEditProject(project);
+                          }}
+                        >
+                          <SettingsIcon size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="proj-convs">
+                        {convs.length === 0 ? (
+                          <span className="proj-conv-empty">Chưa có hội thoại</span>
+                        ) : (
+                          convs.map((c) => {
+                            const isConvActive =
+                              active?.kind === "conversation" &&
+                              active.conversationId === c.id;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className={`conv-nav-item${isConvActive ? " active" : ""}`}
+                                onClick={() =>
+                                  selectRoom({
+                                    kind: "conversation",
+                                    projectId: project.id,
+                                    conversationId: c.id,
+                                  })
+                                }
+                              >
+                                <MessageIcon size={12} className="conv-nav-icon" />
+                                <span className="nm">{c.title}</span>
+                                <span className="conv-nav-hint">
+                                  {CONV_MODE_SHORT[c.mode]} · {c.participants.length}
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
                     )}
-                  </button>
+                  </div>
                 );
               })}
-              {filteredMuses.length === 0 && (
+
+              {filteredProjects.length === 0 && (
                 <span className="rail-empty">
-                  {muses.length === 0 ? "Chưa có Muse nào" : "Không tìm thấy Muse"}
+                  {projects.length === 0 ? "Chưa có Project nào" : "Không tìm thấy Project"}
                 </span>
               )}
             </div>
           </nav>
 
-          <nav className="rail-section" aria-label="Phòng nhóm">
+          {/* Direct 1:1 Muse Channels */}
+          <nav className="rail-section" aria-label="Kênh trực tiếp với Muse">
             <div className="rail-label-row">
-              <span className="rail-label">Nhóm ({groups.length})</span>
-              <button
-                type="button"
-                className="rail-add-icon"
-                onClick={handleAddGroup}
-                title="Tạo nhóm mới"
-                aria-label="Tạo nhóm mới"
-              >
-                <PlusIcon size={14} />
-              </button>
+              <span className="rail-label">KÊNH TRỰC TIẾP ({muses.length})</span>
             </div>
 
             <div className="rail-rooms">
-              {filteredGroups.map((g) => {
-                const isActive = active?.kind === "group" && active.id === g.id;
-                const gms = groupMembers.get(g.id) ?? [];
-                const namesTooltip = gms.map((m) => m.name).join(", ");
+              {filteredMuses.map((m) => {
+                const isMuseActive =
+                  active?.kind === "muse" && active.recipient === m.recipient;
+                const conn = museConnectionInfo(m);
+                const summary = fleetSummary.get(m.recipient);
+                const activeJobs = summary?.activeCount ?? 0;
+
                 return (
                   <button
-                    key={g.id}
+                    key={m.recipient}
                     type="button"
-                    className={`room${isActive ? " active" : ""}`}
-                    title={namesTooltip || "Nhóm chưa có thành viên"}
-                    onClick={() => selectRoom({ kind: "group", id: g.id })}
+                    className={`room${isMuseActive ? " active" : ""}`}
+                    onClick={() => selectRoom({ kind: "muse", recipient: m.recipient })}
+                    title={`${m.name} · ${conn.label} (${conn.detail})`}
                   >
-                    <UsersIcon size={14} className="room-group-icon" />
-                    <span className="nm">{g.name}</span>
-                    <span className="rail-badge">{gms.length}</span>
+                    <span className={`dot ${conn.dotClass}`} aria-hidden="true" />
+                    <span className="nm">{m.name}</span>
+                    {activeJobs > 0 ? (
+                      <span
+                        className="rail-badge busy"
+                        title={`${activeJobs} việc đang chạy`}
+                      >
+                        {activeJobs}
+                      </span>
+                    ) : (
+                      <span className={`rail-direct-badge state-${conn.state}`}>
+                        {conn.shortLabel}
+                      </span>
+                    )}
                   </button>
                 );
               })}
-              {filteredGroups.length === 0 && (
+
+              {filteredMuses.length === 0 && (
                 <span className="rail-empty">
-                  {groups.length === 0 ? "Chưa có nhóm nào" : "Không tìm thấy nhóm"}
+                  {muses.length === 0 ? "Chưa có Muse nào" : "Không tìm thấy Muse"}
                 </span>
               )}
             </div>

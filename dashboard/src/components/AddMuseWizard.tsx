@@ -48,12 +48,14 @@ export function AddMuseWizard(props: {
       setError("Phiên đăng nhập hết hạn — đăng nhập lại rồi thử lần nữa.");
       return;
     }
+    const trimmedEmail = email.trim().toLowerCase();
     const err = await createMuse({
       owner_id: user.id,
       recipient,
       name: trimmedName,
       token_hash: tokenHash,
       dropbox_root: derivedRoot,
+      email_owner: trimmedEmail,
     });
     undo();
     if (err) {
@@ -74,6 +76,12 @@ export function AddMuseWizard(props: {
       recipient,
       name: trimmedName,
       dropbox_root: derivedRoot,
+      email_owner: trimmedEmail,
+      setup_done: false,
+      first_connected_at: null,
+      last_claim_at: null,
+      last_result_at: null,
+      token_rotated_at: null,
       created_at: new Date().toISOString(),
     });
   }
