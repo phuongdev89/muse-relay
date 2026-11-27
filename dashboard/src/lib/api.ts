@@ -1,5 +1,6 @@
 import type {
   ActionMode,
+  FleetActivityItem,
   Group,
   GroupBubble,
   GroupMember,
@@ -37,9 +38,9 @@ export async function sha256Hex(text: string): Promise<string> {
 export async function listMuses(): Promise<{ data: Muse[]; error: string | null }> {
   const { data, error } = await db
     .from("relay_muses")
-    .select("recipient,name,created_at")
+    .select("recipient,name,dropbox_root,created_at")
     .order("created_at", { ascending: true });
-  return { data: data ?? [], error: error?.message ?? null };
+  return { data: (data ?? []) as Muse[], error: error?.message ?? null };
 }
 
 export async function createMuse(row: {
@@ -161,7 +162,7 @@ export async function fetchMuseThread(recipient: string): Promise<{
 }> {
   const msgs = await db
     .from("relay_messages")
-    .select("id,action,params,status,attempts,created_at,expires_at,claim_expires_at")
+    .select("id,recipient,action,params,status,attempts,created_at,expires_at,claim_expires_at")
     .eq("recipient", recipient)
     .order("created_at", { ascending: false })
     .limit(50);
@@ -182,6 +183,39 @@ export async function fetchMuseThread(recipient: string): Promise<{
     }
   }
   return { items, error: null };
+}
+
+export async function fetchFleetActivity(limit = 80): Promise<{
+  items: FleetActivityItem[];
+  error: string | null;
+}> {
+  const msgs = await db
+    .from("relay_messages")
+    .select("id,recipient,action,params,status,attempts,created_at,expires_at,claim_expires_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (msgs.error) return { items: [], error: msgs.error.message };
+  const rows = (msgs.data ?? []) as (RelayMessage & { recipient: string })[];
+  if (rows.length === 0) return { items: [], error: null };
+
+  const ids = rows.map((r) => r.id);
+  const res = await db
+    .from("relay_results")
+    .select("message_id,status,output,error,created_at")
+    .in("message_id", ids);
+  if (res.error) return { items: [], error: res.error.message };
+
+  const byMessage = new Map<string, RelayResult>();
+  for (const r of res.data ?? []) byMessage.set(r.message_id, r as RelayResult);
+
+  return {
+    items: rows.map((m) => ({
+      recipient: m.recipient,
+      message: m,
+      result: byMessage.get(m.id) ?? null,
+    })),
+    error: null,
+  };
 }
 
 // ---- group thread ----------------------------------------------------------

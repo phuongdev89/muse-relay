@@ -1,6 +1,16 @@
 import { useState } from "react";
 import type { ActionMode, MessageParams } from "../types";
-import { ErrorMsg, setButtonBusy } from "./ui";
+import {
+  ChevronDownIcon,
+  ImageIcon,
+  MessageIcon,
+  SendIcon,
+  SlidersIcon,
+  VideoIcon,
+} from "./Icons";
+import { ErrorMsg } from "./ui";
+
+const MAX_PROMPT_LEN = 4000;
 
 // One composer, three modes (default chat). Builds the exact params payload
 // the submit_message contract validates server-side.
@@ -19,16 +29,29 @@ export function Composer(props: {
   const [thread, setThread] = useState("");
   const [resType, setResType] = useState("auto");
   const [outFmt, setOutFmt] = useState("auto");
-  const [advOpen, setAdvOpen] = useState(false);
+  const [optsOpen, setOptsOpen] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
 
   const THREAD_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+  function switchMode(next: ActionMode) {
+    setMode(next);
+    setError("");
+    if (next === "image" || next === "video") {
+      setOptsOpen(true);
+    }
+  }
+
   function buildParams(): MessageParams | string {
     const p = prompt.trim();
-    if (p.length < 1 || p.length > 4000) return "Nội dung phải từ 1–4000 ký tự.";
+    if (p.length < 1 || p.length > MAX_PROMPT_LEN) {
+      return `Nội dung phải từ 1–${MAX_PROMPT_LEN} ký tự.`;
+    }
     const th = thread.trim();
-    if (th && !THREAD_RE.test(th)) return "Thread chỉ gồm chữ/số/-/_ (1–64 ký tự).";
+    if (th && !THREAD_RE.test(th)) {
+      return "Thread chỉ gồm chữ/số/-/_ (1–64 ký tự).";
+    }
     const params: MessageParams = { prompt: p };
     if (th) params.thread_id = th;
     if (mode === "chat") {
@@ -49,16 +72,16 @@ export function Composer(props: {
   }
 
   async function submit() {
+    if (sending) return;
     setError("");
     const built = buildParams();
     if (typeof built === "string") {
       setError(built);
       return;
     }
-    const btn = document.getElementById("composer-send") as HTMLButtonElement | null;
-    const undo = setButtonBusy(btn, "Đang gửi…");
+    setSending(true);
     const err = await props.onSend(mode, built);
-    undo();
+    setSending(false);
     if (err) {
       setError("Lỗi gửi: " + err);
       return;
@@ -66,106 +89,176 @@ export function Composer(props: {
     setPrompt("");
   }
 
+  const charCount = prompt.length;
+  const charState =
+    charCount > MAX_PROMPT_LEN ? "over" : charCount > 3600 ? "warn" : "";
+
+  const modeTabs: { value: ActionMode; label: string; icon: JSX.Element }[] = [
+    { value: "chat", label: "Chat", icon: <MessageIcon size={14} /> },
+    { value: "image", label: "Ảnh", icon: <ImageIcon size={14} /> },
+    { value: "video", label: "Video", icon: <VideoIcon size={14} /> },
+  ];
+
   return (
     <div className="composer-block">
       {mediaModes && (
-        <div className="mode-tabs" role="tablist" aria-label="Chế độ gửi">
-          {(
-            [
-              ["chat", "💬 Chat"],
-              ["image", "🖼 Ảnh"],
-              ["video", "🎬 Video"],
-            ] as [ActionMode, string][]
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={mode === value}
-              className={`mode-tab${mode === value ? " on" : ""}`}
-              onClick={() => setMode(value)}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="composer-top">
+          <div className="mode-tabs" role="tablist" aria-label="Chế độ gửi">
+            {modeTabs.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                role="tab"
+                aria-selected={mode === t.value}
+                className={`mode-tab${mode === t.value ? " on" : ""}`}
+                onClick={() => switchMode(t.value)}
+              >
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </div>
+          {thread.trim() && (
+            <span className="composer-thread-pill" title="Thread đang gắn">
+              #{thread.trim()}
+            </span>
+          )}
         </div>
       )}
-      <div className="composer">
+
+      <div className="composer-shell">
         <textarea
           rows={2}
           value={prompt}
           placeholder={props.placeholder}
+          aria-label={props.placeholder}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submit();
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void submit();
+            }
           }}
         />
-        <button id="composer-send" className="btn" onClick={submit}>Gửi</button>
+
+        {mediaModes && optsOpen && (
+          <div className="composer-drawer">
+            <div className="composer-opts">
+              {mode === "chat" ? (
+                <>
+                  <label>
+                    Loại tài nguyên
+                    <select value={resType} onChange={(e) => setResType(e.target.value)}>
+                      {["auto", "none", "image", "video", "document", "archive"].map((v) => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Định dạng đầu ra
+                    <select value={outFmt} onChange={(e) => setOutFmt(e.target.value)}>
+                      {["auto", "md", "txt", "csv", "docx", "xlsx", "zip"].map((v) => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Thread (tuỳ chọn)
+                    <input
+                      value={thread}
+                      placeholder="vd: bao-cao-tuan"
+                      onChange={(e) => setThread(e.target.value)}
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Tỉ lệ
+                    <select value={ar} onChange={(e) => setAr(e.target.value)}>
+                      {(mode === "video"
+                        ? ["9:16", "16:9"]
+                        : ["9:16", "16:9", "1:1", "4:5", "3:4"]
+                      ).map((v) => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {mode === "image" ? (
+                    <label>
+                      Số ảnh (1–4)
+                      <input
+                        type="number"
+                        min={1}
+                        max={4}
+                        value={count}
+                        onChange={(e) => setCount(parseInt(e.target.value || "1", 10))}
+                      />
+                    </label>
+                  ) : (
+                    <label>
+                      Thời lượng (5–10s)
+                      <input
+                        type="number"
+                        min={5}
+                        max={10}
+                        value={dur}
+                        onChange={(e) => setDur(parseInt(e.target.value || "8", 10))}
+                      />
+                    </label>
+                  )}
+                  <label>
+                    Thread (tuỳ chọn)
+                    <input
+                      value={thread}
+                      placeholder="vd: cat-climbing-01"
+                      onChange={(e) => setThread(e.target.value)}
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="composer-bar">
+          <div className="composer-bar-left">
+            {mediaModes && (
+              <button
+                type="button"
+                className={`composer-opt-btn${optsOpen ? " on" : ""}`}
+                aria-expanded={optsOpen}
+                onClick={() => setOptsOpen((v) => !v)}
+              >
+                <SlidersIcon size={14} />
+                <span>Tuỳ chọn</span>
+                <ChevronDownIcon
+                  size={13}
+                  className={`opt-chevron${optsOpen ? " open" : ""}`}
+                />
+              </button>
+            )}
+            <span className="composer-kbd-hint">Enter để gửi · Shift+Enter xuống dòng</span>
+          </div>
+
+          <div className="composer-bar-right">
+            <span className={`char-counter${charState ? ` ${charState}` : ""}`}>
+              {charCount} / {MAX_PROMPT_LEN}
+            </span>
+            <button
+              id="composer-send"
+              type="button"
+              className={`btn btn-send${sending ? " is-loading" : ""}`}
+              disabled={sending}
+              onClick={submit}
+            >
+              <SendIcon size={14} />
+              <span>{sending ? "Đang gửi…" : "Gửi"}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      {mediaModes && mode !== "chat" && (
-        <div className="composer-opts">
-          <label>
-            Tỉ lệ
-            <select value={ar} onChange={(e) => setAr(e.target.value)}>
-              {(mode === "video" ? ["9:16", "16:9"] : ["9:16", "16:9", "1:1", "4:5", "3:4"]).map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </label>
-          {mode === "image" ? (
-            <label>
-              Số ảnh (1–4)
-              <input type="number" min={1} max={4} value={count}
-                onChange={(e) => setCount(parseInt(e.target.value || "1", 10))} />
-            </label>
-          ) : (
-            <label>
-              Thời lượng (5–10s)
-              <input type="number" min={5} max={10} value={dur}
-                onChange={(e) => setDur(parseInt(e.target.value || "8", 10))} />
-            </label>
-          )}
-          <label>
-            Thread (tùy chọn)
-            <input value={thread} placeholder="vd: cat-climbing-01"
-              onChange={(e) => setThread(e.target.value)} />
-          </label>
-        </div>
-      )}
-
-      {mediaModes && mode === "chat" && (
-        <div className="composer-adv">
-          <button type="button" className="btn-quiet" onClick={() => setAdvOpen(!advOpen)}>
-            {advOpen ? "▾" : "▸"} Tuỳ chọn nâng cao
-          </button>
-          {advOpen && (
-            <div className="composer-opts">
-              <label>
-                Loại tài nguyên
-                <select value={resType} onChange={(e) => setResType(e.target.value)}>
-                  {["auto", "none", "image", "video", "document", "archive"].map((v) => (
-                    <option key={v}>{v}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Định dạng đầu ra
-                <select value={outFmt} onChange={(e) => setOutFmt(e.target.value)}>
-                  {["auto", "md", "txt", "csv", "docx", "xlsx", "zip"].map((v) => (
-                    <option key={v}>{v}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Thread (tùy chọn)
-                <input value={thread} placeholder="vd: bao-cao-tuan"
-                  onChange={(e) => setThread(e.target.value)} />
-              </label>
-            </div>
-          )}
-        </div>
-      )}
       <ErrorMsg text={error} />
     </div>
   );

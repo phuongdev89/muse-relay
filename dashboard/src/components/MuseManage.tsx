@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { randomHex, rotateMuseToken, renameMuse, deleteMuse, sha256Hex } from "../lib/api";
 import type { Muse } from "../types";
+import { ChevronDownIcon, EditIcon, KeyIcon, TrashIcon } from "./Icons";
 import { TokenPanel } from "./TokenPanel";
 import { ErrorMsg, Modal, setButtonBusy, toast } from "./ui";
 
@@ -13,29 +14,70 @@ export function MuseManageMenu(props: {
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => {
+    const onMouseDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [open]);
+
   return (
     <div className="menu-anchor" ref={ref}>
-      <button type="button" className="btn-ghost" onClick={() => setOpen(!open)}>
-        Quản lý ▾
+      <button
+        type="button"
+        className="btn-ghost"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>Quản lý</span>
+        <ChevronDownIcon size={14} />
       </button>
       {open && (
         <div className="menu" role="menu">
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); props.onRename(); }}>
-            ✏️ Đổi tên
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              props.onRename();
+            }}
+          >
+            <EditIcon size={14} />
+            <span>Đổi tên</span>
           </button>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); props.onRotate(); }}>
-            🔑 Rotate token
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              props.onRotate();
+            }}
+          >
+            <KeyIcon size={14} />
+            <span>Rotate token</span>
           </button>
-          <button type="button" role="menuitem" className="danger" onClick={() => { setOpen(false); props.onDelete(); }}>
-            🗑 Xoá Muse
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={() => {
+              setOpen(false);
+              props.onDelete();
+            }}
+          >
+            <TrashIcon size={14} />
+            <span>Xoá Muse</span>
           </button>
         </div>
       )}

@@ -36,6 +36,16 @@ Deno.serve(async (req: Request) => {
     const nowUnix = Math.floor(Date.now() / 1000);
     const ownerAllowlist = allowedOwnerId();
 
+    // Heartbeat: this poll just proved the muse's daemon is alive — stamp it
+    // even when the queue below turns out empty (instruction contract: the
+    // muse hook claims every 10s with a 10-minute watchdog claim as backstop,
+    // so a fresh last_claim_at on relay_muses reads as "live"). Best-effort:
+    // never block an actual claim on a heartbeat write failure.
+    await supabase
+      .from("relay_muses")
+      .update({ last_claim_at: new Date().toISOString() })
+      .eq("id", muse.id);
+
     let query = supabase
       .from("relay_messages")
       .select(

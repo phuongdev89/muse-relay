@@ -1,20 +1,30 @@
+import { useState } from "react";
+import { CheckIcon, CopyIcon, LockIcon } from "./Icons";
 import { copyText } from "./ui";
 
 /** One-time relay-token display. The plaintext token never leaves this panel. */
 export function TokenPanel({ token }: { token: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    const ok = await copyText(token, "Đã copy token — dán vào Secure Vault");
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    }
+  }
+
   return (
     <div className="token-panel">
       <div className="tp-head">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" strokeWidth="1.8" />
-        </svg>
-        RELAY_TOKEN — dán vào Secure Vault của Muse
+        <LockIcon size={15} />
+        <span>RELAY_TOKEN — dán vào Secure Vault của Muse</span>
       </div>
       <div className="token-row">
         <code className="token-value">{token}</code>
-        <button type="button" className="btn-ghost" onClick={() => copyText(token, "Đã copy token — dán vào Secure Vault")}>
-          Copy token
+        <button type="button" className="btn-ghost btn-copy-token" onClick={handleCopy}>
+          {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+          <span>{copied ? "Đã copy" : "Copy token"}</span>
         </button>
       </div>
       <p className="token-note">

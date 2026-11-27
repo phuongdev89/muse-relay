@@ -8,6 +8,7 @@ export type MessageStatus = "pending" | "processing" | "done" | "failed";
 export interface Muse {
   recipient: string;
   name: string;
+  dropbox_root: string;
   created_at: string;
 }
 
@@ -24,6 +25,7 @@ export interface MessageParams {
 
 export interface RelayMessage {
   id: string;
+  recipient?: string;
   action: ActionMode;
   params: MessageParams;
   status: MessageStatus;
@@ -49,6 +51,13 @@ export interface RelayResult {
 
 /** One owner request + its muse response (if any) — the chat thread unit. */
 export interface ThreadItem {
+  message: RelayMessage;
+  result: RelayResult | null;
+}
+
+/** Fleet-wide activity entry used by Overview & Sidebar live statuses. */
+export interface FleetActivityItem {
+  recipient: string;
   message: RelayMessage;
   result: RelayResult | null;
 }
@@ -90,3 +99,9 @@ export interface GroupBubble {
   notes: string | null;
   error: string | null;
 }
+
+export type ActiveRoom =
+  | { kind: "overview" }
+  | { kind: "muse"; recipient: string }
+  | { kind: "group"; id: string }
+  | null;

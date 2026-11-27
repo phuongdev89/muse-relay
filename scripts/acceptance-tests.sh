@@ -116,6 +116,41 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?id=eq.$MSG_M2" -H "apikey:
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=eq.$MM_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-MM =="
 
+echo "== T-HB: claim heartbeat (relay_muses.last_claim_at) =="
+HB_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+HB_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export HB_TOKEN
+HB_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['HB_TOKEN'].encode()).hexdigest())")
+HBB=".scratch/acceptance-hb-muse.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance HB","token_hash":"%s","dropbox_root":"/acceptance-hb/"}' \
+  "$RELAY_OWNER_ID" "$HB_REC" "$HB_HASH" > "$HBB"
+HBC=$(curl -s -m 20 -o /tmp/athba -w '%{http_code}' -X POST "$BASE/rest/v1/relay_muses" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$HBB")
+rm -f "$HBB"
+[ "$HBC" = "201" ] && ok "T-HBa heartbeat muse seeded -> 201" || bad "T-HBa seed got $HBC: $(head -c 200 /tmp/athba)"
+
+# An idle poll must stamp too: claiming against an empty queue is itself the
+# liveness proof (10s hook poll, 10-minute watchdog claim per instruction).
+HBCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $HB_TOKEN" -H 'content-type: application/json' -d '{}')
+HBN=$(echo "$HBCLAIM" | jqpy "import json,sys; print(json.load(sys.stdin).get('message') is None)")
+LC=$(curl -s -m 20 "$BASE/rest/v1/relay_muses?select=last_claim_at&recipient=eq.$HB_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+LC_AGE=$(echo "$LC" | jqpy "import json,sys,datetime; rows=json.load(sys.stdin); v=(rows[0] or {}).get('last_claim_at') if rows else None; print('NULL' if not v else int((datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat(v.replace('Z','+00:00'))).total_seconds()))")
+echo "$HBN" | grep -q "True" && [ "$LC_AGE" != "NULL" ] && [ "$LC_AGE" -lt 120 ] 2>/dev/null \
+  && ok "T-HBb empty-queue claim stamps fresh last_claim_at (${LC_AGE}s old)" \
+  || bad "T-HBb claim=$(echo "$HBCLAIM" | head -c 120) last_claim_at=$LC age=$LC_AGE"
+
+# A failed authentication must never move the heartbeat (401 exits before any write).
+LC1=$(echo "$LC" | jqpy "import json,sys; print((json.load(sys.stdin)[0] or {}).get('last_claim_at',''))")
+curl -s -m 20 -o /tmp/athbb -w '%{http_code}' -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" -H 'content-type: application/json' -d '{}' > /tmp/athbc
+LC2=$(curl -s -m 20 "$BASE/rest/v1/relay_muses?select=last_claim_at&recipient=eq.$HB_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print((json.load(sys.stdin)[0] or {}).get('last_claim_at',''))")
+HB401=$(cat /tmp/athbc)
+[ "$HB401" = "401" ] && [ -n "$LC1" ] && [ "$LC2" = "$LC1" ] \
+  && ok "T-HBc unknown token -> 401, last_claim_at untouched" \
+  || bad "T-HBc code=$HB401 before=$LC1 after=$LC2"
+
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=eq.$HB_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+echo "== end T-HB =="
+
 echo "== T-G: group chat (owner-initiated muse-to-muse) =="
 GA_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 GB_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
@@ -245,14 +280,27 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$G_ID" -H "apikey: $SU
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($GA_REC,$GB_REC,$GC_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-G =="
 
+echo "== T-LG prep: dedicated legacy muse (live Nyx daemon cannot race this queue) =="
+LG_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+LG_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export LG_TOKEN
+LG_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['LG_TOKEN'].encode()).hexdigest())")
+LGB=".scratch/acceptance-lg-muse.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance LG","token_hash":"%s","dropbox_root":"/acceptance-lg/"}' \
+  "$RELAY_OWNER_ID" "$LG_REC" "$LG_HASH" > "$LGB"
+LGC=$(curl -s -m 20 -o /tmp/atlg -w '%{http_code}' -X POST "$BASE/rest/v1/relay_muses" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$LGB")
+rm -f "$LGB"
+[ "$LGC" = "201" ] && ok "T-LGa legacy muse seeded -> 201 (own queue)" || bad "T-LGa seed got $LGC: $(head -c 200 /tmp/atlg)"
+
 echo "== T2: signed submit -> 201 + message_id + pending row =="
-SUB_BODY="{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t2 image\",\"aspect_ratio\":\"1:1\",\"count\":1,\"reference_storage_paths\":[]}}"
+SUB_BODY="{\"recipient\":\"$LG_REC\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t2 image\",\"aspect_ratio\":\"1:1\",\"count\":1,\"reference_storage_paths\":[]}}"
 SUB=$(curl -s -m 20 -o /tmp/at2 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d "$SUB_BODY")
 MSG_A=$(cat /tmp/at2 | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 SUB2=$(curl -s -m 20 -o /tmp/at2b -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"video\",\"params\":{\"prompt\":\"[ACCEPTANCE] t3 tamper\",\"aspect_ratio\":\"16:9\",\"duration_seconds\":5,\"reference_storage_paths\":[]}}")
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"video\",\"params\":{\"prompt\":\"[ACCEPTANCE] t3 tamper\",\"aspect_ratio\":\"16:9\",\"duration_seconds\":5,\"reference_storage_paths\":[]}}")
 MSG_B=$(cat /tmp/at2b | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 if [ "$SUB" = "201" ] && [ -n "$MSG_A" ] && [ "$SUB2" = "201" ] && [ -n "$MSG_B" ]; then
   ok "T2 submit -> 201, message_id A=$MSG_A / B=$MSG_B"
@@ -271,11 +319,11 @@ echo "== T3 prep: tamper B params via service key, then claim =="
 curl -s -m 20 -X PATCH "$BASE/rest/v1/relay_messages?id=eq.$MSG_B" \
   -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
   -d '{"params":{"prompt":"[TAMPERED] evil","aspect_ratio":"16:9","duration_seconds":5,"reference_storage_paths":[]}}' > /dev/null
-CLAIM1=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' -d '{}')
+CLAIM1=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' -d '{}')
 C1_ID=$(echo "$CLAIM1" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
 C1_CLAIM=$(echo "$CLAIM1" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
 [ "$C1_ID" = "$MSG_A" ] && [ -n "$C1_CLAIM" ] && ok "T4a claim#1 returned A with claim_id" || bad "T4a claim#1: $(echo "$CLAIM1" | head -c 200)"
-CLAIM2=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' -d '{}')
+CLAIM2=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' -d '{}')
 C2_NULL=$(echo "$CLAIM2" | jqpy "import json,sys; print(json.load(sys.stdin).get('message') is None)")
 [ "$C2_NULL" = "True" ] && ok "T4b claim#2 -> message:null (no duplicate)" || bad "T4b claim#2: $(echo "$CLAIM2" | head -c 200)"
 BB=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=status&id=eq.$MSG_B" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
@@ -288,19 +336,19 @@ fi
 
 echo "== T5: submit_result with wrong claim_id -> 409 =="
 c=$(curl -s -m 20 -o /tmp/at5 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_result" \
-  -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' \
+  -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' \
   -d "{\"message_id\":\"$MSG_A\",\"claim_id\":\"00000000-0000-0000-0000-000000000000\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[],\"notes\":null},\"error\":null}")
 ERR5=$(cat /tmp/at5 | jqpy "import json,sys; print(json.load(sys.stdin).get('error',''))")
 [ "$c" = "409" ] && ok "T5 wrong claim_id -> 409 ($ERR5)" || bad "T5 got $c: $(head -c 200 /tmp/at5)"
 
 echo "== T-media-neg: image done without dropbox_paths must 400 =="
-c=$(curl -s -m 20 -o /tmp/atm -w '%{http_code}' -X POST "$BASE/functions/v1/submit_result"   -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json'   -d "{\"message_id\":\"$MSG_A\",\"claim_id\":\"$C1_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[],\"notes\":null},\"error\":null}")
+c=$(curl -s -m 20 -o /tmp/atm -w '%{http_code}' -X POST "$BASE/functions/v1/submit_result"   -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json'   -d "{\"message_id\":\"$MSG_A\",\"claim_id\":\"$C1_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[],\"notes\":null},\"error\":null}")
 [ "$c" = "400" ] && ok "T-media-neg image done w/o paths -> 400" || bad "T-media-neg got $c: $(head -c 200 /tmp/atm)"
 
 echo "== bonus: happy-path submit_result with correct claim_id =="
 RES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
-  -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' \
-  -d "{\"message_id\":\"$MSG_A\",\"claim_id\":\"$C1_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[\"/nolanthomas825cxoz@lappies.net/t-acceptance/2026-11-27_acceptance.png\"],\"notes\":\"acceptance test\"},\"error\":null}")
+  -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' \
+  -d "{\"message_id\":\"$MSG_A\",\"claim_id\":\"$C1_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[\"/acceptance-lg/2026-11-27_acceptance.png\"],\"notes\":\"acceptance test\"},\"error\":null}")
 AOK=$(echo "$RES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
 AA=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=status&id=eq.$MSG_A" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
 [ "$AOK" = "True" ] && echo "$AA" | grep -q '"done"' && ok "bonus: correct claim -> done + row done" || bad "bonus: res=$RES row=$AA"
@@ -308,14 +356,14 @@ AA=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=status&id=eq.$MSG_A" -H 
 echo "== T6: chat action end-to-end =="
 SUBC=$(curl -s -m 20 -o /tmp/at6 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] t6 chat\"}}")
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] t6 chat\"}}")
 MSG_C=$(cat /tmp/at6 | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 if [ "$SUBC" = "201" ] && [ -n "$MSG_C" ]; then
   ok "T6a chat submit -> 201, message_id C=$MSG_C"
 else
   bad "T6a chat submit got $SUBC: $(head -c 200 /tmp/at6)"
 fi
-CLAIMC=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' -d '{}')
+CLAIMC=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' -d '{}')
 C_ID=$(echo "$CLAIMC" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
 C_CLAIM=$(echo "$CLAIMC" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
 if [ "$C_ID" = "$MSG_C" ] && [ -n "$C_CLAIM" ]; then
@@ -324,7 +372,7 @@ else
   bad "T6b chat claim: $(echo "$CLAIMC" | head -c 200)"
 fi
 echo "== T-chat-neg: chat done without text must 400 =="
-c=$(curl -s -m 20 -o /tmp/atcn -w '%{http_code}' -X POST "$BASE/functions/v1/submit_result"   -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json'   -d "{\"message_id\":\"$MSG_C\",\"claim_id\":\"$C_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[],\"notes\":null,\"text\":\"   \"},\"error\":null}")
+c=$(curl -s -m 20 -o /tmp/atcn -w '%{http_code}' -X POST "$BASE/functions/v1/submit_result"   -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json'   -d "{\"message_id\":\"$MSG_C\",\"claim_id\":\"$C_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[],\"notes\":null,\"text\":\"   \"},\"error\":null}")
 [ "$c" = "400" ] && ok "T-chat-neg chat done w/o text -> 400" || bad "T-chat-neg got $c: $(head -c 200 /tmp/atcn)"
 
 RESC_BODY=".scratch/acceptance-res-body.json"
@@ -344,7 +392,7 @@ print(json.dumps({
 }))
 PYEOF
 RESC=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
-  -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' -d @"$RESC_BODY")
+  -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' -d @"$RESC_BODY")
 rm -f "$RESC_BODY"
 COK=$(echo "$RESC" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
 CT=$(curl -s -m 20 "$BASE/rest/v1/relay_results?select=output&message_id=eq.$MSG_C" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | python -X utf8 -I -c '
@@ -358,38 +406,38 @@ echo "$CT" | grep -q "UTF8_EXACT" && [ "$COK" = "True" ] && ok "T6c chat result 
 echo "== T7: invalid action must be 400 =="
 c=$(curl -s -m 20 -o /tmp/at7 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"audio\",\"params\":{\"prompt\":\"x\"}}")
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"audio\",\"params\":{\"prompt\":\"x\"}}")
 [ "$c" = "400" ] && ok "T7 action 'audio' -> 400" || bad "T7 got $c: $(head -c 200 /tmp/at7)"
 
 echo "== T8: dropbox_paths outside new prefix must be 400 =="
 c=$(curl -s -m 20 -o /tmp/at8 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_result" \
-  -H "x-relay-token: $RELAY_TOKEN" -H 'content-type: application/json' \
+  -H "x-relay-token: $LG_TOKEN" -H 'content-type: application/json' \
   -d "{\"message_id\":\"$MSG_C\",\"claim_id\":\"$C_CLAIM\",\"status\":\"done\",\"output\":{\"dropbox_paths\":[\"/MuseRelay/outputs/old/old.png\"],\"notes\":null,\"text\":\"x\"},\"error\":null}")
 [ "$c" = "400" ] && ok "T8 old prefix /MuseRelay/outputs/ -> 400" || bad "T8 got $c: $(head -c 200 /tmp/at8)"
 
 echo "== T9: thread_id accepted + bad thread_id rejected =="
 SUBT=$(curl -s -m 20 -o /tmp/at9a -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t9 thread\",\"thread_id\":\"cat-climbing-01\",\"reference_storage_paths\":[]}}")
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t9 thread\",\"thread_id\":\"cat-climbing-01\",\"reference_storage_paths\":[]}}")
 MSG_T=$(cat /tmp/at9a | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 [ "$SUBT" = "201" ] && [ -n "$MSG_T" ] && ok "T9a submit with thread_id -> 201" || bad "T9a got $SUBC: $(head -c 200 /tmp/at9a)"
 c=$(curl -s -m 20 -o /tmp/at9b -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
-  -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t9 bad\",\"thread_id\":\"bad id!!\",\"reference_storage_paths\":[]}}")
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t9 bad\",\"thread_id\":\"bad id!!\",\"reference_storage_paths\":[]}}")
 [ "$c" = "400" ] && ok "T9b bad thread_id -> 400" || bad "T9b got $c: $(head -c 200 /tmp/at9b)"
 
 echo "== T10: recipient mismatch -> 403 / match -> 201 =="
 c=$(curl -s -m 20 -o /tmp/at10a -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message"   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json'   -d '{"recipient":"00000000-0000-0000-0000-000000000000","action":"chat","params":{"prompt":"[ACCEPTANCE] t10 mismatch"}}')
 [ "$c" = "403" ] && ok "T10a wrong recipient -> 403" || bad "T10a got $c: $(head -c 200 /tmp/at10a)"
 T10B=".scratch/acceptance-t10b.json"
-printf '{"recipient":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] t10 match"}}' "$RELAY_RECIPIENT_ID" > "$T10B"
+printf '{"recipient":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] t10 match"}}' "$LG_REC" > "$T10B"
 SUBR=$(curl -s -m 20 -o /tmp/at10b -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message"   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json'   -d @"$T10B")
 rm -f "$T10B"
 MSG_R=$(cat /tmp/at10b | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 [ "$SUBR" = "201" ] && [ -n "$MSG_R" ] && ok "T10b correct recipient -> 201" || bad "T10b got $SUBR: $(head -c 200 /tmp/at10b)"
 
 echo "== T11: rich chat (document/csv/thread) -> 201 =="
-SUBD=$(curl -s -m 20 -o /tmp/at11 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message"   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json'   -d "{\"recipient\":\"$RELAY_RECIPIENT_ID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] t11 doc\",\"thread_id\":\"t11-doc\",\"resource_type\":\"document\",\"output_format\":\"csv\"}}")
+SUBD=$(curl -s -m 20 -o /tmp/at11 -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message"   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json'   -d "{\"recipient\":\"$LG_REC\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] t11 doc\",\"thread_id\":\"t11-doc\",\"resource_type\":\"document\",\"output_format\":\"csv\"}}")
 MSG_D=$(cat /tmp/at11 | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
 [ "$SUBD" = "201" ] && [ -n "$MSG_D" ] && ok "T11 rich chat -> 201" || bad "T11 got $SUBD: $(head -c 200 /tmp/at11)"
 
@@ -402,6 +450,7 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?id=eq.$MSG_B" -H "apikey: 
 [ -n "${MSG_D:-}" ] && curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?id=eq.$MSG_D" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" > /dev/null
 # Final sweep: delete ANY leftover acceptance rows (Nyx daemon is LIVE and claims leftovers as real work).
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?params->>prompt=like.%5BACCEPTANCE%5D*" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=eq.$LG_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 LEFT=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
 echo "relay_messages now: $LEFT"
 

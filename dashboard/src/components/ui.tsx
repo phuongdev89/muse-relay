@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 // ---- toast -----------------------------------------------------------------
 
@@ -39,10 +39,11 @@ const CHIP_LABEL: Record<string, string> = {
   done: "xong",
   failed: "lỗi",
   expired: "hết hạn",
+  idle: "sẵn sàng",
 };
 
-export function Chip({ state }: { state: string }) {
-  return <span className={`chip ${state}`}>{CHIP_LABEL[state] ?? state}</span>;
+export function Chip({ state, label }: { state: string; label?: string }) {
+  return <span className={`chip ${state}`}>{label ?? CHIP_LABEL[state] ?? state}</span>;
 }
 
 // ---- modal -----------------------------------------------------------------
@@ -57,6 +58,17 @@ export function Modal(props: {
   wide?: boolean;
 }) {
   const { open, dismissable = true, onClose, labelledBy, children, wide } = props;
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => {
+      prevFocus?.focus?.();
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open || !dismissable) return;
     const onKey = (e: KeyboardEvent) => {
@@ -68,7 +80,13 @@ export function Modal(props: {
   if (!open) return null;
   return (
     <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={labelledBy}>
-      <div className={`dialog fade${wide ? " dialog-wide" : ""}`}>{children}</div>
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`dialog fade${wide ? " dialog-wide" : ""}`}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -101,11 +119,13 @@ export function setButtonBusy(
   };
 }
 
-export async function copyText(text: string, note?: string) {
+export async function copyText(text: string, note?: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
     toast(note ?? "Đã copy");
+    return true;
   } catch {
     toast("Không copy được");
+    return false;
   }
 }

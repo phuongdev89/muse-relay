@@ -154,6 +154,7 @@ export async function sha256Hex(value: string): Promise<string> {
 }
 
 export interface ResolvedMuse {
+  id: string;
   recipient: string;
   name: string;
   dropboxRoot: string;
@@ -171,11 +172,12 @@ export async function resolveMuse(req: Request): Promise<ResolvedMuse | null> {
   const tokenHash = await sha256Hex(presented);
   const { data: row, error: lookupError } = await adminClient()
     .from("relay_muses")
-    .select("recipient, name, dropbox_root")
+    .select("id, recipient, name, dropbox_root")
     .eq("token_hash", tokenHash)
     .maybeSingle();
   if (lookupError || !row) return null;
   return {
+    id: String(row.id),
     recipient: String(row.recipient).toLowerCase(),
     name: String(row.name),
     dropboxRoot: String(row.dropbox_root),

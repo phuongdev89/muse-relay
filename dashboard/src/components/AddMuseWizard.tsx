@@ -70,7 +70,12 @@ export function AddMuseWizard(props: {
       }),
     });
     setStep("done");
-    props.onCreated({ recipient, name: trimmedName, created_at: new Date().toISOString() });
+    props.onCreated({
+      recipient,
+      name: trimmedName,
+      dropbox_root: derivedRoot,
+      created_at: new Date().toISOString(),
+    });
   }
 
   return (
@@ -128,8 +133,8 @@ export function AddMuseWizard(props: {
           <p className="lead">
             Đã đăng ký. Làm theo đúng thứ tự: <b>(1)</b> copy token ở khung trên, dán vào{" "}
             <b>Secure Vault</b> của Muse — token không bao giờ gửi qua chat; <b>(2)</b> copy khung
-            hướng dẫn bên dưới và gửi cho Muse qua chat của nó. Sau khi bấm Xong, muốn có token
-            khác phải xoá Muse này và tạo lại.
+            hướng dẫn bên dưới và gửi cho Muse qua chat của nó. Token chỉ hiện lần này; nếu cần đổi
+            token sau khi đóng, dùng <b>Quản lý ▾ → Rotate token</b>.
           </p>
           <TokenPanel token={result?.token ?? ""} />
           <label htmlFor="w-contract" style={{ marginTop: "var(--space-md)" }}>

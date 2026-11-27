@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import { resourceIcon, fileName, resourceLabel } from "../lib/dropbox";
+import { useState, type ReactNode } from "react";
+import { fileName, resourceLabel } from "../lib/dropbox";
+import { CheckIcon, CopyIcon, LinkIcon, ResourceKindIcon } from "./Icons";
 import { copyText } from "./ui";
 
 // ---- status ticks (owner-side message states) ------------------------------
@@ -9,15 +10,15 @@ export function Ticks({ state }: { state: string }) {
   if (state === "done") {
     return (
       <svg className="ticks ticks-done" width="17" height="12" viewBox="0 0 20 12" fill="none" aria-label="đã xong">
-        <path d="M1 6.5l3.5 3.5L11 2.5" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M8.5 6.5L12 10l6.5-7.5" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
+        <path d="M1 6.5l3.5 3.5L11 2.5" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M8.5 6.5L12 10l6.5-7.5" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
       </svg>
     );
   }
   if (state === "failed") {
     return (
       <svg className="ticks ticks-failed" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="thất bại">
-        <path d="M2 2l8 8M10 2l-8 8" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" />
+        <path d="M2 2l8 8M10 2l-8 8" stroke={stroke} strokeWidth="1.75" strokeLinecap="round" />
       </svg>
     );
   }
@@ -27,14 +28,14 @@ export function Ticks({ state }: { state: string }) {
   if (state === "expired") {
     return (
       <svg className="ticks ticks-expired" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="hết hạn">
-        <circle cx="6" cy="6" r="4.6" stroke={stroke} strokeWidth="1.4" />
-        <path d="M6 3.6V6l1.8 1.2" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" />
+        <circle cx="6" cy="6" r="4.6" stroke={stroke} strokeWidth="1.5" />
+        <path d="M6 3.6V6l1.8 1.2" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     );
   }
   return (
     <svg className="ticks ticks-pending" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="đã gửi, chờ nhận">
-      <circle cx="6" cy="6" r="4.6" stroke={stroke} strokeWidth="1.4" strokeDasharray="2.2 1.8" />
+      <circle cx="6" cy="6" r="4.6" stroke={stroke} strokeWidth="1.5" strokeDasharray="2.2 1.8" />
     </svg>
   );
 }
@@ -52,12 +53,25 @@ export interface BubbleProps {
   /** extra status sentence under the body ("đang chờ Muse nhận việc…") */
   statusText?: string | null;
   failed?: boolean;
+  /** text copied when user clicks the hover/focus-within copy action */
+  copyValue?: string;
   children?: ReactNode;
   /** muted params line under owner bubbles */
   footer?: ReactNode;
 }
 
 export function MessageBubble(p: BubbleProps) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (!p.copyValue) return;
+    const ok = await copyText(p.copyValue, "Đã copy nội dung");
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    }
+  }
+
   return (
     <div className={`bubble ${p.side}${p.failed ? " failed" : ""}`}>
       <div className="meta">
@@ -73,6 +87,18 @@ export function MessageBubble(p: BubbleProps) {
         {p.side === "owner" && p.state ? <Ticks state={p.state} /> : null}
         {p.timeLabel && <span className="when">{p.timeLabel}</span>}
         {p.side === "muse" && p.state ? <ChipOf state={p.state} /> : null}
+        {p.copyValue ? (
+          <button
+            type="button"
+            className={`bubble-copy${copied ? " copied" : ""}`}
+            onClick={handleCopy}
+            title="Copy nội dung tin nhắn"
+            aria-label="Copy nội dung tin nhắn"
+          >
+            {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <span>{copied ? "Đã copy" : "Copy"}</span>
+          </button>
+        ) : null}
       </div>
       {p.children}
       {p.footer && <div className="paramsline">{p.footer}</div>}
@@ -83,7 +109,15 @@ export function MessageBubble(p: BubbleProps) {
 
 function ChipOf({ state }: { state: string }) {
   const label =
-    state === "pending" ? "chờ" : state === "processing" ? "đang viết" : state === "failed" ? "lỗi" : "xong";
+    state === "pending"
+      ? "chờ"
+      : state === "processing"
+        ? "đang viết"
+        : state === "failed"
+          ? "lỗi"
+          : state === "expired"
+            ? "hết hạn"
+            : "xong";
   return <span className={`chip ${state}`}>{label}</span>;
 }
 
@@ -95,7 +129,9 @@ export function ResourceCards({ paths }: { paths: string[] }) {
     <div className="res-list">
       {paths.map((path) => (
         <div key={path} className="res-card">
-          <span className="res-icon" aria-hidden="true">{resourceIcon(path)}</span>
+          <span className="res-icon" aria-hidden="true">
+            <ResourceKindIcon path={path} size={18} />
+          </span>
           <span className="res-info">
             <span className="res-name">{fileName(path)}</span>
             <span className="res-kind">{resourceLabel(path)}</span>
@@ -103,11 +139,12 @@ export function ResourceCards({ paths }: { paths: string[] }) {
           </span>
           <button
             type="button"
-            className="btn-quiet"
+            className="btn-quiet btn-icon-copy"
             title="Copy đường dẫn Dropbox"
+            aria-label={`Copy đường dẫn ${fileName(path)}`}
             onClick={() => copyText(path, "Đã copy đường dẫn")}
           >
-            copy
+            <CopyIcon size={13} />
           </button>
         </div>
       ))}
@@ -123,12 +160,13 @@ export function UrlPreviews({ text }: { text: string }) {
     <div className="url-previews">
       {urls.map((u) =>
         /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(u) ? (
-          <a key={u} href={u} target="_blank" rel="noreferrer" className="url-img">
+          <a key={u} href={u} target="_blank" rel="noreferrer noopener" className="url-img">
             <img src={u} alt="preview" loading="lazy" />
           </a>
         ) : (
-          <a key={u} href={u} target="_blank" rel="noreferrer" className="url-link">
-            🔗 {u.length > 64 ? u.slice(0, 64) + "…" : u}
+          <a key={u} href={u} target="_blank" rel="noreferrer noopener" className="url-link">
+            <LinkIcon size={12} />
+            <span>{u.length > 64 ? u.slice(0, 64) + "…" : u}</span>
           </a>
         ),
       )}
