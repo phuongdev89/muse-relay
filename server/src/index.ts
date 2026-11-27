@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { requireOwnerAuth } from "./auth.js";
 import {
   handleDropboxTempLink,
+  handleDropboxThumb,
   handleDropboxUpload,
   isDropboxConfigured,
 } from "./dropbox.js";
@@ -42,6 +43,13 @@ app.post(
   requireOwnerAuth,
   jsonParser,
   handleDropboxTempLink,
+);
+
+app.post(
+  "/api/dropbox/thumb",
+  requireOwnerAuth,
+  jsonParser,
+  handleDropboxThumb,
 );
 
 app.post("/api/openai/test", requireOwnerAuth, jsonParser, handleOpenAITest);

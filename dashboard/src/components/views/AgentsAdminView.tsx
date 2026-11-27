@@ -25,7 +25,7 @@ import {
   TrashIcon,
   XIcon,
 } from "../common/Icons";
-import { DeleteDialog, RenameDialog, RotateDialog } from "../modals/MuseManage";
+import { DeleteDialog, EditDialog, RotateDialog } from "../modals/MuseManage";
 import { DeleteOpenAIDialog, OpenAIAgentModal } from "../modals/OpenAIAgentModal";
 import { Chip, copyText } from "../common/ui";
 
@@ -81,7 +81,17 @@ export function AgentsAdminView(props: {
   onRefresh: () => void;
   onAddMuse: () => void;
   onOpenMuseRoom: (recipient: string) => void;
-  onMuseRenamed: (recipient: string, name: string) => void;
+  onMuseUpdated: (
+    recipient: string,
+    patch: {
+      name?: string;
+      email_owner?: string | null;
+      dropbox_root?: string;
+      cap_chat?: boolean;
+      cap_image?: boolean;
+      cap_video?: boolean;
+    },
+  ) => void;
   onMuseRotated?: () => void;
   onMuseDeleted: (recipient: string) => void;
   onOpenAIChanged: () => void;
@@ -94,7 +104,7 @@ export function AgentsAdminView(props: {
   // Muse dialogs
   const [museAction, setMuseAction] = useState<{
     muse: Muse;
-    kind: "rename" | "rotate" | "delete";
+    kind: "edit" | "rotate" | "delete";
   } | null>(null);
 
   // OpenAI dialogs
@@ -498,6 +508,13 @@ export function AgentsAdminView(props: {
                           </div>
 
                           <div className="agent-meta-pair">
+                            <span className="agent-meta-k">{t("agents.metaEmail")}</span>
+                            <span className="agent-meta-v" title={m.email_owner ?? undefined}>
+                              {m.email_owner || t("common.none")}
+                            </span>
+                          </div>
+
+                          <div className="agent-meta-pair">
                             <span className="agent-meta-k">{t("agents.metaUuid")}</span>
                             <span className="agent-meta-copy-wrap">
                               <code className="agent-meta-code" title={m.recipient}>
@@ -525,25 +542,17 @@ export function AgentsAdminView(props: {
                             </span>
                           </div>
 
-                          <div className="agent-meta-pair">
-                            <span className="agent-meta-k">
-                              {m.last_result_at
-                                ? t("agents.metaLastResult")
-                                : t("agents.metaEmail")}
-                            </span>
-                            <span
-                              className="agent-meta-v"
-                              title={
-                                m.last_result_at
-                                  ? fmtTime(m.last_result_at, lang)
-                                  : m.email_owner ?? undefined
-                              }
-                            >
-                              {m.last_result_at
-                                ? fmtRelativeAge(m.last_result_at, lang)
-                                : m.email_owner || t("common.none")}
-                            </span>
-                          </div>
+                          {m.last_result_at && (
+                            <div className="agent-meta-pair">
+                              <span className="agent-meta-k">{t("agents.metaLastResult")}</span>
+                              <span
+                                className="agent-meta-v"
+                                title={fmtTime(m.last_result_at, lang)}
+                              >
+                                {fmtRelativeAge(m.last_result_at, lang)}
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         <div className="agent-card-actions">
@@ -558,10 +567,10 @@ export function AgentsAdminView(props: {
                           <button
                             type="button"
                             className="btn-ghost btn-sm"
-                            onClick={() => setMuseAction({ muse: m, kind: "rename" })}
+                            onClick={() => setMuseAction({ muse: m, kind: "edit" })}
                           >
                             <EditIcon size={13} />
-                            <span>{t("agents.rename")}</span>
+                            <span>{t("agents.edit")}</span>
                           </button>
                           <button
                             type="button"
@@ -730,12 +739,12 @@ export function AgentsAdminView(props: {
         )}
       </div>
 
-      {museAction?.kind === "rename" && (
-        <RenameDialog
+      {museAction?.kind === "edit" && (
+        <EditDialog
           muse={museAction.muse}
           onClose={() => setMuseAction(null)}
-          onRenamed={(recipient, name) => {
-            props.onMuseRenamed(recipient, name);
+          onUpdated={(recipient, patch) => {
+            props.onMuseUpdated(recipient, patch);
             setMuseAction(null);
           }}
         />

@@ -25,6 +25,8 @@ export function Composer(props: {
   onSend: (action: ActionMode, params: MessageParams, files: File[]) => void | Promise<unknown>;
   /** image/video modes are disabled in group / openai / mixed rooms */
   mediaModes?: boolean;
+  /** which action tabs to show (muse caps gate this in the direct channel) */
+  allowedModes?: ActionMode[];
   /** hides the manual thread_id field when a conversation locks thread_id */
   hideThreadInput?: boolean;
   /** allows attaching up to 4 files (<= 50 MB) to upload to Muse's Dropbox */
@@ -57,6 +59,17 @@ export function Composer(props: {
   const [outFmt, setOutFmt] = useState("auto");
   const [optsOpen, setOptsOpen] = useState(false);
   const [error, setError] = useState("");
+
+  // If the allowed set changes under an open composer (caps edited elsewhere),
+  // fall back to the first allowed tab instead of sending a gated action.
+  const allowedModes = props.allowedModes;
+  useEffect(() => {
+    if (!allowedModes || allowedModes.length === 0) return;
+    if (!allowedModes.includes(mode)) {
+      setMode(allowedModes[0]);
+      setError("");
+    }
+  }, [allowedModes, mode]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -188,11 +201,14 @@ export function Composer(props: {
   const charState =
     charCount > MAX_PROMPT_LEN ? "over" : charCount > 3600 ? "warn" : "";
 
-  const modeTabs: { value: ActionMode; label: string; icon: JSX.Element }[] = [
+  const allModeTabs: { value: ActionMode; label: string; icon: JSX.Element }[] = [
     { value: "chat", label: t("composer.tabChat"), icon: <MessageIcon size={13} /> },
     { value: "image", label: t("composer.tabImage"), icon: <ImageIcon size={13} /> },
     { value: "video", label: t("composer.tabVideo"), icon: <VideoIcon size={13} /> },
   ];
+  const modeTabs = allModeTabs.filter(
+    (tab) => !allowedModes || allowedModes.includes(tab.value),
+  );
 
   const activeThread = !hideThreadInput ? thread.trim() : "";
 
@@ -371,7 +387,7 @@ export function Composer(props: {
             {charCount} / {MAX_PROMPT_LEN}
           </span>
 
-          {mediaModes && (
+          {mediaModes && modeTabs.length > 0 && (
             <div className="mode-tabs" role="tablist" aria-label={t("composer.modeAria")}>
               {modeTabs.map((tab) => (
                 <button
@@ -380,6 +396,7 @@ export function Composer(props: {
                   role="tab"
                   disabled={disabled}
                   aria-selected={mode === tab.value}
+                  aria-label={tab.label}
                   className={`mode-tab${mode === tab.value ? " on" : ""}`}
                   onClick={() => switchMode(tab.value)}
                 >
@@ -396,6 +413,7 @@ export function Composer(props: {
               disabled={disabled}
               className={`composer-opt-btn${optsOpen && !disabled ? " on" : ""}`}
               aria-expanded={optsOpen && !disabled}
+              aria-label={t("composer.options")}
               onClick={() => {
                 if (!disabled) setOptsOpen((v) => !v);
               }}
@@ -413,6 +431,7 @@ export function Composer(props: {
             id="composer-send"
             type="button"
             className="btn btn-send"
+            aria-label={t("composer.send")}
             disabled={disabled}
             onClick={submit}
           >

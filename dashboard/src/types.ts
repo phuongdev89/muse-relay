@@ -10,6 +10,10 @@ export interface Muse {
   name: string;
   dropbox_root: string;
   email_owner?: string | null;
+  /** direct-channel routing gates (UI-only; see relay_muses cap_* columns) */
+  cap_chat: boolean;
+  cap_image: boolean;
+  cap_video: boolean;
   setup_done: boolean;
   first_connected_at: string | null;
   last_claim_at: string | null;

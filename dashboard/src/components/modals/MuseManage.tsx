@@ -3,12 +3,14 @@ import {
   clearMuseThread,
   deleteMuse,
   randomHex,
-  renameMuse,
   rotateMuseToken,
   sha256Hex,
+  updateMuse,
 } from "../../lib/api";
+import { isValidDropboxRoot, isValidMuseEmail } from "../../lib/dropbox";
 import { useLang } from "../../lib/i18n";
 import type { Muse } from "../../types";
+import { CapsPicker, type MuseCaps } from "../common/CapsPicker";
 import { ChevronDownIcon, EditIcon, KeyIcon, TrashIcon } from "../common/Icons";
 import { TokenPanel } from "../common/TokenPanel";
 import { ErrorMsg, Modal, setButtonBusy, toast } from "../common/ui";
@@ -16,7 +18,7 @@ import { ErrorMsg, Modal, setButtonBusy, toast } from "../common/ui";
 // ---- the ▾ menu in a muse room header --------------------------------------
 
 export function MuseManageMenu(props: {
-  onRename: () => void;
+  onEdit: () => void;
   onRotate: () => void;
   onDelete: () => void;
 }) {
@@ -59,11 +61,11 @@ export function MuseManageMenu(props: {
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              props.onRename();
+              props.onEdit();
             }}
           >
             <EditIcon size={14} />
-            <span>{t("mm.rename")}</span>
+            <span>{t("mm.edit")}</span>
           </button>
           <button
             type="button"
@@ -96,40 +98,91 @@ export function MuseManageMenu(props: {
 
 // ---- dialogs ----------------------------------------------------------------
 
-export function RenameDialog(props: {
+// Replaces the old rename-only dialog: the same "edit" entry point now also
+// updates email_owner, dropbox_root and the routing caps. All of them live on
+// relay_muses and go through one updateMuse() call.
+export function EditDialog(props: {
   muse: Muse;
   onClose: () => void;
-  onRenamed: (recipient: string, name: string) => void;
+  onUpdated: (
+    recipient: string,
+    patch: {
+      name?: string;
+      email_owner?: string | null;
+      dropbox_root?: string;
+      cap_chat?: boolean;
+      cap_image?: boolean;
+      cap_video?: boolean;
+    },
+  ) => void;
 }) {
   const [name, setName] = useState(props.muse.name);
+  const [email, setEmail] = useState(props.muse.email_owner ?? "");
+  const [root, setRoot] = useState(props.muse.dropbox_root);
+  const [caps, setCaps] = useState<MuseCaps>({
+    cap_chat: props.muse.cap_chat,
+    cap_image: props.muse.cap_image,
+    cap_video: props.muse.cap_video,
+  });
   const [error, setError] = useState("");
   const { t } = useLang();
 
   async function save() {
-    const trimmed = name.trim();
-    if (trimmed.length < 1 || trimmed.length > 64) {
+    const trimmedName = name.trim();
+    if (trimmedName.length < 1 || trimmedName.length > 64) {
       setError(t("mm.nameErr"));
       return;
     }
-    if (trimmed === props.muse.name) {
+    const trimmedEmail = email.trim().toLowerCase();
+    if (trimmedEmail && !isValidMuseEmail(trimmedEmail)) {
+      setError(t("mm.emailErr"));
+      return;
+    }
+    const trimmedRoot = root.trim();
+    if (!isValidDropboxRoot(trimmedRoot)) {
+      setError(t("mm.rootErr"));
+      return;
+    }
+    if (!caps.cap_chat && !caps.cap_image && !caps.cap_video) {
+      setError(t("mm.capsErr"));
+      return;
+    }
+    const patch: {
+      name?: string;
+      email_owner?: string | null;
+      dropbox_root?: string;
+      cap_chat?: boolean;
+      cap_image?: boolean;
+      cap_video?: boolean;
+    } = {};
+    if (trimmedName !== props.muse.name) patch.name = trimmedName;
+    if (trimmedEmail !== (props.muse.email_owner ?? "")) {
+      patch.email_owner = trimmedEmail || null;
+    }
+    if (trimmedRoot !== props.muse.dropbox_root) patch.dropbox_root = trimmedRoot;
+    for (const key of ["cap_chat", "cap_image", "cap_video"] as const) {
+      if (caps[key] !== props.muse[key]) patch[key] = caps[key];
+    }
+    if (Object.keys(patch).length === 0) {
       props.onClose();
       return;
     }
-    const err = await renameMuse(props.muse.recipient, trimmed);
+    const err = await updateMuse(props.muse.recipient, patch);
     if (err) {
       setError(t("mm.saveErr", { err }));
       return;
     }
-    props.onRenamed(props.muse.recipient, trimmed);
+    props.onUpdated(props.muse.recipient, patch);
     props.onClose();
   }
+
   return (
-    <Modal open onClose={props.onClose} labelledBy="rn-title">
-      <h2 id="rn-title">{t("mm.renameTitle")}</h2>
-      <p className="lead">{t("mm.renameLead")}</p>
-      <label htmlFor="rn-name">{t("mm.renameLabel")}</label>
+    <Modal open onClose={props.onClose} labelledBy="ed-title">
+      <h2 id="ed-title">{t("mm.editTitle", { name: props.muse.name })}</h2>
+      <p className="lead">{t("mm.editLead")}</p>
+      <label htmlFor="ed-name">{t("mm.nameLabel")}</label>
       <input
-        id="rn-name"
+        id="ed-name"
         value={name}
         maxLength={64}
         onChange={(e) => setName(e.target.value)}
@@ -137,6 +190,42 @@ export function RenameDialog(props: {
           if (e.key === "Enter") save();
         }}
       />
+      <label htmlFor="ed-email" style={{ marginTop: "var(--space-sm)" }}>
+        {t("mm.emailLabel")}
+      </label>
+      <input
+        id="ed-email"
+        type="email"
+        value={email}
+        placeholder={t("wiz.emailPlaceholder")}
+        onChange={(e) => setEmail(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+        }}
+      />
+      <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
+        {t("mm.emailHint")}
+      </p>
+      <label htmlFor="ed-root" style={{ marginTop: "var(--space-sm)" }}>
+        {t("mm.dropboxLabel")}
+      </label>
+      <input
+        id="ed-root"
+        value={root}
+        maxLength={256}
+        onChange={(e) => setRoot(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+        }}
+      />
+      <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
+        {t("mm.rootHint")}
+      </p>
+      <label style={{ marginTop: "var(--space-sm)" }}>{t("mm.capsLabel")}</label>
+      <CapsPicker caps={caps} onChange={setCaps} />
+      <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
+        {t("mm.capsHint")}
+      </p>
       <ErrorMsg text={error} />
       <div className="actions">
         <button className="btn" onClick={save}>{t("common.save")}</button>

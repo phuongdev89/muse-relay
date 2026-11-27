@@ -28,7 +28,7 @@ import { LoginView } from "./components/layout/LoginView";
 import {
   ClearMuseHistoryDialog,
   DeleteDialog,
-  RenameDialog,
+  EditDialog,
   RotateDialog,
 } from "./components/modals/MuseManage";
 import { MuseRoom } from "./components/views/MuseRoom";
@@ -72,7 +72,7 @@ export default function App() {
     project: Project | null;
   }>({ open: false, project: null });
   const [newConvProject, setNewConvProject] = useState<Project | null>(null);
-  const [museDialog, setMuseDialog] = useState<"rename" | "rotate" | "delete" | "clear" | null>(
+  const [museDialog, setMuseDialog] = useState<"edit" | "rotate" | "delete" | "clear" | null>(
     null,
   );
   const [museRefreshTick, setMuseRefreshTick] = useState(0);
@@ -248,10 +248,24 @@ export default function App() {
     void loadFleet();
   }
 
-  function onMuseRenamed(recipient: string, name: string) {
-    setMuses((cur) => cur.map((m) => (m.recipient === recipient ? { ...m, name } : m)));
-    toast(t("app.toastRenamed"));
-    void loadProjectAgents();
+  function onMuseUpdated(
+    recipient: string,
+    patch: {
+      name?: string;
+      email_owner?: string | null;
+      dropbox_root?: string;
+      cap_chat?: boolean;
+      cap_image?: boolean;
+      cap_video?: boolean;
+    },
+  ) {
+    setMuses((cur) => cur.map((m) => (m.recipient === recipient ? { ...m, ...patch } : m)));
+    if (patch.name && Object.keys(patch).length === 1) {
+      toast(t("app.toastRenamed"));
+    } else {
+      toast(t("app.toastMuseUpdated"));
+    }
+    if (patch.name) void loadProjectAgents();
   }
 
   function onMuseDeleted(recipient: string) {
@@ -423,7 +437,7 @@ export default function App() {
                 }}
                 onAddMuse={() => setShowMuseWizard(true)}
                 onOpenMuseRoom={(recipient) => switchRoom({ kind: "muse", recipient })}
-                onMuseRenamed={onMuseRenamed}
+                onMuseUpdated={onMuseUpdated}
                 onMuseRotated={() => void loadMuses()}
                 onMuseDeleted={onMuseDeleted}
                 onOpenAIChanged={onOpenAIChanged}
@@ -533,11 +547,11 @@ export default function App() {
         </div>
       </div>
 
-      {activeMuse && museDialog === "rename" && (
-        <RenameDialog
+      {activeMuse && museDialog === "edit" && (
+        <EditDialog
           muse={activeMuse}
           onClose={() => setMuseDialog(null)}
-          onRenamed={onMuseRenamed}
+          onUpdated={onMuseUpdated}
         />
       )}
       {activeMuse && museDialog === "rotate" && (

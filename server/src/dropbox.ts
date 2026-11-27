@@ -281,6 +281,96 @@ export async function handleDropboxTempLink(
 }
 
 /**
+ * `POST /api/dropbox/thumb`
+ * Returns a small Dropbox-generated JPEG preview for blur-up placeholders.
+ * Relay paths are unique (timestamped names), so thumbnails are cached
+ * in-memory and marked immutable for the browser.
+ */
+const THUMB_CACHE_MAX = 500;
+const thumbCache = new Map<string, Buffer>();
+
+export async function handleDropboxThumb(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const pathValue = validateDropboxPath(
+    (req.body as { path?: unknown } | undefined)?.path,
+  );
+  if (!pathValue) {
+    res.status(400).json({ error: "invalid_path" });
+    return;
+  }
+
+  if (!isDropboxConfigured()) {
+    res.status(503).json({ error: "dropbox_not_configured" });
+    return;
+  }
+
+  const cached = thumbCache.get(pathValue);
+  if (cached) {
+    // Refresh LRU position.
+    thumbCache.delete(pathValue);
+    thumbCache.set(pathValue, cached);
+    res
+      .type("image/jpeg")
+      .set("Cache-Control", "private, max-age=604800, immutable")
+      .send(cached);
+    return;
+  }
+
+  try {
+    const dbxRes = await callDropboxWithRetry((token) =>
+      fetch("https://content.dropboxapi.com/2/files/get_thumbnail_v2", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/octet-stream",
+          "Dropbox-API-Arg": dropboxApiArgHeader({
+            resource: { ".tag": "path", path: pathValue },
+            format: "jpeg",
+            size: "w128h128",
+            mode: "strict",
+          }),
+        },
+        signal: AbortSignal.timeout(20_000),
+      }),
+    );
+
+    if (!dbxRes.ok) {
+      const summary = parseDropboxErrorSummary(await dbxRes.text());
+      // Unsupported types (docs, audio...) legitimately have no thumbnail.
+      const status = summary.includes("not_found") || summary.includes("unsupported")
+        ? 404
+        : 502;
+      res.status(status).json({ error: summary || "dropbox_thumb_failed" });
+      return;
+    }
+
+    const buf = Buffer.from(await dbxRes.arrayBuffer());
+    if (buf.length === 0) {
+      res.status(502).json({ error: "dropbox_invalid_response" });
+      return;
+    }
+    if (thumbCache.size >= THUMB_CACHE_MAX) {
+      const oldest = thumbCache.keys().next().value;
+      if (oldest !== undefined) thumbCache.delete(oldest);
+    }
+    thumbCache.set(pathValue, buf);
+
+    res
+      .type("image/jpeg")
+      .set("Cache-Control", "private, max-age=604800, immutable")
+      .send(buf);
+  } catch (err) {
+    const code =
+      err instanceof Error && err.message === "dropbox_not_configured"
+        ? "dropbox_not_configured"
+        : "dropbox_thumb_failed";
+    res.status(code === "dropbox_not_configured" ? 503 : 502).json({ error: code });
+  }
+}
+
+/**
  * `POST /api/dropbox/upload`
  * Streams a raw `application/octet-stream` body into the Muse's Dropbox root.
  */

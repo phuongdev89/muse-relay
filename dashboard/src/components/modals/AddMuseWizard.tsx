@@ -5,6 +5,7 @@ import { useLang } from "../../lib/i18n";
 import { buildInstructions } from "../../lib/instructions";
 import { db } from "../../lib/supabase";
 import type { Muse } from "../../types";
+import { CapsPicker, type MuseCaps } from "../common/CapsPicker";
 import { TokenPanel } from "../common/TokenPanel";
 import { copyText, ErrorMsg, Modal, setButtonBusy } from "../common/ui";
 
@@ -20,6 +21,11 @@ export function AddMuseWizard(props: {
   const [step, setStep] = useState<"form" | "done">("form");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [caps, setCaps] = useState<MuseCaps>({
+    cap_chat: true,
+    cap_image: true,
+    cap_video: true,
+  });
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ recipient: string; token: string; instructions: string } | null>(null);
 
@@ -36,6 +42,10 @@ export function AddMuseWizard(props: {
     const derivedRoot = emailToRoot(email);
     if (!derivedRoot || derivedRoot.length > 256) {
       setError(t("wiz.emailErr"));
+      return;
+    }
+    if (!caps.cap_chat && !caps.cap_image && !caps.cap_video) {
+      setError(t("wiz.capsErr"));
       return;
     }
     const btn = document.getElementById("wiz-create") as HTMLButtonElement | null;
@@ -58,6 +68,7 @@ export function AddMuseWizard(props: {
       token_hash: tokenHash,
       dropbox_root: derivedRoot,
       email_owner: trimmedEmail,
+      ...caps,
     });
     undo();
     if (err) {
@@ -79,6 +90,7 @@ export function AddMuseWizard(props: {
       name: trimmedName,
       dropbox_root: derivedRoot,
       email_owner: trimmedEmail,
+      ...caps,
       setup_done: false,
       first_connected_at: null,
       last_claim_at: null,
@@ -127,6 +139,11 @@ export function AddMuseWizard(props: {
           <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
             {t("wiz.rootHintPrefix")} <code className="path">{rootPreview}</code>{" "}
             {t("wiz.rootHintSuffix")}
+          </p>
+          <label style={{ marginTop: "var(--space-sm)" }}>{t("wiz.capsLabel")}</label>
+          <CapsPicker caps={caps} onChange={setCaps} />
+          <p className="hint" style={{ marginTop: "var(--space-3xs)" }}>
+            {t("wiz.capsHint")}
           </p>
           <ErrorMsg text={error} />
           <div className="actions">

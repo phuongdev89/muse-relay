@@ -13,6 +13,21 @@ export function emailToRoot(email: string): string | null {
   return EMAIL_RE.test(e) ? `/${e}/` : null;
 }
 
+export function isValidMuseEmail(email: string): boolean {
+  return EMAIL_RE.test(email.trim().toLowerCase());
+}
+
+/** Mirror of the CHECK constraint on relay_muses.dropbox_root. */
+export function isValidDropboxRoot(root: string): boolean {
+  return (
+    root.startsWith("/") &&
+    root.endsWith("/") &&
+    root.length > 1 &&
+    root.length <= 256 &&
+    !root.includes("..")
+  );
+}
+
 export type ResourceKind =
   | "image"
   | "video"
@@ -59,6 +74,12 @@ export function resourceLabel(path: string, lang: Lang = getStoredLang()): strin
 /** Last path segment, for card titles. */
 export function fileName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+/** `https://www.dropbox.com/home/<segment>/<segment>` with each segment URL-encoded. */
+export function dropboxWebUrl(path: string): string {
+  const segments = path.split("/").filter(Boolean).map(encodeURIComponent);
+  return `https://www.dropbox.com/home/${segments.join("/")}`;
 }
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
@@ -111,15 +132,11 @@ export function isImageUrl(url: string): boolean {
   }
 }
 
-const MAX_PROMPT_LEN = 4000;
+const DROPBOX_INPUT_NOTE_RE = /\s*\[Dropbox input: [^\]]*\]/g;
 
-export function appendDropboxPathsToPrompt(basePrompt: string, paths: string[]): string {
-  if (paths.length === 0) return basePrompt;
-  const allMentioned = paths.every((p) => basePrompt.includes(p));
-  if (allMentioned) return basePrompt;
-  const note = `\n\n[Dropbox input: ${paths.join(", ")}]`;
-  if (basePrompt.length + note.length <= MAX_PROMPT_LEN) {
-    return `${basePrompt}${note}`;
-  }
-  return basePrompt;
+/** Legacy owner bubbles (and any hand-typed marker) still carry a
+ * `[Dropbox input: ...]` line; the attachment cards render the paths from
+ * params.reference_dropbox_paths, so bubbles display the text without it. */
+export function stripDropboxInputNote(text: string): string {
+  return text.replace(DROPBOX_INPUT_NOTE_RE, "").trimEnd();
 }

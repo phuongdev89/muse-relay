@@ -59,7 +59,7 @@ export async function listMuses(): Promise<{ data: Muse[]; error: string | null 
   const { data, error } = await db
     .from("relay_muses")
     .select(
-      "recipient,name,dropbox_root,email_owner,setup_done,first_connected_at,last_claim_at,last_result_at,token_rotated_at,created_at",
+      "recipient,name,dropbox_root,email_owner,cap_chat,cap_image,cap_video,setup_done,first_connected_at,last_claim_at,last_result_at,token_rotated_at,created_at",
     )
     .order("created_at", { ascending: true });
   return { data: (data ?? []) as Muse[], error: error?.message ?? null };
@@ -72,26 +72,39 @@ export async function createMuse(row: {
   token_hash: string;
   dropbox_root: string;
   email_owner?: string;
+  cap_chat?: boolean;
+  cap_image?: boolean;
+  cap_video?: boolean;
 }): Promise<string | null> {
   const { error } = await db.from("relay_muses").insert(row);
   return error?.message ?? null;
 }
 
-export async function renameMuse(
+export async function updateMuse(
   recipient: string,
-  name: string,
+  patch: {
+    name?: string;
+    email_owner?: string | null;
+    dropbox_root?: string;
+    cap_chat?: boolean;
+    cap_image?: boolean;
+    cap_video?: boolean;
+  },
 ): Promise<string | null> {
+  if (Object.keys(patch).length === 0) return null;
   const { error } = await db
     .from("relay_muses")
-    .update({ name })
+    .update(patch)
     .eq("recipient", recipient);
   if (error) return error.message;
   // Best-effort sync of cached display name in relay_project_agents
-  await db
-    .from("relay_project_agents")
-    .update({ agent_name: name })
-    .eq("agent_kind", "muse")
-    .eq("agent_ref", recipient);
+  if (patch.name) {
+    await db
+      .from("relay_project_agents")
+      .update({ agent_name: patch.name })
+      .eq("agent_kind", "muse")
+      .eq("agent_ref", recipient);
+  }
   return null;
 }
 
@@ -281,6 +294,42 @@ const NOT_CONFIGURED_TTL_MS = 30 * 1000;
 
 const tempLinkCache = new Map<string, { res: DropboxTempLinkResult; expiresAt: number }>();
 const inflightTempLinks = new Map<string, Promise<DropboxTempLinkResult>>();
+
+// ---- dropbox thumbs (blur-up placeholders) ---------------------------------
+
+const thumbCache = new Map<string, { url: string | null; expiresAt: number }>();
+const THUMB_TTL_MS = 60 * 60 * 1000;
+const THUMB_MISS_TTL_MS = 5 * 60 * 1000;
+
+/** Tiny JPEG preview (server-cached, immutable paths). Null = no thumbnail
+ * exists for this path (docs/audio) — cached briefly so cards stop retrying. */
+export async function getDropboxThumb(path: string): Promise<string | null> {
+  const key = path.trim();
+  const cached = thumbCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) return cached.url;
+  try {
+    const jwt = await getOwnerJwt();
+    if (!jwt) return null;
+    const response = await fetch("/api/dropbox/thumb", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path: key }),
+    });
+    if (!response.ok) {
+      thumbCache.set(key, { url: null, expiresAt: Date.now() + THUMB_MISS_TTL_MS });
+      return null;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    thumbCache.set(key, { url, expiresAt: Date.now() + THUMB_TTL_MS });
+    return url;
+  } catch {
+    return null;
+  }
+}
 
 async function readJsonPayload(res: Response): Promise<Record<string, unknown> | null> {
   try {

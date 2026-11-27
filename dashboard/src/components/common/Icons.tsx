@@ -220,6 +220,41 @@ export function ChevronRightIcon({ size = 14, className, style }: IconProps) {
   );
 }
 
+export function ChevronLeftIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
+
+export function PlayIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+      className={className}
+      style={style}
+      aria-hidden
+    >
+      <path d="M8 5.5v13a1 1 0 0 0 1.52.86l10.5-6.5a1 1 0 0 0 0-1.72L9.52 4.64A1 1 0 0 0 8 5.5z" />
+    </svg>
+  );
+}
+
+export function PrinterIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M6 9V3h12v6" />
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <rect x="6" y="14" width="12" height="7" rx="1" />
+    </svg>
+  );
+}
+
 export function SendIcon({ size = 15, className, style }: IconProps) {
   return (
     <svg {...baseProps(size, className, style)}>

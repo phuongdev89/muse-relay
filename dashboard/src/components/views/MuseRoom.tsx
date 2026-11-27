@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { fetchMuseThread, sendMessage, uploadFileToMuseDropbox } from "../../lib/api";
 import {
   MAX_ATTACH_FILES,
-  appendDropboxPathsToPrompt,
   mergeAttachmentFiles,
+  stripDropboxInputNote,
 } from "../../lib/dropbox";
 import { fmtClock, fmtTime, museConnectionInfo, ownerState, paramsSummary } from "../../lib/format";
 import { useLang } from "../../lib/i18n";
@@ -20,6 +20,7 @@ import {
 } from "../common/Icons";
 import { MarkdownBody } from "../chat/MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "../chat/MessageBubble";
+import { capsToAllowedModes } from "../common/CapsPicker";
 import { MuseManageMenu } from "../modals/MuseManage";
 import { Chip, toast } from "../common/ui";
 
@@ -43,13 +44,19 @@ export function MuseRoom(props: {
   muse: Muse;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
-  onOpenAction: (action: "rename" | "rotate" | "delete" | "clear") => void;
+  onOpenAction: (action: "edit" | "rotate" | "delete" | "clear") => void;
   onPathsChange: (paths: string[]) => void;
   onMessageSent?: () => void;
   refreshTrigger?: number;
 }) {
   const { muse, onPathsChange } = props;
   const { lang, t } = useLang();
+
+  // Direct-channel routing gates: only the action tabs the muse's caps allow.
+  const museAllowedModes = useMemo(
+    () => capsToAllowedModes(muse),
+    [muse.cap_chat, muse.cap_image, muse.cap_video],
+  );
 
   const [items, setItems] = useState<ThreadItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -136,6 +143,30 @@ export function MuseRoom(props: {
     }
   }, [items.length, pending.length, loading, muse.recipient, scrollToBottom]);
 
+  // Typing indicator tracking: the processing flip doesn't change items.length,
+  // so the effect above never fires on it. Force-scroll when the muse starts
+  // typing; when the reply lands (typing ends) keep following while pinned.
+  const typingCount = useMemo(
+    () =>
+      items.filter(
+        (it) =>
+          !it.result &&
+          ownerState(it.message.status, it.message.expires_at, it.message.claim_expires_at) ===
+            "processing",
+      ).length,
+    [items],
+  );
+  const prevTypingRef = useRef(0);
+  useEffect(() => {
+    const prev = prevTypingRef.current;
+    prevTypingRef.current = typingCount;
+    if (typingCount > prev) {
+      scrollToBottom(false);
+    } else if (typingCount < prev && isNearBottomRef.current) {
+      scrollToBottom(false);
+    }
+  }, [typingCount, scrollToBottom]);
+
   // Aggregate deduplicated Dropbox paths for InspectorPanel
   const aggregatedPaths = useMemo(() => {
     const seen = new Set<string>();
@@ -205,15 +236,9 @@ export function MuseRoom(props: {
       }
 
       const existingRefs = finalParams.reference_dropbox_paths ?? [];
-      const mergedRefs = [...existingRefs, ...uploadedPaths];
-      const nextPrompt = appendDropboxPathsToPrompt(
-        finalParams.prompt ?? "",
-        uploadedPaths,
-      );
       finalParams = {
         ...finalParams,
-        prompt: nextPrompt,
-        reference_dropbox_paths: mergedRefs,
+        reference_dropbox_paths: [...existingRefs, ...uploadedPaths],
       };
     }
 
@@ -414,7 +439,7 @@ export function MuseRoom(props: {
             <span className="hide-xs">{t("museRoom.clearHistory")}</span>
           </button>
           <MuseManageMenu
-            onRename={() => props.onOpenAction("rename")}
+            onEdit={() => props.onOpenAction("edit")}
             onRotate={() => props.onOpenAction("rotate")}
             onDelete={() => props.onOpenAction("delete")}
           />
@@ -467,7 +492,7 @@ export function MuseRoom(props: {
           {items.map((it) => {
             const st = ownerState(it.message.status, it.message.expires_at, it.message.claim_expires_at);
             const summary = paramsSummary(it.message.action, it.message.params, lang);
-            const promptText = it.message.params.prompt ?? "";
+            const promptText = stripDropboxInputNote(it.message.params.prompt ?? "");
             const refPaths = it.message.params.reference_dropbox_paths ?? [];
             return (
               <div key={it.message.id} className="exchange">
@@ -580,6 +605,7 @@ export function MuseRoom(props: {
             : t("museRoom.composerPlaceholder", { name: muse.name })
         }
         onSend={handleSend}
+        allowedModes={museAllowedModes}
         allowAttachments={!isLocked}
         files={attachedFiles}
         onFilesChange={setAttachedFiles}

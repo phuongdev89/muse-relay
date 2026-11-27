@@ -14,8 +14,8 @@ import {
 import { getConfig } from "../../lib/config";
 import {
   MAX_ATTACH_FILES,
-  appendDropboxPathsToPrompt,
   mergeAttachmentFiles,
+  stripDropboxInputNote,
 } from "../../lib/dropbox";
 import {
   fmtClock,
@@ -366,7 +366,7 @@ export function ConversationRoom(props: {
           it.message.expires_at,
           it.message.claim_expires_at,
         );
-        const promptText = it.message.params.prompt ?? "";
+        const promptText = stripDropboxInputNote(it.message.params.prompt ?? "");
         const refPaths = it.message.params.reference_dropbox_paths ?? [];
         const statusText =
           st === "pending"
@@ -677,7 +677,7 @@ export function ConversationRoom(props: {
             it.message.claim_expires_at,
           );
           if (!matchedMuseOwnerIds.has(it.message.id)) {
-            const promptText = it.message.params.prompt ?? "";
+            const promptText = stripDropboxInputNote(it.message.params.prompt ?? "");
             const refPaths = it.message.params.reference_dropbox_paths ?? [];
             merged.push({
               id: `mix-m-owner-${it.message.id}`,
@@ -1009,11 +1009,12 @@ export function ConversationRoom(props: {
       if (files.length > 0) {
         const uploadedPaths = await uploadAttachedFiles(tempId, convId, singleMuseRef, files);
         if (!uploadedPaths) return;
-        const mergedRefs = [...(finalParams.reference_dropbox_paths ?? []), ...uploadedPaths];
         finalParams = {
           ...finalParams,
-          prompt: appendDropboxPathsToPrompt(basePrompt, uploadedPaths),
-          reference_dropbox_paths: mergedRefs,
+          reference_dropbox_paths: [
+            ...(finalParams.reference_dropbox_paths ?? []),
+            ...uploadedPaths,
+          ],
         };
       }
 
@@ -1080,7 +1081,7 @@ export function ConversationRoom(props: {
     }
 
     // 3. OpenAI or Mixed mode: upload attachments if single Muse present, then persist owner message
-    let finalPrompt = basePrompt;
+    const finalPrompt = basePrompt;
     let uploadedRefs: string[] = [];
     if (conversation.mode === "mixed" && usesSingleMuse && files.length > 0) {
       if (!singleMuseRef || !singleMuseAlive) {
@@ -1094,7 +1095,6 @@ export function ConversationRoom(props: {
       const uploaded = await uploadAttachedFiles(tempId, convId, singleMuseRef, files);
       if (!uploaded) return;
       uploadedRefs = uploaded;
-      finalPrompt = appendDropboxPathsToPrompt(basePrompt, uploadedRefs);
     }
 
     const { data: savedOwner, error: ownerErr } = await insertOpenAIMessage({

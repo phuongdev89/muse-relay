@@ -78,7 +78,7 @@ export function InspectorPanel(props: {
   muses: Muse[];
   openaiAgents: OpenAIAgent[];
   threadPaths: string[];
-  onMuseAction: (action: "rename" | "rotate" | "delete" | "clear") => void;
+  onMuseAction: (action: "edit" | "rotate" | "delete" | "clear") => void;
   onEditProject?: () => void;
   onNewConversation?: () => void;
 }) {
@@ -427,7 +427,7 @@ function MuseInspector(props: {
   muse: Muse;
   summary: MuseFleetSummary | null;
   paths: string[];
-  onAction: (action: "rename" | "rotate" | "delete" | "clear") => void;
+  onAction: (action: "edit" | "rotate" | "delete" | "clear") => void;
 }) {
   const { muse, summary, paths } = props;
   const { lang, t } = useLang();
@@ -550,9 +550,9 @@ function MuseInspector(props: {
       <div className="insp-section">
         <span className="insp-label">{t("insp.quickActions")}</span>
         <div className="insp-actions">
-          <button type="button" className="btn-ghost insp-action-btn" onClick={() => props.onAction("rename")}>
+          <button type="button" className="btn-ghost insp-action-btn" onClick={() => props.onAction("edit")}>
             <EditIcon size={14} />
-            <span>{t("insp.renameMuse")}</span>
+            <span>{t("insp.editMuse")}</span>
           </button>
           <button type="button" className="btn-ghost insp-action-btn" onClick={() => props.onAction("rotate")}>
             <KeyIcon size={14} />

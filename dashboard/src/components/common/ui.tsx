@@ -85,7 +85,7 @@ export function Chip({ state, label }: { state: string; label?: string }) {
 
 export function Modal(props: {
   open: boolean;
-  /** Escape-to-close is disabled while false (e.g. one-time token screens). */
+  /** Escape / backdrop-click-to-close is disabled while false (one-time token screens). */
   dismissable?: boolean;
   onClose: () => void;
   labelledBy: string;
@@ -114,7 +114,17 @@ export function Modal(props: {
   }, [open, dismissable, onClose]);
   if (!open) return null;
   return (
-    <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={labelledBy}>
+    <div
+      className="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={labelledBy}
+      // mousedown (not click): a text-selection drag starting inside the
+      // dialog must not close it when released on the backdrop.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
         ref={dialogRef}
         tabIndex={-1}
