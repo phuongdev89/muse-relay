@@ -36,3 +36,6 @@ client/state/
 # ---- gateway config (API key) ----
 .muse/
 .idea
+# ---- dashboard (Vite/React) ----
+node_modules/
+dashboard/dist/

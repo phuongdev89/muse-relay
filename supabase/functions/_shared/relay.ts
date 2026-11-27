@@ -2,10 +2,14 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 export const INPUT_BUCKET = "relay-inputs";
 
+// CORS on every response (errors included): browsers call submit_message
+// directly, and a CORS-less error response gets masked as a network failure,
+// hiding the real reason (403/400/404) from the dashboard. Extra headers are
+// invisible to non-browser clients (Nyx unaffected).
 export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...corsHeaders },
   });
 }
 
