@@ -196,19 +196,29 @@ export async function clearMuseThread(
     return error?.message ?? null;
   }
 
-  // Clear direct-channel history without deleting messages scoped to Project Conversations.
-  const [{ data: convs, error: convErr }, { data: msgs, error: msgErr }] = await Promise.all([
+  // Clear direct-channel history without deleting messages scoped to Project
+  // Conversations or Relay groups (group fan-out rows carry thread_id = group_id).
+  const [
+    { data: convs, error: convErr },
+    { data: groups, error: groupErr },
+    { data: msgs, error: msgErr },
+  ] = await Promise.all([
     db.from("relay_conversations").select("id"),
+    db.from("relay_groups").select("id"),
     db.from("relay_messages").select("id,params").eq("recipient", recipient),
   ]);
   if (convErr) return convErr.message;
+  if (groupErr) return groupErr.message;
   if (msgErr) return msgErr.message;
 
-  const convIds = new Set((convs ?? []).map((c) => String(c.id)));
+  const scopedIds = new Set([
+    ...(convs ?? []).map((c) => String(c.id)),
+    ...(groups ?? []).map((g) => String(g.id)),
+  ]);
   const directIds = (msgs ?? [])
     .filter((m) => {
       const tid = (m.params as { thread_id?: unknown } | null)?.thread_id;
-      return typeof tid !== "string" || !convIds.has(tid);
+      return typeof tid !== "string" || !scopedIds.has(tid);
     })
     .map((m) => String(m.id));
   if (directIds.length === 0) return null;
@@ -486,6 +496,11 @@ export async function fetchMuseThread(
 
   if (threadId) {
     query = query.eq("params->>thread_id", threadId);
+  } else {
+    // Direct channel: only true direct messages. Group fan-out rows carry
+    // thread_id = group_id (stamped server-side) and project conversation
+    // rows carry their conversation id — both must stay out of this view.
+    query = query.is("params->>thread_id", null);
   }
 
   const msgs = await query.order("created_at", { ascending: false }).limit(50);
@@ -563,76 +578,113 @@ function batchState(
   return { state: "done", error: null };
 }
 
+// v8 reply=result model: owner utterances render as one bubble per fan-out
+// batch; each muse reply renders from the relay_results row recorded on the
+// message that muse claimed — so a reply stays visible even when it mentions
+// nobody (no fan-out rows are created for it).
 export async function fetchGroupThread(groupId: string): Promise<{
   bubbles: GroupBubble[];
   error: string | null;
 }> {
-  const posts = await db
-    .from("relay_group_posts")
-    .select("message_id,from_kind,from_name,turn,batch_id,created_at")
-    .eq("group_id", groupId)
-    .order("created_at", { ascending: true })
-    .limit(400);
-  if (posts.error) return { bubbles: [], error: posts.error.message };
-  const postRows = (posts.data ?? []) as GroupPost[];
+  const [{ data: posts, error: pe }, { data: memberRows, error: gme }] =
+    await Promise.all([
+      db
+        .from("relay_group_posts")
+        .select("message_id,from_kind,from_name,turn,batch_id,created_at")
+        .eq("group_id", groupId)
+        .order("created_at", { ascending: true })
+        .limit(400),
+      db
+        .from("relay_group_members")
+        .select("muse_recipient,name")
+        .eq("group_id", groupId),
+    ]);
+  if (pe) return { bubbles: [], error: pe.message };
+  if (gme) return { bubbles: [], error: gme.message };
+  const postRows = (posts ?? []) as GroupPost[];
+  const nameByRecipient = new Map<string, string>();
+  for (const m of memberRows ?? []) {
+    nameByRecipient.set(String(m.muse_recipient).toLowerCase(), String(m.name));
+  }
   if (postRows.length === 0) return { bubbles: [], error: null };
 
   const ids = [...new Set(postRows.map((p) => p.message_id))];
-  const [{ data: msgs, error: me }, { data: results, error: re }] = await Promise.all([
+  const [
+    { data: msgs, error: me },
+    { data: results, error: re },
+    { data: museRows },
+  ] = await Promise.all([
     db.from("relay_messages").select("id,recipient,status,params,created_at").in("id", ids),
     db.from("relay_results").select("message_id,status,output,error,created_at").in("message_id", ids),
+    db.from("relay_muses").select("recipient,name"),
   ]);
   if (me) return { bubbles: [], error: me.message };
   if (re) return { bubbles: [], error: re.message };
+  // Registry names fill gaps for members removed after they replied.
+  for (const m of museRows ?? []) {
+    const key = String(m.recipient).toLowerCase();
+    if (!nameByRecipient.has(key)) nameByRecipient.set(key, String(m.name));
+  }
 
   // Group bubbles only need a narrow slice of each message row.
-  type MsgRow = { id: string; status: string; params: { prompt?: string } };
+  type MsgRow = { id: string; recipient: string; status: string; params: { prompt?: string } };
   const msgMap = new Map<string, MsgRow>((msgs ?? []).map((m) => [m.id, m as MsgRow]));
   const resMap = new Map<string, RelayResult>((results ?? []).map((r) => [r.message_id, r as RelayResult]));
 
-  const seen = new Set<string>();
   const bubbles: GroupBubble[] = [];
+
+  // Owner utterances: one bubble per fan-out batch (delivery rows share it).
+  const seenBatch = new Set<string>();
   for (const p of postRows) {
-    if (seen.has(p.batch_id)) continue;
-    seen.add(p.batch_id);
+    if (p.from_kind !== "owner" || seenBatch.has(p.batch_id)) continue;
+    seenBatch.add(p.batch_id);
     const rows = postRows
       .filter((q) => q.batch_id === p.batch_id)
       .map((q) => msgMap.get(q.message_id))
-      .filter((m): m is RelayMessage => Boolean(m));
+      .filter((m): m is MsgRow => Boolean(m));
     const first = rows[0];
-    const result = first ? resMap.get(first.id) ?? null : null;
-
-    let text = "";
-    let paths: string[] = [];
-    let notes: string | null = null;
-    let error: string | null = null;
-    let state: GroupBubble["state"];
-
-    if (p.from_kind === "owner") {
-      text = (first?.params?.prompt ?? "").replace(/^\[[^\]]+\]:\s*/, "");
-      const b = batchState(rows, resMap);
-      state = b.state;
-      error = b.state === "failed" ? b.error : null;
-    } else {
-      const st = first?.status ?? "pending";
-      state = st === "failed" ? "failed" : st === "processing" ? "processing" : st === "pending" ? "pending" : "done";
-      if (state === "done" && result?.output?.text) text = result.output.text;
-      if (state === "failed") error = result?.error ?? tNow("api.failed");
-      notes = result?.output?.notes ?? null;
-      paths = result?.output?.dropbox_paths ?? [];
-    }
+    if (!first) continue;
+    const b = batchState(rows, resMap);
     bubbles.push({
       batchId: p.batch_id,
-      kind: p.from_kind,
+      kind: "owner",
       name: p.from_name,
       time: p.created_at,
-      state,
-      text,
-      paths,
-      notes,
-      error,
+      state: b.state,
+      text: (first.params?.prompt ?? "").replace(/^\[[^\]]+\]:\s*/, ""),
+      paths: [],
+      notes: null,
+      error: b.state === "failed" ? b.error : null,
     });
   }
+
+  // Muse replies: one bubble per claimed group row — every post row whose
+  // message carries a result (done/failed) or is currently processing.
+  // Owner record-only rows are done without a result, so they never match.
+  for (const p of postRows) {
+    const msg = msgMap.get(p.message_id);
+    if (!msg) continue;
+    const result = resMap.get(p.message_id) ?? null;
+    if (!result && msg.status !== "processing") continue;
+    const state: GroupBubble["state"] = result
+      ? result.status === "failed"
+        ? "failed"
+        : "done"
+      : "processing";
+    bubbles.push({
+      batchId: p.message_id,
+      kind: "muse",
+      name: nameByRecipient.get(String(msg.recipient).toLowerCase()) ?? "Muse",
+      time: result?.created_at ?? p.created_at,
+      state,
+      text: result?.output?.text ?? "",
+      paths: result?.output?.dropbox_paths ?? [],
+      notes: result?.output?.notes ?? null,
+      error: state === "failed" ? result?.error ?? tNow("api.failed") : null,
+    });
+  }
+
+  bubbles.sort((a, b) => a.time.localeCompare(b.time));
   return { bubbles, error: null };
 }
 

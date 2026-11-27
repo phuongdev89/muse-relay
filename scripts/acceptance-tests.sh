@@ -153,20 +153,23 @@ HB401=$(cat "$TMP_DIR/athbc")
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=eq.$HB_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-HB =="
 
-echo "== T-G: group chat (owner-initiated muse-to-muse) =="
+echo "== T-G: group chat (v8 mention routing) =="
 GA_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 GB_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 GC_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+GD_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 GA_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
 GB_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
 GC_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
-export GA_TOKEN GB_TOKEN GC_TOKEN
+GD_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export GA_TOKEN GB_TOKEN GC_TOKEN GD_TOKEN
 GA_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GA_TOKEN'].encode()).hexdigest())")
 GB_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GB_TOKEN'].encode()).hexdigest())")
 GC_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GC_TOKEN'].encode()).hexdigest())")
+GD_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['GD_TOKEN'].encode()).hexdigest())")
 MMB="$TMP_DIR/acceptance-tg-muses.json"
-printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance GA","token_hash":"%s","dropbox_root":"/acceptance-ga/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GB","token_hash":"%s","dropbox_root":"/acceptance-gb/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GC","token_hash":"%s","dropbox_root":"/acceptance-gc/"}\n' \
-  "$RELAY_OWNER_ID" "$GA_REC" "$GA_HASH" "$RELAY_OWNER_ID" "$GB_REC" "$GB_HASH" "$RELAY_OWNER_ID" "$GC_REC" "$GC_HASH" > "$MMB"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance GA","token_hash":"%s","dropbox_root":"/acceptance-ga/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GB","token_hash":"%s","dropbox_root":"/acceptance-gb/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GC","token_hash":"%s","dropbox_root":"/acceptance-gc/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance GD","token_hash":"%s","dropbox_root":"/acceptance-gd/"}\n' \
+  "$RELAY_OWNER_ID" "$GA_REC" "$GA_HASH" "$RELAY_OWNER_ID" "$GB_REC" "$GB_HASH" "$RELAY_OWNER_ID" "$GC_REC" "$GC_HASH" "$RELAY_OWNER_ID" "$GD_REC" "$GD_HASH" > "$MMB"
 ND_ROWS=0
 while IFS= read -r line; do
   printf '%s' "$line" > "$MMB.one"
@@ -175,7 +178,7 @@ while IFS= read -r line; do
   [ "$rc" = "201" ] && ND_ROWS=$((ND_ROWS+1))
 done < "$MMB"
 rm -f "$MMB" "$MMB.one"
-[ "$ND_ROWS" = "3" ] && ok "T-Ga 3 test muses seeded -> 201 x3" || bad "T-Ga seeded only $ND_ROWS/3"
+[ "$ND_ROWS" = "4" ] && ok "T-Ga 4 test muses seeded -> 201 x4" || bad "T-Ga seeded only $ND_ROWS/4"
 
 ANONG=$(curl -s -m 20 -o "$TMP_DIR/atgg" -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
   -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
@@ -188,8 +191,8 @@ printf '{"id":"%s","owner_id":"%s","name":"Acceptance Group"}' "$G_ID" "$RELAY_O
 rc=$(curl -s -m 20 -o "$TMP_DIR/atgg2" -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$GGB")
 [ "$rc" = "201" ] && ok "T-Gc owner creates group -> 201" || bad "T-Gc got $rc: $(head -c 200 "$TMP_DIR/atgg2")"
-printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GA"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GB"}\n' \
-  "$G_ID" "$GA_REC" "$G_ID" "$GB_REC" > "$GGB"
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GA"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GB"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance GC"}\n' \
+  "$G_ID" "$GA_REC" "$G_ID" "$GB_REC" "$G_ID" "$GC_REC" > "$GGB"
 ND_ROWS=0
 while IFS= read -r line; do
   printf '%s' "$line" > "$GGB.one"
@@ -198,8 +201,10 @@ while IFS= read -r line; do
   [ "$rc" = "201" ] && ND_ROWS=$((ND_ROWS+1))
 done < "$GGB"
 rm -f "$GGB" "$GGB.one"
-[ "$ND_ROWS" = "2" ] && ok "T-Gd 2 members joined -> 201 x2" || bad "T-Gd joined only $ND_ROWS/2"
+[ "$ND_ROWS" = "3" ] && ok "T-Gd 3 members joined -> 201 x3" || bad "T-Gd joined only $ND_ROWS/3"
 
+# Owner post WITHOUT any mention: still recorded in the timeline (one done row
+# addressed to the owner itself) but NO muse is woken.
 GQ="$TMP_DIR/acceptance-tg-q.json"
 printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg hello group"}}' "$G_ID" > "$GQ"
 GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
@@ -207,62 +212,145 @@ GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functio
 rm -f "$GQ"
 G_IDS=$(cat "$TMP_DIR/atgq" | jqpy "import json,sys; print(' '.join(json.load(sys.stdin).get('message_ids',[])))")
 set -- $G_IDS
-GM_A=${1:-}; GM_B=${2:-}
-[ "$GSUB" = "201" ] && [ -n "$GM_A" ] && [ -n "$GM_B" ] && [ "${3:-}" = "" ] && ok "T-Ge owner post -> 201 with exactly 2 message_ids" || bad "T-Ge got $GSUB ids=[$G_IDS]: $(head -c 200 "$TMP_DIR/atgq")"
+GM_O=${1:-}
+GE_OK="False"
+if [ -n "$GM_O" ]; then
+  GEROW=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=status,recipient,params&id=eq.$GM_O" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+  GE_OK=$(echo "$GEROW" | jqpy "import json,sys; rows=json.load(sys.stdin); p=(rows[0]['params'] if rows else {}); print(len(rows)==1 and rows[0]['status']=='done' and rows[0]['recipient']=='$RELAY_OWNER_ID' and p.get('thread_id')=='$G_ID' and p.get('prompt','').startswith('[Owner]: '))")
+fi
+[ "$GSUB" = "201" ] && [ "$GE_OK" = "True" ] && ok "T-Ge owner post no mention -> 1 record-only done row (owner recipient, thread_id stamped)" || bad "T-Ge got $GSUB ids=[$G_IDS] row=$GEROW"
 
-GISO=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GC_TOKEN" -H 'content-type: application/json' -d '{}')
+GISO=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GD_TOKEN" -H 'content-type: application/json' -d '{}')
 GISON=$(echo "$GISO" | jqpy "import json,sys; print(json.load(sys.stdin).get('message') is None)")
 [ "$GISON" = "True" ] && ok "T-Gf muse OUTSIDE group cannot claim group rows" || bad "T-Gf outsider claimed: $(echo "$GISO" | head -c 200)"
 
+# Owner post WITH @Acceptance GA: exactly one delivery row, mention inline.
+GQ="$TMP_DIR/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @Acceptance GA start"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
+G_IDS=$(cat "$TMP_DIR/atgq" | jqpy "import json,sys; print(' '.join(json.load(sys.stdin).get('message_ids',[])))")
+set -- $G_IDS
+GM_A=${1:-}
 GCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d '{}')
 GA_ID=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
 GA_CLAIM=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
-GA_PROMPT=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print((m.get('params') or {}).get('prompt',''))")
-echo "$GA_PROMPT" | grep -q '^\[Owner\]: \[ACCEPTANCE\] tg hello group$' && [ "$GA_ID" = "$GM_A" ] && [ -n "$GA_CLAIM" ] && ok "T-Gg GA claims own row, prompt prefixed [Owner]:" || bad "T-Gg id=$GA_ID prompt=[$GA_PROMPT]"
+GA_PARAMS=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); import json as j; print(j.dumps(m.get('params') or {}))")
+GA_PROMPT=$(echo "$GA_PARAMS" | jqpy "import json,sys; print(json.load(sys.stdin).get('prompt',''))")
+GA_THREAD=$(echo "$GA_PARAMS" | jqpy "import json,sys; print(json.load(sys.stdin).get('thread_id',''))")
+[ "$GSUB" = "201" ] && [ -n "$GM_A" ] && [ "${2:-}" = "" ] && [ "$GA_ID" = "$GM_A" ] && echo "$GA_PROMPT" | grep -q '^\[Owner\]: \[ACCEPTANCE\] tg @Acceptance GA start$' && [ "$GA_THREAD" = "$G_ID" ] \
+  && ok "T-Gg owner @Name post -> single GA row, [Owner] prefix, thread_id=group" || bad "T-Gg got $GSUB ids=[$G_IDS] id=$GA_ID prompt=[$GA_PROMPT] thread=[$GA_THREAD]"
 
+# THE LOOP FIX: a reply with NO mention fans out to NOBODY.
 GREP="$TMP_DIR/acceptance-tg-rep.json"
-printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GA reply for group"},"error":null}' "$GM_A" "$GA_CLAIM" > "$GREP"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GA reply no mention"},"error":null}' "$GA_ID" "$GA_CLAIM" > "$GREP"
 GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
   -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d @"$GREP")
 rm -f "$GREP"
 GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
-CHAIN=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id,recipient,params&recipient=eq.$GB_REC&status=eq.pending&params->>prompt=like.%5BAcceptance%20GA%5D*" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
-CHAIN_OK=$(echo "$CHAIN" | jqpy "import json,sys; rows=json.load(sys.stdin); print(len(rows)==1 and '[Acceptance GA]: GA reply for group'==rows[0]['params']['prompt'])")
-[ "$GOK" = "True" ] && [ "$CHAIN_OK" = "True" ] && ok "T-Gh GA done -> fan-out turn 2 to GB only, prefixed [Acceptance GA]:" || bad "T-Gh res=$GRES chain=$CHAIN"
+MP_N=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id&group_id=eq.$G_ID&from_kind=eq.muse" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+GB_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GB_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+GC_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GC_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK" = "True" ] && [ "$MP_N" = "0" ] && [ "$GB_N" = "0" ] && [ "$GC_N" = "0" ] && ok "T-Gh GA reply without mention -> NO fan-out (greeting loop killed)" || bad "T-Gh res=$GRES posts=$MP_N gb=$GB_N gc=$GC_N"
 
+# A reply that MENTIONS @Acceptance GB reaches exactly GB (thread_id stamped).
+GQ="$TMP_DIR/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @Acceptance GA route"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
+GCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d '{}')
+GA_ID=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GA_CLAIM=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+GREP="$TMP_DIR/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GA passes to @Acceptance GB"},"error":null}' "$GA_ID" "$GA_CLAIM" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+GBROW=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id,recipient,status,params&recipient=eq.$GB_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+GB_OK=$(echo "$GBROW" | jqpy "import json,sys; rows=json.load(sys.stdin); p=(rows[0]['params'] if rows else {}); print(len(rows)==1 and rows[0]['recipient']=='$GB_REC' and p.get('prompt')=='[Acceptance GA]: GA passes to @Acceptance GB' and p.get('thread_id')=='$G_ID')")
 TURN_POST=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id,turn&group_id=eq.$G_ID&from_kind=eq.muse" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
 TURN_OK=$(echo "$TURN_POST" | jqpy "import json,sys; rows=json.load(sys.stdin); print(len(rows)==1 and rows[0]['turn']==2)")
-[ "$TURN_OK" = "True" ] && ok "T-Gi post row recorded (from_kind muse, turn 2)" || bad "T-Gi posts=$TURN_POST"
+[ "$GOK" = "True" ] && [ "$GB_OK" = "True" ] && [ "$TURN_OK" = "True" ] && ok "T-Gi GA reply @GB -> exactly 1 GB row (turn 2, thread_id stamped)" || bad "T-Gi res=$GRES rows=$GBROW posts=$TURN_POST"
 
-# GB must first consume the older turn-1 owner row (GM_B), then the turn-2
-# fan-out row is the next pending row for it.
-GB_SKIP=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d '{}')
-GB_SKIP_ID=$(echo "$GB_SKIP" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
 GB_CLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d '{}')
 GB_ID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
 GB_CLAIMID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
-GB_PROMPT=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print((m.get('params') or {}).get('prompt',''))")
-[ "$GB_SKIP_ID" = "$GM_B" ] && [ -n "$GB_ID" ] && [ "$GB_ID" != "$GM_B" ] && echo "$GB_PROMPT" | grep -q '^\[Acceptance GA\]: ' && ok "T-Gj GB consumes turn-1 row, then claims the turn-2 fan-out row" || bad "T-Gj skip=$GB_SKIP_ID id=$GB_ID prompt=[$GB_PROMPT]"
-# Force the cap: bump GB's post row to turn=12, then its reply must NOT fan out.
-curl -s -m 20 -X PATCH "$BASE/rest/v1/relay_group_posts?message_id=eq.$GB_ID" \
+GREP="$TMP_DIR/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GB hands to @Acceptance GC"},"error":null}' "$GB_ID" "$GB_CLAIMID" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+GCROW=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GC_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+GC_N=$(echo "$GCROW" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK" = "True" ] && [ "$GC_N" = "1" ] && ok "T-Gj GB reply @GC -> exactly 1 GC row (turn 3)" || bad "T-Gj res=$GRES gcrows=$GCROW"
+
+# Force the cap: bump GC's post row to turn=12, then a reply WITH a mention
+# must still NOT fan out.
+GC_CLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GC_TOKEN" -H 'content-type: application/json' -d '{}')
+GC_ID=$(echo "$GC_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GC_CLAIMID=$(echo "$GC_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+curl -s -m 20 -X PATCH "$BASE/rest/v1/relay_group_posts?message_id=eq.$GC_ID" \
   -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
   -d '{"turn":12}' > /dev/null
-GREP2="$TMP_DIR/acceptance-tg-rep2.json"
-printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GB reply at cap"},"error":null}' "$GB_ID" "$GB_CLAIMID" > "$GREP2"
-GRES2=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
-  -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d @"$GREP2")
-rm -f "$GREP2"
-GOK2=$(echo "$GRES2" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
-CAPCOUNT=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id&group_id=eq.$G_ID&from_kind=eq.muse&turn=eq.3" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
-[ "$GOK2" = "True" ] && [ "$CAPCOUNT" = "0" ] && ok "T-Gk turn cap: reply at turn 12 -> ok, no turn-3 fan-out" || bad "T-Gk res=$GRES2 capcount=$CAPCOUNT"
+GREP="$TMP_DIR/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GC reply at cap @Acceptance GA"},"error":null}' "$GC_ID" "$GC_CLAIMID" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GC_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+GAPEND=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GA_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+GAP_N=$(echo "$GAPEND" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK" = "True" ] && [ "$GAP_N" = "0" ] && ok "T-Gk turn cap: mention reply at turn 12 -> ok, no fan-out" || bad "T-Gk res=$GRES gapend=$GAPEND"
 
-GQ2="$TMP_DIR/acceptance-tg-q2.json"
-printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg owner reset"}}' "$G_ID" > "$GQ2"
-GSUB2=$(curl -s -m 20 -o "$TMP_DIR/atgq2" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
-  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ2")
-rm -f "$GQ2"
-T1COUNT=$(curl -s -m 20 "$BASE/rest/v1/relay_group_posts?select=message_id&group_id=eq.$G_ID&from_kind=eq.owner&turn=eq.1" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
-[ "$GSUB2" = "201" ] && [ "$T1COUNT" = "4" ] && ok "T-Gl owner post resets turn to 1 (4 owner post rows total)" || bad "T-Gl got $GSUB2 owner-turn1 rows=$T1COUNT"
+# @all: GA's reply reaches BOTH remaining members, never the speaker.
+GQ="$TMP_DIR/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @Acceptance GA all"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
+GCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d '{}')
+GA_ID=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GA_CLAIM=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+GREP="$TMP_DIR/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GA calls @all now"},"error":null}' "$GA_ID" "$GA_CLAIM" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+GB_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GB_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+GC_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GC_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+GAP_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GA_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK" = "True" ] && [ "$GB_N" = "1" ] && [ "$GC_N" = "1" ] && [ "$GAP_N" = "0" ] && ok "T-GNa GA reply @all -> GB+GC each 1, speaker GA excluded" || bad "T-GNa res=$GRES gb=$GB_N gc=$GC_N ga=$GAP_N"
+
+# Unknown mention: silently ignored, nothing fans out.
+GB_CLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d '{}')
+GB_ID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GB_CLAIMID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+GREP="$TMP_DIR/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GB unknown @Nobody here"},"error":null}' "$GB_ID" "$GB_CLAIMID" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+UNKNOWN=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&params->>prompt=like.%5BAcceptance%20GB%5D%3A%20GB%20unknown*" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+UNKNOWN_N=$(echo "$UNKNOWN" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK" = "True" ] && [ "$UNKNOWN_N" = "0" ] && ok "T-GNb unknown mention @Nobody -> ignored, no fan-out" || bad "T-GNb res=$GRES unknown=$UNKNOWN"
+
+# Owner @all post: one delivery row per member (3).
+GQ="$TMP_DIR/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @all assemble"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
+G_IDS=$(cat "$TMP_DIR/atgq" | jqpy "import json,sys; print(' '.join(json.load(sys.stdin).get('message_ids',[])))")
+G_IDS_N=$(echo "$G_IDS" | wc -w | tr -d ' ')
+GA_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GA_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+GB_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GB_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GSUB" = "201" ] && [ "$G_IDS_N" = "3" ] && [ "$GA_N" = "1" ] && [ "$GB_N" = "1" ] && ok "T-Gl owner @all post -> 3 delivery rows (GA/GB/GC)" || bad "T-Gl got $GSUB ids_n=$G_IDS_N ga=$GA_N gb=$GB_N"
 
 GNEG=$(curl -s -m 20 -o "$TMP_DIR/atgn" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
   -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
@@ -274,12 +362,14 @@ GNEG2=$(curl -s -m 20 -o "$TMP_DIR/atgn2" -w '%{http_code}' -X POST "$BASE/funct
 [ "$GNEG2" = "404" ] && ok "T-Gn foreign group_id -> 404 group_not_found" || bad "T-Gn got $GNEG2: $(head -c 200 "$TMP_DIR/atgn2")"
 
 echo "== cleanup T-G rows =="
-# Everything addressed to the three test muses goes at once (covers owner
-# rows, fan-out rows and abandoned claims), then the group cascades members,
-# and finally the muse registry rows themselves.
-curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=in.($GA_REC,$GB_REC,$GC_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+# Everything addressed to the test muses goes at once (covers owner rows,
+# fan-out rows and abandoned claims), the record-only owner rows of THIS
+# acceptance group go by thread_id, then the group cascades members, and
+# finally the muse registry rows themselves.
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=in.($GA_REC,$GB_REC,$GC_REC,$GD_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=eq.$RELAY_OWNER_ID&params->>thread_id=eq.$G_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$G_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
-curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($GA_REC,$GB_REC,$GC_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($GA_REC,$GB_REC,$GC_REC,$GD_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-G =="
 
 echo "== T-LG prep: dedicated legacy muse (live Nyx daemon cannot race this queue) =="

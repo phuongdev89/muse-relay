@@ -4,8 +4,10 @@ import {
   corsHeaders,
   fanoutGroupMessage,
   jsonResponse,
+  parseMentionTargets,
   resolveRecipientRoot,
   signMessage,
+  truncateUtterance,
   userClient,
   validateParams,
 } from "../_shared/relay.ts";
@@ -40,10 +42,12 @@ Deno.serve(async (req: Request) => {
     if (!body) return jsonResponse({ error: "invalid_json" }, 400);
 
     // ---- v6 group path: body.group_id addresses an owner-initiated group.
-    // The utterance fans out as one ordinary pending `chat` row per member —
-    // muses see the exact same claim shape as any other request. When
-    // group_id is absent, the legacy single-recipient path below runs
-    // unchanged.
+    // v8 mention routing: the utterance reaches exactly the members it
+    // mentions (@Name / @all). With no valid mention the utterance is still
+    // recorded in the group timeline but wakes NO muse: one `done` row
+    // addressed to the owner itself (claim_message only returns pending rows
+    // matching a muse recipient). When group_id is absent, the legacy
+    // single-recipient path below runs unchanged.
     if (body.group_id !== undefined) {
       if (typeof body.group_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.group_id)) {
         return jsonResponse({ error: "group_id must be a UUID" }, 400);
@@ -59,6 +63,7 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
       if (groupError) throw groupError;
       if (!group) return jsonResponse({ error: "group_not_found" }, 404);
+      const groupId = String(group.id);
 
       let ownerName = "Owner";
       if (body.owner_name !== undefined) {
@@ -69,34 +74,94 @@ Deno.serve(async (req: Request) => {
       }
 
       const validated = validateParams("chat", body.params, user.id);
+      const utterance = String(validated.params.prompt);
       const { data: members, error: membersError } = await adminClient()
         .from("relay_group_members")
         .select("muse_recipient, name")
-        .eq("group_id", body.group_id);
+        .eq("group_id", groupId);
       if (membersError) throw membersError;
-      const targets = (members ?? []).map((m) => ({
-        recipient: String(m.muse_recipient).toLowerCase(),
-        name: String(m.name),
-      }));
-      if (targets.length < 1) {
+      if ((members ?? []).length < 1) {
         return jsonResponse({ error: "group_has_no_members" }, 400);
       }
 
-      const fanout = await fanoutGroupMessage(adminClient(), {
-        groupId: String(group.id),
-        ownerId: user.id,
-        fromKind: "owner",
-        fromName: ownerName,
-        turn: 1,
-        utterance: String(validated.params.prompt),
-        targets,
+      const targets = parseMentionTargets(utterance, members ?? [], null);
+      if (targets.length > 0) {
+        const fanout = await fanoutGroupMessage(adminClient(), {
+          groupId,
+          ownerId: user.id,
+          fromKind: "owner",
+          fromName: ownerName,
+          turn: 1,
+          utterance,
+          targets,
+        });
+        return new Response(
+          JSON.stringify({
+            group_id: groupId,
+            message_ids: fanout.messageIds,
+            status: "pending",
+            expires_at: fanout.expiresAt,
+          }),
+          { status: 201, headers: { ...corsHeaders, "content-type": "application/json" } },
+        );
+      }
+
+      // No valid mention: record-only utterance. A `done` row whose recipient
+      // is the owner's own UUID can never be claimed (no muse resolves to it
+      // and claim_message only picks pending rows), yet it carries the group
+      // post so the timeline renders it like any owner utterance.
+      const id = crypto.randomUUID();
+      const nonce = crypto.randomUUID();
+      const expiresAtUnix = Math.floor(Date.now() / 1000) + CLAIM_WINDOW_SECONDS;
+      const expiresAt = new Date(expiresAtUnix * 1000).toISOString();
+      const params = {
+        prompt: `[${ownerName}]: ${truncateUtterance(utterance)}`,
+        thread_id: groupId,
+      };
+      const signature = await signMessage({
+        id,
+        owner_id: user.id,
+        recipient: user.id,
+        action: "chat",
+        params,
+        nonce,
+        expires_at_unix: expiresAtUnix,
       });
+      const { error: insertError } = await adminClient()
+        .from("relay_messages")
+        .insert({
+          id,
+          owner_id: user.id,
+          recipient: user.id,
+          action: "chat",
+          params,
+          status: "done",
+          completed_at: new Date().toISOString(),
+          nonce,
+          expires_at: expiresAt,
+          expires_at_unix: expiresAtUnix,
+          signature,
+        });
+      if (insertError) throw insertError;
+      const { error: postError } = await adminClient()
+        .from("relay_group_posts")
+        .insert({
+          message_id: id,
+          group_id: groupId,
+          owner_id: user.id,
+          from_kind: "owner",
+          from_name: ownerName,
+          turn: 1,
+          batch_id: crypto.randomUUID(),
+        });
+      if (postError) throw postError;
+
       return new Response(
         JSON.stringify({
-          group_id: String(group.id),
-          message_ids: fanout.messageIds,
-          status: "pending",
-          expires_at: fanout.expiresAt,
+          group_id: groupId,
+          message_ids: [id],
+          status: "done",
+          expires_at: expiresAt,
         }),
         { status: 201, headers: { ...corsHeaders, "content-type": "application/json" } },
       );

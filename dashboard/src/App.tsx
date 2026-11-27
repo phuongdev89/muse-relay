@@ -50,6 +50,42 @@ function readDesktopInspectorPref(): boolean {
   }
 }
 
+// ---- hash routing -----------------------------------------------------------
+// The active room is mirrored into the URL hash so F5 (and back/forward, or
+// pasting a link) restores the exact room instead of dropping to the overview.
+// pushState in switchRoom keeps the history stack; a popstate/hashchange
+// listener applies user-driven navigation. Unknown ids degrade gracefully:
+// App's render guards fall back to the overview for unresolved rooms.
+
+function roomToHash(room: ActiveRoom): string {
+  if (!room || room.kind === "overview") return "#/overview";
+  if (room.kind === "agents") return "#/agents";
+  if (room.kind === "conversation") {
+    return `#/project/${room.projectId}/conv/${room.conversationId}`;
+  }
+  if (room.kind === "project") return `#/project/${room.projectId}`;
+  return `#/muse/${room.recipient}`;
+}
+
+function hashToRoom(hash: string): ActiveRoom {
+  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (parts[0] === "agents") return { kind: "agents" };
+  if (parts[0] === "muse" && parts[1]) {
+    return { kind: "muse", recipient: parts[1] };
+  }
+  if (parts[0] === "project" && parts[1]) {
+    if (parts[2] === "conv" && parts[3]) {
+      return {
+        kind: "conversation",
+        projectId: parts[1],
+        conversationId: parts[3],
+      };
+    }
+    return { kind: "project", projectId: parts[1] };
+  }
+  return { kind: "overview" };
+}
+
 export default function App() {
   const { t } = useLang();
   const [booted, setBooted] = useState(false);
@@ -164,7 +200,9 @@ export default function App() {
         loadConversations(),
         loadFleet(),
       ]);
-      setActive((cur) => cur ?? { kind: "overview" });
+      // Restore the room encoded in the URL hash (F5 / pasted link). Invalid
+      // ids fall back to the overview via App's render guards.
+      setActive((cur) => cur ?? hashToRoom(window.location.hash));
     },
     [
       loadMuses,
@@ -175,6 +213,18 @@ export default function App() {
       loadFleet,
     ],
   );
+
+  // Back/forward + manual hash edits drive the active room (switchRoom's
+  // pushState does not fire these events, so no echo loop).
+  useEffect(() => {
+    const apply = () => setActive(hashToRoom(window.location.hash));
+    window.addEventListener("hashchange", apply);
+    window.addEventListener("popstate", apply);
+    return () => {
+      window.removeEventListener("hashchange", apply);
+      window.removeEventListener("popstate", apply);
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -217,6 +267,10 @@ export default function App() {
     setActive(room);
     setMuseDialog(null);
     setThreadPaths([]);
+    const hash = roomToHash(room);
+    if (window.location.hash !== hash) {
+      history.pushState(null, "", hash);
+    }
   }
 
   function toggleInspector() {

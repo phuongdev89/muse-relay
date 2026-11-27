@@ -3,6 +3,7 @@ import {
   adminClient,
   fanoutGroupMessage,
   jsonResponse,
+  parseMentionTargets,
   resolveMuse,
   truncateUtterance,
   validateResultBody,
@@ -89,11 +90,14 @@ Deno.serve(async (req: Request) => {
       .update({ last_result_at: new Date().toISOString() })
       .eq("id", muse.id);
 
-    // ---- v6 group chain: a completed group `chat` (done + non-empty text,
-    // turn below the cap) automatically spawns the next turn for the OTHER
-    // members. Strictly best-effort: the muse's own result is already
-    // recorded above, so a fan-out failure must never surface as an error to
-    // the muse — it would only retry a job that is already done.
+    // ---- v8 group chain (mention-routed): a completed group `chat` is only
+    // forwarded to the members the reply MENTIONS (@Name / @all). A reply
+    // without any valid mention stays owner-only and the chain stops — this
+    // replaces the old broadcast-to-all-others behavior that made two muses
+    // greet each other until the turn cap. Strictly best-effort: the muse's
+    // own result is already recorded above, so a fan-out failure must never
+    // surface as an error to the muse — it would only retry a job that is
+    // already done.
     if (result.status === "done" && message.action === "chat") {
       try {
         const replyText = result.output["text"];
@@ -107,14 +111,14 @@ Deno.serve(async (req: Request) => {
           if (post && post.turn < GROUP_TURN_LIMIT) {
             const { data: members, error: membersError } = await supabase
               .from("relay_group_members")
-              .select("muse_recipient")
+              .select("muse_recipient, name")
               .eq("group_id", post.group_id);
             if (membersError) throw membersError;
-            const museRecipient = muse.recipient.toLowerCase();
-            const targets = (members ?? [])
-              .map((m) => String(m.muse_recipient).toLowerCase())
-              .filter((r) => r !== museRecipient)
-              .map((r) => ({ recipient: r, name: "" }));
+            const targets = parseMentionTargets(
+              replyText,
+              members ?? [],
+              muse.recipient,
+            );
             if (targets.length > 0) {
               await fanoutGroupMessage(supabase, {
                 groupId: post.group_id,

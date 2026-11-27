@@ -439,7 +439,7 @@ export function validateParams(
 
 // ---- v6 group chat -------------------------------------------------------
 // Group conversations reuse the existing claim mechanism: one utterance
-// becomes an ordinary pending `chat` row per recipient (muse-side contract is
+// becomes an ordinary pending `chat` row per ADDRESSEE (muse-side contract is
 // byte-for-byte unchanged), and each generated row is recorded in
 // relay_group_posts so the dashboard can render the conversation.
 
@@ -450,14 +450,77 @@ export interface GroupFanoutTarget {
   name: string;
 }
 
+export interface GroupMemberLike {
+  muse_recipient: string;
+  name: string;
+}
+
 export function truncateUtterance(text: string, max = 3800): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+// ---- v8 mention routing ----------------------------------------------------
+// Group delivery is addressee-driven: an utterance reaches exactly the muses
+// it mentions. `@all` addresses every member; `@<name>` addresses that member
+// (case-insensitive, longest-prefix match so names containing spaces work);
+// unknown mentions are silently ignored. An utterance with no valid mention
+// addresses NOBODY — that is what ends the bot-to-bot greeting loop: a muse
+// reply without any `@` stays owner-only and the chain stops.
+export function parseMentionTargets(
+  text: string,
+  members: GroupMemberLike[],
+  speakerRecipient: string | null,
+): GroupFanoutTarget[] {
+  const lowered = text.toLowerCase();
+  const speaker = speakerRecipient ? speakerRecipient.toLowerCase() : null;
+
+  const roster = members
+    .map((m) => ({
+      recipient: String(m.muse_recipient).toLowerCase(),
+      name: String(m.name).trim().toLowerCase(),
+    }))
+    .filter((m) => m.name.length > 0)
+    // Longest first so `@Nyx Team` wins over a shorter `@Nyx` when both exist.
+    .sort((a, b) => b.name.length - a.name.length);
+
+  const isBoundary = (ch: string | undefined): boolean =>
+    ch === undefined || !/[a-z0-9_]/.test(ch);
+
+  let wantsAll = false;
+  const picked = new Map<string, string>();
+  for (
+    let i = lowered.indexOf("@");
+    i !== -1;
+    i = lowered.indexOf("@", i + 1)
+  ) {
+    const rest = lowered.slice(i + 1, i + 65);
+    if (rest.startsWith("all") && isBoundary(lowered[i + 4])) {
+      wantsAll = true;
+      continue;
+    }
+    for (const member of roster) {
+      if (
+        rest.startsWith(member.name) &&
+        isBoundary(lowered[i + 1 + member.name.length])
+      ) {
+        picked.set(member.recipient, member.name);
+        break;
+      }
+    }
+  }
+
+  const targets = wantsAll
+    ? roster
+    : [...picked].map(([recipient, name]) => ({ recipient, name }));
+  return targets.filter((t) => t.recipient !== speaker);
 }
 
 // One fan-out event = one batch: N pending chat rows + N post rows sharing a
 // batch_id (the dashboard renders one bubble per batch). On a mid-way failure
 // the already-inserted rows of this batch are removed best-effort so a group
-// never shows a half-spoken utterance.
+// never shows a half-spoken utterance. Every row is stamped with
+// thread_id = group_id so the direct channel (fetchMuseThread without a
+// thread filter) can exclude group rows entirely.
 export async function fanoutGroupMessage(
   supabase: ReturnType<typeof adminClient>,
   opts: {
@@ -475,6 +538,7 @@ export async function fanoutGroupMessage(
   const expiresAtUnix = nowUnix + 30 * 60;
   const expiresAt = new Date(expiresAtUnix * 1000).toISOString();
   const prompt = `[${opts.fromName}]: ${opts.utterance}`;
+  const rowParams = { prompt, thread_id: opts.groupId };
   const inserted: string[] = [];
 
   try {
@@ -486,7 +550,7 @@ export async function fanoutGroupMessage(
         owner_id: opts.ownerId,
         recipient: target.recipient,
         action: "chat",
-        params: { prompt },
+        params: rowParams,
         nonce,
         expires_at_unix: expiresAtUnix,
       });
@@ -495,7 +559,7 @@ export async function fanoutGroupMessage(
         owner_id: opts.ownerId,
         recipient: target.recipient,
         action: "chat",
-        params: { prompt },
+        params: rowParams,
         status: "pending",
         nonce,
         expires_at: expiresAt,

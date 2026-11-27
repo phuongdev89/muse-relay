@@ -2510,6 +2510,26 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 .caps-item input { width: auto; }
 .caps-item-icon { display: inline-flex; color: var(--color-ink-2); }
 
+/* group composer mention chips (@all + member names) */
+.mention-chips {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.1rem 0.65rem 0.35rem;
+}
+.mention-chip {
+  border: 1px solid var(--color-paper-4, var(--color-paper-3));
+  background: var(--color-paper-2, var(--color-paper));
+  color: var(--color-ink-2);
+  font: 500 var(--text-xs) var(--font-body);
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.mention-chip:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.mention-chip.is-all { border-style: dashed; }
+
 .token-panel {
   border: 1px solid var(--color-vault-border);
   background: var(--color-vault-bg);

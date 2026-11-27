@@ -38,6 +38,8 @@ export function Composer(props: {
   disabled?: boolean;
   /** banner rendered right above the composer shell while disabled */
   disabledBanner?: ReactNode;
+  /** relay-group member names offered as @mention chips (@all always included) */
+  mentionNames?: string[];
 }) {
   const {
     mediaModes = true,
@@ -104,6 +106,17 @@ export function Composer(props: {
     if (next === "image" || next === "video") {
       setOptsOpen(true);
     }
+  }
+
+  // Group mention chips append `@Name`/`@all` to the prompt — the server fans
+  // the utterance out to exactly the mentioned members (no mention = nobody).
+  function insertMention(token: string) {
+    if (disabled) return;
+    setPrompt((cur) => {
+      const needsSpace = cur.length > 0 && !/\s$/.test(cur);
+      return `${cur}${needsSpace ? " " : ""}${token}`;
+    });
+    setError("");
   }
 
   function handlePickFiles(e: ChangeEvent<HTMLInputElement>) {
@@ -232,6 +245,30 @@ export function Composer(props: {
             }
           }}
         />
+
+        {props.mentionNames && props.mentionNames.length > 0 && !disabled && (
+          <div className="mention-chips" aria-label={t("composer.mentionAria")}>
+            <button
+              type="button"
+              className="mention-chip is-all"
+              onClick={() => insertMention("@all ")}
+              title={t("composer.mentionAllTitle")}
+            >
+              @all
+            </button>
+            {props.mentionNames.map((name) => (
+              <button
+                key={name}
+                type="button"
+                className="mention-chip"
+                onClick={() => insertMention(`@${name} `)}
+                title={t("composer.mentionTitle", { name })}
+              >
+                @{name}
+              </button>
+            ))}
+          </div>
+        )}
 
         {allowAttachments && !disabled && attachedFiles.length > 0 && (
           <div className="composer-attachments">

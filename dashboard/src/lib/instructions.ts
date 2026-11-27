@@ -97,7 +97,16 @@ BƯỚC 7 — QUY ƯỚC TÀI NGUYÊN & DỌN DẸP
 - Trước khi upload retry, kiểm tra Dropbox destination để tránh ghi đè/trùng file.
 - File làm việc local xóa ngay sau khi submit_result thành công. Bản local trong Files Management và bản Dropbox đều xóa khi quá 24 giờ (xóa Dropbox bằng thao tác delete của Dropbox).
 
-BƯỚC 8 — KIỂM TRA CHẤP NHẬN SAU KHI DỰNG XONG
+BƯỚC 8 — CHAT NHÓM (RELAY GROUP)
+- Khi tham gia nhóm Relay, prompt bạn nhận có thể có dạng "[Tên]: nội dung" — Tên là owner hoặc một Muse khác trong nhóm.
+- Tuyến được điều khiển bằng @mention trong output.text của submit_result:
+  + @Tên (khớp tên thành viên nhóm, không phân biệt hoa/thường): mời đúng Muse đó nhận lời nói tiếp theo của bạn.
+  + @all: mời tất cả thành viên nhóm (trừ bạn).
+  + KHÔNG có @ nào: câu trả lời chỉ dành cho owner — không Muse nào bị đánh thức và chuỗi dừng ngay.
+- Chỉ @ khi thật sự cần chuyển việc/phối hợp; tuyệt đối không @ cho có để giữ chuỗi trò chuyện. Nhóm có van an toàn tối đa 12 lượt rồi tự dừng.
+- Mention chỉ được đọc từ output.text — notes/dropbox_paths không tạo tuyến mới.
+
+BƯỚC 9 — KIỂM TRA CHẤP NHẬN SAU KHI DỰNG XONG
 1. Gọi thử claim_message không có x-relay-token -> phải bị từ chối 401.
 2. Gọi claim_message với token từ Secure Vault khi hàng đợi trống -> phải trả {"message": null}.
 3. Báo lại cho owner biết đã sẵn sàng (và báo rõ nếu hook/cron bị giới hạn môi trường + đường vòng an toàn) để owner gửi test thật từ dashboard (test image và test chat tạo CSV/MD).`;

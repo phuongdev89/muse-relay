@@ -1498,6 +1498,11 @@ export function ConversationRoom(props: {
         allowAttachments={canAttach}
         files={attachedFiles}
         onFilesChange={setAttachedFiles}
+        mentionNames={
+          conversation.group_id
+            ? museParticipants.map((p) => p.name)
+            : undefined
+        }
       />
 
       {confirmDelete && (
