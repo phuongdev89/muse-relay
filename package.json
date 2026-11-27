@@ -1,0 +1,12 @@
+{
+  "name": "muse-relay",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix dashboard install",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix dashboard run typecheck",
+    "build": "npm --prefix server run build && npm --prefix dashboard run build",
+    "start": "npm --prefix server start",
+    "dev": "node -e \"const {spawn}=require('node:child_process');const opts={stdio:'inherit',shell:process.platform==='win32'};const procs=[spawn('npm',['--prefix','server','run','dev'],opts),spawn('npm',['--prefix','dashboard','run','dev'],opts)];const stop=(code=0)=>{for(const p of procs)if(!p.killed)p.kill();process.exit(code)};process.on('SIGINT',()=>stop(0));process.on('SIGTERM',()=>stop(0));for(const p of procs)p.on('exit',(code)=>stop(code??0));\""
+  }
+}

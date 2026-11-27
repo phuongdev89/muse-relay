@@ -47,6 +47,10 @@ async function requireUserId(): Promise<{ userId?: string; error: string | null 
   return { userId: user.id, error: null };
 }
 
+async function getOwnerJwt(): Promise<string | null> {
+  return (await db.auth.getSession()).data.session?.access_token ?? null;
+}
+
 // ---- muse registry ---------------------------------------------------------
 // relay_muses is RLS owner-only: every call below runs as the signed-in owner,
 // so the server independently scopes reads/writes to their own rows.
@@ -105,7 +109,7 @@ export async function rotateMuseToken(
   return error?.message ?? null;
 }
 
-export async function deleteProjectAgentByRef(
+async function deleteProjectAgentByRef(
   agentKind: AgentKind,
   agentRef: string,
 ): Promise<string | null> {
@@ -278,6 +282,15 @@ const NOT_CONFIGURED_TTL_MS = 30 * 1000;
 const tempLinkCache = new Map<string, { res: DropboxTempLinkResult; expiresAt: number }>();
 const inflightTempLinks = new Map<string, Promise<DropboxTempLinkResult>>();
 
+async function readJsonPayload(res: Response): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = (await res.json()) as unknown;
+    return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getDropboxTempLink(path: string): Promise<DropboxTempLinkResult> {
   const key = path.trim();
   const cached = tempLinkCache.get(key);
@@ -289,30 +302,40 @@ export function getDropboxTempLink(path: string): Promise<DropboxTempLinkResult>
 
   const task = (async (): Promise<DropboxTempLinkResult> => {
     try {
-      const { data, error } = await db.functions.invoke("dropbox_proxy", {
-        body: { action: "temp_link", path: key },
-      });
-      if (error) {
-        const parsed = await extractFunctionError(error);
-        if (parsed.code === "dropbox_not_configured" || parsed.message.includes("dropbox_not_configured")) {
-          const res: DropboxTempLinkResult = { link: null, notConfigured: true };
-          tempLinkCache.set(key, { res, expiresAt: Date.now() + NOT_CONFIGURED_TTL_MS });
-          return res;
-        }
-        return { link: null, error: parsed.message };
+      const jwt = await getOwnerJwt();
+      if (!jwt) {
+        return { link: null, error: tNow("api.sessionExpired") };
       }
-      const payload = data as { link?: unknown; name?: unknown; size?: unknown; path?: unknown; error?: unknown } | null;
-      if (payload?.error === "dropbox_not_configured") {
+
+      const response = await fetch("/api/dropbox/temp-link", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: key }),
+      });
+
+      const payload = await readJsonPayload(response);
+      const errCode = typeof payload?.error === "string" ? payload.error : "";
+
+      if (response.status === 503 || errCode === "dropbox_not_configured") {
         const res: DropboxTempLinkResult = { link: null, notConfigured: true };
         tempLinkCache.set(key, { res, expiresAt: Date.now() + NOT_CONFIGURED_TTL_MS });
         return res;
       }
+
+      if (!response.ok) {
+        return { link: null, error: errCode || `HTTP ${response.status}` };
+      }
+
       if (!payload || typeof payload.link !== "string" || !payload.link) {
         return {
           link: null,
-          error: typeof payload?.error === "string" ? payload.error : tNow("api.failed"),
+          error: errCode || tNow("api.failed"),
         };
       }
+
       const res: DropboxTempLinkResult = {
         link: payload.link,
         name: typeof payload.name === "string" ? payload.name : undefined,
@@ -332,61 +355,58 @@ export function getDropboxTempLink(path: string): Promise<DropboxTempLinkResult>
   return task;
 }
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("file_read_failed"));
-    reader.readAsDataURL(file);
-  });
-}
-
 export async function uploadFileToMuseDropbox(input: {
   recipient: string;
   threadId?: string | null;
   file: File;
 }): Promise<{ dropbox_path: string | null; name?: string; size?: number; error: string | null }> {
-  if (input.file.size < 1 || input.file.size > MAX_UPLOAD_BYTES) {
+  if (input.file.size <= 0 || input.file.size > MAX_UPLOAD_BYTES) {
     return {
       dropbox_path: null,
       error: tNow("composer.fileSizeErr", { name: input.file.name }),
     };
   }
   try {
-    const contentBase64 = await fileToBase64(input.file);
-    const { data, error } = await db.functions.invoke("dropbox_proxy", {
-      body: {
-        action: "upload",
-        recipient: input.recipient,
-        thread_id: input.threadId ?? undefined,
-        file_name: input.file.name,
-        content_base64: contentBase64,
-      },
-    });
-    if (error) {
-      const parsed = await extractFunctionError(error);
-      if (parsed.code === "dropbox_not_configured" || parsed.message.includes("dropbox_not_configured")) {
-        return { dropbox_path: null, error: tNow("dropbox.notConfiguredErr") };
-      }
-      return { dropbox_path: null, error: parsed.message };
+    const jwt = await getOwnerJwt();
+    if (!jwt) {
+      return { dropbox_path: null, error: tNow("api.sessionExpired") };
     }
-    const payload = data as {
-      dropbox_path?: unknown;
-      name?: unknown;
-      size?: unknown;
-      error?: unknown;
-    } | null;
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${jwt}`,
+      "Content-Type": "application/octet-stream",
+      "x-recipient": input.recipient,
+      "x-file-name": encodeURIComponent(input.file.name),
+    };
+    const trimmedThread = input.threadId?.trim();
+    if (trimmedThread) {
+      headers["x-thread-id"] = trimmedThread;
+    }
+
+    const response = await fetch("/api/dropbox/upload", {
+      method: "POST",
+      headers,
+      body: input.file,
+    });
+
+    const payload = await readJsonPayload(response);
+    const errCode = typeof payload?.error === "string" ? payload.error : "";
+
+    if (response.status === 503 || errCode === "dropbox_not_configured") {
+      return { dropbox_path: null, error: tNow("dropbox.notConfiguredErr") };
+    }
+
+    if (!response.ok) {
+      return { dropbox_path: null, error: errCode || `HTTP ${response.status}` };
+    }
+
     if (!payload || typeof payload.dropbox_path !== "string" || !payload.dropbox_path) {
-      const rawErr = typeof payload?.error === "string" ? payload.error : tNow("api.failed");
       return {
         dropbox_path: null,
-        error: rawErr === "dropbox_not_configured" ? tNow("dropbox.notConfiguredErr") : rawErr,
+        error: errCode || tNow("api.failed"),
       };
     }
+
     return {
       dropbox_path: payload.dropbox_path,
       name: typeof payload.name === "string" ? payload.name : input.file.name,
@@ -652,156 +672,164 @@ export function buildChatCompletionsUrl(baseUrl: string): string {
   return `${clean}/chat/completions`;
 }
 
-function parseJsonSafe(raw: string): { data?: unknown; error?: string } {
-  try {
-    return { data: JSON.parse(raw) as unknown };
-  } catch {
-    return { error: tNow("api.invalidJson") };
-  }
-}
-
-function hasValidChoices(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") return false;
-  const choices = (payload as { choices?: unknown }).choices;
-  return Array.isArray(choices) && choices.length > 0;
-}
-
 function isAbortError(err: unknown): boolean {
   return typeof err === "object" && err !== null && "name" in err && err.name === "AbortError";
 }
 
-function extractCompletionContent(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const choices = (payload as { choices?: unknown[] }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return "";
-  const msg = (choices[0] as { message?: { content?: unknown } })?.message;
-  const content = msg?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (part && typeof part === "object" && "text" in part ? String((part as { text?: unknown }).text ?? "") : ""))
-      .join("");
+function mapOpenAIProxyError(codeOrMsg: string): string {
+  switch (codeOrMsg) {
+    case "timeout_20s":
+      return tNow("api.timeout20");
+    case "timeout_60s":
+      return tNow("api.timeout60");
+    case "empty_choices":
+      return tNow("api.noChoices");
+    case "empty_reply":
+      return tNow("api.emptyReply");
+    case "invalid_json_response":
+      return tNow("api.invalidJson");
+    default:
+      return codeOrMsg;
   }
-  return "";
-}
-
-function formatOpenAIHttpError(status: number, bodyText: string): string {
-  try {
-    const parsed = JSON.parse(bodyText) as { error?: { message?: string }; message?: string };
-    const msg = parsed?.error?.message || parsed?.message;
-    if (msg) return `HTTP ${status}: ${msg}`;
-  } catch {
-    // ignore non-JSON body
-  }
-  const snippet = bodyText.trim().slice(0, 180);
-  return snippet ? `HTTP ${status}: ${snippet}` : `HTTP ${status}`;
 }
 
 export async function testOpenAIAgentConnection(
-  agent: Pick<OpenAIAgent, "base_url" | "model" | "api_key">,
+  agent: Pick<OpenAIAgent, "base_url" | "model" | "api_key"> & { id?: string },
 ): Promise<{ ok: boolean; latencyMs: number; reply?: string; error?: string }> {
-  const url = buildChatCompletionsUrl(agent.base_url);
+  const jwt = await getOwnerJwt();
+  if (!jwt) {
+    return { ok: false, latencyMs: 0, error: tNow("api.sessionExpired") };
+  }
+
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  const timeout = setTimeout(() => controller.abort(), 25000);
   const started = performance.now();
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch("/api/openai/test", {
       method: "POST",
       headers: {
+        Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
-        Authorization: `Bearer ${agent.api_key}`,
       },
       body: JSON.stringify({
+        ...(agent.id ? { agent_id: agent.id } : {}),
+        base_url: agent.base_url,
         model: agent.model,
-        messages: [{ role: "user", content: "Reply with OK." }],
-        max_tokens: 16,
-        temperature: 0,
+        api_key: agent.api_key,
       }),
       signal: controller.signal,
     });
-    const latencyMs = Math.round(performance.now() - started);
-    const raw = await res.text();
-    if (!res.ok) {
-      return { ok: false, latencyMs, error: formatOpenAIHttpError(res.status, raw) };
+    const fallbackLatency = Math.round(performance.now() - started);
+    const payload = await readJsonPayload(res);
+    const latencyMs =
+      typeof payload?.latencyMs === "number" ? payload.latencyMs : fallbackLatency;
+
+    if (!payload) {
+      return {
+        ok: false,
+        latencyMs,
+        error: res.ok ? tNow("api.invalidJson") : `HTTP ${res.status}`,
+      };
     }
-    const parsed = parseJsonSafe(raw);
-    if (parsed.error) {
-      return { ok: false, latencyMs, error: parsed.error };
+
+    if (res.ok && payload.ok === true) {
+      const reply = typeof payload.reply === "string" ? payload.reply.trim() : "";
+      return { ok: true, latencyMs, reply: reply || "OK" };
     }
-    if (!hasValidChoices(parsed.data)) {
-      return { ok: false, latencyMs, error: tNow("api.noChoices") };
-    }
-    const reply = extractCompletionContent(parsed.data).trim();
-    return { ok: true, latencyMs, reply: reply || "OK" };
+
+    const rawErr =
+      typeof payload.error === "string" && payload.error
+        ? payload.error
+        : `HTTP ${res.status}`;
+    return { ok: false, latencyMs, error: mapOpenAIProxyError(rawErr) };
   } catch (err) {
     const latencyMs = Math.round(performance.now() - started);
     if (isAbortError(err)) {
       return { ok: false, latencyMs, error: tNow("api.timeout20") };
     }
-    const msg = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
       latencyMs,
-      error: msg.includes("Failed to fetch")
-        ? tNow("api.corsTest")
-        : msg,
+      error: err instanceof Error ? err.message : String(err),
     };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export async function callOpenAIChatCompletion(input: {
-  agent: OpenAIAgent;
-  messages: { role: "system" | "user" | "assistant"; content: string }[];
-  signal?: AbortSignal;
-}): Promise<{ content?: string; error?: string }> {
-  const url = buildChatCompletionsUrl(input.agent.base_url);
+export interface OpenAIChatHistoryTurn {
+  role: "owner" | "agent" | "user" | "assistant";
+  content: string;
+  status?: "done" | "failed";
+}
+
+export async function callOpenAIChatCompletion(
+  agent: Pick<OpenAIAgent, "id">,
+  history: OpenAIChatHistoryTurn[],
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<{ content?: string; error?: string }> {
+  const jwt = await getOwnerJwt();
+  if (!jwt) {
+    return { error: tNow("api.sessionExpired") };
+  }
+
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90000);
+  const timeout = setTimeout(() => controller.abort(), 75000);
   const onExternalAbort = () => controller.abort();
-  input.signal?.addEventListener("abort", onExternalAbort);
+  signal?.addEventListener("abort", onExternalAbort);
+
+  const messages = [
+    ...history
+      .filter((m) => (m.status ?? "done") === "done" && m.content.trim().length > 0)
+      .slice(-16)
+      .map((m) => ({
+        role: (m.role === "owner" || m.role === "user" ? "user" : "assistant") as
+          | "user"
+          | "assistant",
+        content: m.content,
+      })),
+    { role: "user" as const, content: prompt },
+  ];
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch("/api/openai/chat", {
       method: "POST",
       headers: {
+        Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
-        Authorization: `Bearer ${input.agent.api_key}`,
       },
       body: JSON.stringify({
-        model: input.agent.model,
-        messages: input.messages,
+        agent_id: agent.id,
+        messages,
       }),
       signal: controller.signal,
     });
-    const raw = await res.text();
-    if (!res.ok) {
-      return { error: formatOpenAIHttpError(res.status, raw) };
+
+    const payload = await readJsonPayload(res);
+    if (!payload) {
+      return { error: res.ok ? tNow("api.invalidJson") : `HTTP ${res.status}` };
     }
-    const parsed = parseJsonSafe(raw);
-    if (parsed.error) {
-      return { error: parsed.error };
+
+    const rawErr = typeof payload.error === "string" && payload.error ? payload.error : "";
+    if (!res.ok || rawErr) {
+      return { error: mapOpenAIProxyError(rawErr || `HTTP ${res.status}`) };
     }
-    const text = extractCompletionContent(parsed.data);
-    if (!text.trim()) {
+
+    const content = typeof payload.content === "string" ? payload.content : "";
+    if (!content.trim()) {
       return { error: tNow("api.emptyReply") };
     }
-    return { content: text };
+    return { content };
   } catch (err) {
     if (isAbortError(err)) {
-      return { error: tNow("api.timeout90") };
+      return { error: tNow("api.timeout60") };
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      error: msg.includes("Failed to fetch")
-        ? tNow("api.corsCall")
-        : msg,
-    };
+    return { error: err instanceof Error ? err.message : String(err) };
   } finally {
     clearTimeout(timeout);
-    input.signal?.removeEventListener("abort", onExternalAbort);
+    signal?.removeEventListener("abort", onExternalAbort);
   }
 }
 

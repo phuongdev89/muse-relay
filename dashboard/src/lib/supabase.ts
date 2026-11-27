@@ -1,4 +1,11 @@
-import { createClient } from "@supabase/supabase-js";
-import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "./config";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getConfig } from "./config";
 
-export const db = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+export let db: SupabaseClient;
+
+/** Initializes the Supabase client from runtime config loaded during boot. */
+export function initSupabase(): SupabaseClient {
+  const { supabaseUrl, supabasePublishableKey } = getConfig();
+  db = createClient(supabaseUrl, supabasePublishableKey);
+  return db;
+}

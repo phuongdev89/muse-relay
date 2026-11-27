@@ -1,11 +1,12 @@
-import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "./config";
+import { getConfig } from "./config";
 
 // The canonical muse onboarding instructions, sent to a new muse via its own
 // chat (never containing the token — that goes to the Secure Vault only).
-// Aligned with .scratch/install.md for the muse-side runtime against the
+// Aligned with supabase/README.md for the muse-side runtime against the
 // already-deployed Supabase relay.
 export function buildInstructions(opts: { name: string; recipient: string; root: string }): string {
-  const projectHost = new URL(SUPABASE_URL).host;
+  const { supabaseUrl, supabasePublishableKey } = getConfig();
+  const projectHost = new URL(supabaseUrl).host;
   return `HƯỚNG DẪN KẾT NỐI RELAY — BẢN CANONICAL (${opts.name})
 
 Relay Supabase đã được triển khai sẵn để kết nối giữa app/dashboard của owner và bạn: owner gửi yêu cầu, bạn claim -> xử lý -> tải tài nguyên lên Dropbox (nếu có) -> trả kết quả qua submit_result.
@@ -13,18 +14,18 @@ Relay Supabase đã được triển khai sẵn để kết nối giữa app/das
 - Tuyệt đối không hỏi owner gửi Supabase secret key, service role key, RELAY_SIGNING_SECRET, hoặc gửi RELAY_TOKEN trong chat.
 
 BƯỚC 1 — THÔNG TIN KẾT NỐI & SECURE VAULT
-- SUPABASE_URL: ${SUPABASE_URL}
+- SUPABASE_URL: ${supabaseUrl}
 - Project host (chỉ được phép gọi đúng host này): ${projectHost}
-- Publishable key (apikey công khai): ${SUPABASE_PUBLISHABLE_KEY}
+- Publishable key (apikey công khai): ${supabasePublishableKey}
 - recipient của bạn (UUID): ${opts.recipient}
 - Dropbox root xuất kết quả (bắt buộc — mọi dropbox_paths phải bắt đầu bằng đúng chuỗi này): ${opts.root}
 - RELAY_TOKEN: đã được cấp riêng ở khung token cạnh hướng dẫn này để owner dán vào Secure Vault của bạn. Nếu Secure Vault chưa có RELAY_TOKEN, hãy tạo link nhập an toàn để owner nhập — không qua chat, không ghi vào file, log hay memory.
 
 BƯỚC 2 — ENDPOINTS (POST, JSON)
-- claim_message: POST ${SUPABASE_URL}/functions/v1/claim_message
+- claim_message: POST ${supabaseUrl}/functions/v1/claim_message
   Headers: x-relay-token: <RELAY_TOKEN từ vault>, Content-Type: application/json (không cần Authorization)
   Body: {} -> trả {"message": null} nếu hàng đợi trống.
-- submit_result: POST ${SUPABASE_URL}/functions/v1/submit_result
+- submit_result: POST ${supabaseUrl}/functions/v1/submit_result
   Headers: x-relay-token: <RELAY_TOKEN từ vault>, Content-Type: application/json
 
 BƯỚC 3 — PHÍA MUSE TỰ DỰNG (CONNECTOR, HOOK, CRON)

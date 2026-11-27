@@ -96,11 +96,13 @@ const VI = {
   "api.invalidJson": "Endpoint trả về dữ liệu không phải JSON hợp lệ.",
   "api.noChoices": "Endpoint trả về JSON nhưng không có choices hợp lệ.",
   "api.timeout20": "Quá thời gian chờ (20s)",
-  "api.corsTest": "Không thể kết nối (kiểm tra URL hoặc cấu hình CORS của endpoint)",
   "api.emptyReply": "Endpoint trả về nội dung rỗng.",
-  "api.timeout90": "Quá thời gian chờ phản hồi từ model (90s).",
-  "api.corsCall": "Lỗi kết nối mạng hoặc CORS khi gọi endpoint OpenAI.",
+  "api.timeout60": "Quá thời gian chờ phản hồi từ model (60s).",
   "api.createConvFailed": "không tạo được cuộc hội thoại",
+
+  // Boot / runtime config fallback
+  "boot.configErrTitle": "Không thể kết nối máy chủ cấu hình",
+  "boot.configErrLead": "Dashboard không tải được cấu hình runtime từ /api/config. Hãy kiểm tra dịch vụ server rồi thử lại.",
 
   // Login
   "login.toLightAria": "Chuyển sang giao diện sáng",
@@ -255,7 +257,6 @@ const VI = {
   "composer.threadErr": "Thread chỉ gồm chữ/số/-/_ (1–64 ký tự).",
   "composer.countErr": "Số ảnh phải 1–4.",
   "composer.durErr": "Thời lượng phải 5–10 giây.",
-  "composer.sendErr": "Lỗi gửi: {err}",
   "composer.tabChat": "Chat",
   "composer.tabImage": "Ảnh",
   "composer.tabVideo": "Video",
@@ -270,14 +271,13 @@ const VI = {
   "composer.threadAttachedTitle": "Thread đang gắn",
   "composer.modeAria": "Chế độ gửi",
   "composer.options": "Tuỳ chọn",
-  "composer.sending": "Đang gửi…",
   "composer.send": "Gửi",
   "composer.attach": "Đính kèm",
-  "composer.attachTitle": "Đính kèm tệp lên Dropbox của Muse (tối đa 4 tệp, ≤ 15 MB)",
+  "composer.attachTitle": "Đính kèm tệp lên Dropbox của Muse (tối đa 4 tệp, ≤ 50 MB)",
   "composer.attachAria": "Đính kèm tệp",
   "composer.removeFileAria": "Gỡ tệp {name}",
   "composer.maxFilesErr": "Chỉ đính kèm tối đa {max} tệp mỗi lần gửi.",
-  "composer.fileSizeErr": "Tệp \"{name}\" vượt quá giới hạn 15 MB (hoặc rỗng).",
+  "composer.fileSizeErr": "Tệp \"{name}\" vượt quá giới hạn 50 MB (hoặc rỗng).",
   "composer.attachedFallback": "Đính kèm tệp: {names}",
   "composer.videoMaxFilesErr": "Chế độ Video chỉ hỗ trợ tối đa 2 tệp tham chiếu.",
 
@@ -294,7 +294,6 @@ const VI = {
   "museRoom.composerPlaceholder": "Nhắn cho {name}… (Enter gửi, Shift+Enter xuống dòng)",
   "museRoom.composerLockedPlaceholder": "{name} chưa hoàn tất setup — cần lấy token để kích hoạt",
   "museRoom.statusPending": "đang chờ Muse nhận việc…",
-  "museRoom.statusProcessing": "{name} đang xử lý…",
   "museRoom.statusExpired": "hết hạn chờ — Muse không nhận hoặc không trả kết quả trong 30 phút.",
   "museRoom.replyAt": "trả lời {time}",
   "museRoom.dropboxFiles": "{count} tệp trên Dropbox",
@@ -306,16 +305,15 @@ const VI = {
 
   // Dropbox proxy & inline preview
   "dropbox.dropTitle": "Thả tệp để tải lên Dropbox của Muse",
-  "dropbox.dropSub": "Tối đa 4 tệp · tối đa 15 MB mỗi tệp",
+  "dropbox.dropSub": "Tối đa 4 tệp · tối đa 50 MB mỗi tệp",
   "dropbox.notConfiguredErr": "Chưa cấu hình Dropbox trên máy chủ (.env).",
-  "dropbox.notConfiguredHint": "Cần cấu hình Dropbox trong .env để preview/tải",
+  "dropbox.notConfiguredHint": "Cần cấu hình Dropbox trong .env của server để preview/tải",
   "dropbox.download": "Tải xuống",
   "dropbox.downloading": "Đang tải…",
   "dropbox.downloadErr": "Không tải được tệp: {err}",
   "dropbox.openPreview": "Mở xem",
   "dropbox.previewModalTitle": "Xem trước — {name}",
   "dropbox.closePreview": "Đóng",
-  "dropbox.loadingPreview": "Đang tải bản xem trước…",
   "dropbox.uploadErr": "Tải tệp \"{name}\" thất bại: {err}",
   "dropbox.attachedFiles": "{count} tệp đính kèm",
 
@@ -346,8 +344,6 @@ const VI = {
   "convRoom.skipDeletedGroup": "Các Muse trong nhóm đã bị xoá — bỏ qua phần Muse.",
   "convRoom.sendGroupErr": "Lỗi gửi tới nhóm Muse: {err}",
   "convRoom.waitingGroup": "đang chờ các Muse nhận việc…",
-  "convRoom.processingGroup": "đang được xử lý…",
-  "convRoom.musesProcessing": "các Muse đang xử lý…",
   "convRoom.museFailed": "Muse thất bại",
   "convRoom.waitingNamedMuse": "đang chờ {name} nhận việc…",
   "convRoom.expiredNamedMuse": "hết hạn chờ {name}",
@@ -691,11 +687,13 @@ const EN: Record<I18nKey, string> = {
   "api.invalidJson": "Endpoint returned invalid JSON.",
   "api.noChoices": "Endpoint returned JSON without valid choices.",
   "api.timeout20": "Request timed out (20s)",
-  "api.corsTest": "Connection failed (check URL or endpoint CORS config)",
   "api.emptyReply": "Endpoint returned empty content.",
-  "api.timeout90": "Model response timed out (90s).",
-  "api.corsCall": "Network or CORS error calling OpenAI endpoint.",
+  "api.timeout60": "Model response timed out (60s).",
   "api.createConvFailed": "failed to create conversation",
+
+  // Boot / runtime config fallback
+  "boot.configErrTitle": "Unable to load server configuration",
+  "boot.configErrLead": "The dashboard could not load runtime configuration from /api/config. Ensure the backend server is running and try again.",
 
   // Login
   "login.toLightAria": "Switch to light theme",
@@ -850,7 +848,6 @@ const EN: Record<I18nKey, string> = {
   "composer.threadErr": "Thread ID must only use letters, numbers, -, _ (1–64 chars).",
   "composer.countErr": "Image count must be 1–4.",
   "composer.durErr": "Duration must be 5–10 seconds.",
-  "composer.sendErr": "Send failed: {err}",
   "composer.tabChat": "Chat",
   "composer.tabImage": "Image",
   "composer.tabVideo": "Video",
@@ -865,14 +862,13 @@ const EN: Record<I18nKey, string> = {
   "composer.threadAttachedTitle": "Attached thread",
   "composer.modeAria": "Send mode",
   "composer.options": "Options",
-  "composer.sending": "Sending…",
   "composer.send": "Send",
   "composer.attach": "Attach",
-  "composer.attachTitle": "Attach files to Muse's Dropbox (max 4 files, ≤ 15 MB)",
+  "composer.attachTitle": "Attach files to Muse's Dropbox (max 4 files, ≤ 50 MB)",
   "composer.attachAria": "Attach files",
   "composer.removeFileAria": "Remove file {name}",
   "composer.maxFilesErr": "You can attach up to {max} files per message.",
-  "composer.fileSizeErr": "File \"{name}\" exceeds the 15 MB limit (or is empty).",
+  "composer.fileSizeErr": "File \"{name}\" exceeds the 50 MB limit (or is empty).",
   "composer.attachedFallback": "Attached files: {names}",
   "composer.videoMaxFilesErr": "Video mode supports at most 2 reference files.",
 
@@ -889,7 +885,6 @@ const EN: Record<I18nKey, string> = {
   "museRoom.composerPlaceholder": "Message {name}… (Enter to send, Shift+Enter for newline)",
   "museRoom.composerLockedPlaceholder": "{name} is not set up — get token to activate",
   "museRoom.statusPending": "waiting for Muse to claim…",
-  "museRoom.statusProcessing": "{name} is processing…",
   "museRoom.statusExpired": "expired — Muse did not claim or reply within 30 minutes.",
   "museRoom.replyAt": "replied {time}",
   "museRoom.dropboxFiles": "{count} files on Dropbox",
@@ -901,16 +896,15 @@ const EN: Record<I18nKey, string> = {
 
   // Dropbox proxy & inline preview
   "dropbox.dropTitle": "Drop files to upload to Muse's Dropbox",
-  "dropbox.dropSub": "Up to 4 files · max 15 MB each",
+  "dropbox.dropSub": "Up to 4 files · max 50 MB each",
   "dropbox.notConfiguredErr": "Dropbox is not configured on the server (.env).",
-  "dropbox.notConfiguredHint": "Configure Dropbox in .env to preview/download",
+  "dropbox.notConfiguredHint": "Configure Dropbox in server .env to preview/download",
   "dropbox.download": "Download",
   "dropbox.downloading": "Downloading…",
   "dropbox.downloadErr": "Failed to download file: {err}",
   "dropbox.openPreview": "Open",
   "dropbox.previewModalTitle": "Preview — {name}",
   "dropbox.closePreview": "Close",
-  "dropbox.loadingPreview": "Loading preview…",
   "dropbox.uploadErr": "Failed to upload \"{name}\": {err}",
   "dropbox.attachedFiles": "{count} attached file(s)",
 
@@ -941,8 +935,6 @@ const EN: Record<I18nKey, string> = {
   "convRoom.skipDeletedGroup": "Group Muses were deleted — skipping Muse dispatch.",
   "convRoom.sendGroupErr": "Failed to send to Muse group: {err}",
   "convRoom.waitingGroup": "waiting for Muses to claim…",
-  "convRoom.processingGroup": "processing…",
-  "convRoom.musesProcessing": "Muses are processing…",
   "convRoom.museFailed": "Muse failed",
   "convRoom.waitingNamedMuse": "waiting for {name} to claim…",
   "convRoom.expiredNamedMuse": "timed out waiting for {name}",
@@ -1203,7 +1195,7 @@ export function getStoredLang(): Lang {
   }
 }
 
-export function applyLang(lang: Lang): void {
+function applyLang(lang: Lang): void {
   document.documentElement.lang = lang;
   try {
     localStorage.setItem(STORAGE_KEY, lang);

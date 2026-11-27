@@ -19,25 +19,25 @@ import type {
   Project,
   ProjectAgent,
 } from "./types";
-import { AddMuseWizard } from "./components/AddMuseWizard";
-import { AgentsAdminView } from "./components/AgentsAdminView";
-import { ConversationRoom } from "./components/ConversationRoom";
-import { MenuIcon, PanelRightIcon, StarIcon } from "./components/Icons";
-import { InspectorPanel } from "./components/InspectorPanel";
-import { LoginView } from "./components/LoginView";
+import { AddMuseWizard } from "./components/modals/AddMuseWizard";
+import { AgentsAdminView } from "./components/views/AgentsAdminView";
+import { ConversationRoom } from "./components/views/ConversationRoom";
+import { MenuIcon, PanelRightIcon, StarIcon } from "./components/common/Icons";
+import { InspectorPanel } from "./components/layout/InspectorPanel";
+import { LoginView } from "./components/layout/LoginView";
 import {
   ClearMuseHistoryDialog,
   DeleteDialog,
   RenameDialog,
   RotateDialog,
-} from "./components/MuseManage";
-import { MuseRoom } from "./components/MuseRoom";
-import { NewConversationModal } from "./components/NewConversationModal";
-import { OverviewView } from "./components/OverviewView";
-import { ProjectView } from "./components/ProjectView";
-import { ProjectWizard } from "./components/ProjectWizard";
-import { Sidebar } from "./components/Sidebar";
-import { ToastHost, toast } from "./components/ui";
+} from "./components/modals/MuseManage";
+import { MuseRoom } from "./components/views/MuseRoom";
+import { NewConversationModal } from "./components/modals/NewConversationModal";
+import { OverviewView } from "./components/views/OverviewView";
+import { ProjectView } from "./components/views/ProjectView";
+import { ProjectWizard } from "./components/modals/ProjectWizard";
+import { Sidebar } from "./components/layout/Sidebar";
+import { ToastHost, toast } from "./components/common/ui";
 
 const INSPECTOR_KEY = "muse_relay_inspector";
 const FLEET_POLL_MS = 10000;

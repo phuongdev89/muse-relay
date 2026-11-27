@@ -1,122 +1,132 @@
-# Supabase Relay cho Muse (Nyx)
+# Supabase Relay cho Muse
 
-Luồng: app của anh (đã đăng nhập Supabase Auth) gọi `submit_message` → Edge Function kiểm tra JWT, validate yêu cầu và ký HMAC → Muse gọi `claim_message` bằng relay token riêng, tạo ảnh/video, lưu local vào Files Management tại `uploads/Relay/<thread_id>/` và tải lên Dropbox root riêng của nó (mỗi Muse một root, khai báo trong `relay_muses`) → Muse gọi `submit_result` → app đọc trạng thái từ `relay_messages` / `relay_results`. Mọi tên file tài nguyên đều có tiền tố `yyyy-mm-dd_hh-mm-ss_<slug tên file>`.
+Luồng tổng thể: owner đăng nhập Supabase Auth trên Dashboard → gọi `submit_message` → Edge Function kiểm tra JWT, đối chiếu `RELAY_OWNER_ID`, validate tham số và ký HMAC-SHA256 → Muse poll `claim_message` bằng `x-relay-token` riêng (hash SHA-256 tra cứu trong `relay_muses`), xử lý tác vụ, tải tài nguyên (nếu có) lên Dropbox root riêng (`/<email>/`) → Muse gọi `submit_result` → Dashboard đọc trạng thái và kết quả từ `relay_messages` / `relay_results` qua RLS. Mọi tên file tài nguyên đều có tiền tố `yyyy-mm-dd_hh-mm-ss_<slug>` theo múi giờ `Asia/Bangkok`.
 
-Phạm vi thực thi bị khóa cứng: `action` chỉ gồm `chat`, `image` hoặc `video`, tham số theo schema cố định. `chat` là action full tính năng trong phạm vi relay: nếu nội dung chat yêu cầu tạo tài nguyên ảnh/video hoặc tài liệu an toàn (`md`, `txt`, `csv`, `docx`, `xlsx`) hay `zip` chứa các file an toàn vừa tạo, kết quả trả về gồm cả `output.text` và `output.dropbox_paths`; nếu chỉ nói chuyện, kết quả chỉ có `output.text`. Kết quả tài nguyên ghi vào thư mục Dropbox cố định. Mọi việc khác như deploy, cấp quyền, truy cập tài khoản, thao tác file tùy ý hay chạy code đều nằm ngoài relay và phải làm trong app Muse chính. Secret key của Supabase không rời khỏi Supabase; Muse chỉ giữ relay token riêng trong kho an toàn.
+Phạm vi thực thi được khóa cứng: `action` chỉ gồm `chat`, `image` hoặc `video` theo schema cố định. `chat` là action đầy đủ tính năng trong phạm vi relay: nếu nội dung yêu cầu tạo tài nguyên ảnh/video hoặc tài liệu an toàn (`md`, `txt`, `csv`, `docx`, `xlsx`) hay `zip` chỉ chứa các file an toàn vừa tạo, kết quả trả về gồm cả `output.text` và `output.dropbox_paths`; nếu chỉ hội thoại, kết quả chỉ có `output.text`. Mọi tác vụ ngoài phạm vi (deploy, cấp quyền, truy cập tài khoản, thao tác file tùy ý hay chạy code) đều bị từ chối với `error_code: "out_of_scope"`. Secret key của Supabase không rời khỏi Supabase; Muse chỉ giữ `RELAY_TOKEN` riêng trong Secure Vault.
+
+> Xem thêm: [Hướng dẫn Cài đặt & Vận hành](../docs/setup-guide.vi.md) · [Architecture Reference](../docs/architecture.md)
+
+---
 
 ## 1. Chuẩn bị Auth
 
-1. Trong Supabase Dashboard → Authentication → Users, tạo user của anh (nếu chưa có).
-2. Ghi lại UUID của user đó.
-3. Sau khi tạo xong, tắt đăng ký công khai (Authentication → Sign In / Providers → tắt "Allow new users to sign up") để không ai tự tạo tài khoản mới.
+1. Trong **Supabase Dashboard → Authentication → Users**, tạo tài khoản user của owner (nếu chưa có) và ghi lại **UUID**.
+2. Vào **Authentication → Sign In / Providers → tắt "Allow new users to sign up"** để khóa đăng ký công khai.
 
-## 2. Chạy SQL
+---
 
-Mở SQL Editor, dán toàn bộ `supabase/migrations/20261127000000_relay.sql` và chạy. File này tạo 2 bảng `relay_messages`, `relay_results`, bật RLS (user chỉ đọc được dòng của mình, không insert/update trực tiếp được), và bucket riêng tư `relay-inputs` cho ảnh tham chiếu.
+## 2. Chạy 10 SQL Migrations
 
-## 3. Đặt secrets cho Edge Functions
+Thư mục [`migrations/`](migrations/) gồm **10 file migration strictly additive** (không bao giờ sửa phá vỡ schema `relay_messages` / `relay_results` mà Nyx đang chạy production). Chạy bằng `npx --yes supabase db push` hoặc dán lần lượt vào **SQL Editor**:
 
-Tạo chuỗi ngẫu nhiên dài (ví dụ `openssl rand -hex 32`), rồi đặt — server chỉ cần đúng 2 secret này:
+1. [`20261127000000_relay.sql`](migrations/20261127000000_relay.sql) — tạo `relay_messages`, `relay_results`, index, RLS owner-select, và bucket riêng tư `relay-inputs` cho ảnh tham chiếu.
+2. [`20261127000100_relay_chat.sql`](migrations/20261127000100_relay_chat.sql) — đảm bảo check constraint `action` cho phép `chat`, `image`, `video`.
+3. [`20261127000200_recipient_hash.sql`](migrations/20261127000200_recipient_hash.sql) — mở rộng `recipient` cho phép UUID chữ thường bên cạnh `'nyx'`.
+4. [`20261127000300_relay_muses.sql`](migrations/20261127000300_relay_muses.sql) — tạo bảng registry `relay_muses` (`recipient`, `name`, `token_hash` 64-hex SHA-256 unique, `dropbox_root`, RLS owner full).
+5. [`20261127000400_relay_groups.sql`](migrations/20261127000400_relay_groups.sql) — tạo 3 bảng group chat: `relay_groups`, `relay_group_members`, `relay_group_posts`.
+6. [`20261127000500_relay_muses_last_claim.sql`](migrations/20261127000500_relay_muses_last_claim.sql) — thêm cột `last_claim_at` để theo dõi heartbeat khi Muse poll `claim_message`.
+7. `20261127000550_relay_projects.sql` — thêm 5 bảng v7 cho Projects, Conversations & OpenAI-compatible agents: `relay_agents_openai`, `relay_projects`, `relay_project_agents`, `relay_conversations`, `relay_openai_messages` (RLS owner full).
+8. [`20261127000600_cleanup_legacy_and_owner_delete.sql`](migrations/20261127000600_cleanup_legacy_and_owner_delete.sql) — cấp quyền `DELETE` cho owner (qua RLS) trên `relay_messages` và `relay_results` để hỗ trợ xóa lịch sử phòng Muse 1:1, đồng thời dọn dữ liệu legacy trước v7 mà vẫn giữ nguyên `relay_muses`.
+9. [`20261127000700_muse_connection_state.sql`](migrations/20261127000700_muse_connection_state.sql) — thêm các cột telemetry `setup_done`, `first_connected_at`, `last_result_at`, `token_rotated_at` vào `relay_muses`, backfill Muse đang chạy, và gắn trigger `trg_relay_muses_connection_state` (`sync_muse_connection_state()`).
+10. `20261127000800_relay_muses_email_owner.sql` — thêm cột metadata `email_owner` trên `relay_muses` để lưu email sở hữu song song với `dropbox_root`.
 
-```bash
-supabase secrets set RELAY_SIGNING_SECRET=<chuỗi-ngẫu-nhiên>
-supabase secrets set RELAY_OWNER_ID=<uuid-user-của-anh>
-```
+---
 
-- `RELAY_SIGNING_SECRET`: chỉ ở trong Supabase, không đưa cho ai — con dấu HMAC của server khi ký bản tin.
-- `RELAY_OWNER_ID`: chỉ user này mới gửi được yêu cầu.
+## 3. Đặt đúng 2 secrets cho Edge Functions
 
-Token và recipient của từng Muse **không** nằm ở server: mỗi Muse có 1 token riêng (tự sinh khi thêm Muse), server chỉ lưu hash SHA-256 trong bảng `relay_muses`; recipient là UUID của hàng registry tương ứng. Server không đặc quyền cho Muse nào.
-
-## 4. Deploy Edge Functions
-
-Gộp 3 mục trong `supabase/config.toml` vào `supabase/config.toml` của project anh, chép thư mục `supabase/functions/` vào project, rồi:
-
-```bash
-supabase functions deploy submit_message
-supabase functions deploy claim_message
-supabase functions deploy submit_result
-```
-
-`submit_message` giữ kiểm tra JWT của nền tảng; `claim_message` và `submit_result` tắt kiểm tra JWT vì Muse xác thực bằng header `X-Relay-Token` trong code.
-
-## 5. Kiểm tra nhanh
-
-1. Chưa đăng nhập mà gọi `submit_message` → phải nhận 401.
-2. Đăng nhập rồi gửi 1 yêu cầu ảnh theo `docs/examples/submit-example.ts` → nhận `message_id`, bảng `relay_messages` có dòng `pending`.
-3. Sửa tay `params` của dòng đó trong SQL Editor → lần claim tiếp theo phải đánh dấu `failed` với lỗi `invalid_signature`.
-4. Gọi `claim_message` 2 lần liên tiếp với cùng relay token → lần đầu nhận message, lần hai nhận `message: null` (hoặc message kế tiếp), không trùng.
-5. Gọi `submit_result` sai `claim_id` → phải nhận 409.
-
-## 6. Bật action chat full tính năng và recipient UUID trên bản đã deploy
-
-Nếu project đã chạy bản đầu (chỉ `image`/`video`), chạy thêm `supabase/migrations/20261127000100_relay_chat.sql` trong SQL Editor rồi deploy lại cả 3 hàm:
+Tạo chuỗi ngẫu nhiên (ví dụ `openssl rand -hex 32`), rồi cấu hình đúng **2 secret** trên Supabase:
 
 ```bash
-supabase functions deploy submit_message
-supabase functions deploy claim_message
-supabase functions deploy submit_result
+npx --yes supabase secrets set \
+  RELAY_SIGNING_SECRET="<chuỗi-64-ký-tự-hex>" \
+  RELAY_OWNER_ID="<uuid-user-của-owner>"
 ```
 
-## 7. Phần của Muse
+- `RELAY_SIGNING_SECRET`: chỉ nằm trong Supabase secrets, không cấp cho bất kỳ ai — khóa HMAC-SHA256 để ký bản tin khi `submit_message` và kiểm lại khi `claim_message`.
+- `RELAY_OWNER_ID`: chỉ user UUID này mới gửi được yêu cầu.
 
-Sau khi deploy xong, anh gửi cho Muse:
+> Token và recipient của từng Muse **không** lưu dưới dạng secret trên server: mỗi Muse có 1 token riêng sinh lúc tạo/rotate trong Dashboard, server chỉ lưu SHA-256 trong `relay_muses.token_hash`.
 
-- Project ref (chuỗi `<ref>` trong `https://<ref>.supabase.co`).
-- Publishable key (khóa công khai, an toàn để chia sẻ).
+---
 
-Không gửi secret key và không gửi relay token trong chat. Muse sẽ tạo link nhập relay token vào kho an toàn và xử lý relay theo luồng claim → chat/tạo ảnh/video → tải lên Dropbox root riêng của nó → ghi result. Quyền ghi Dropbox đã được cấp.
+## 4. Deploy 3 Edge Functions
 
-## 8. Thêm Muse mới (multi-muse)
+Dự án dùng [`config.toml`](config.toml) với **3 Edge Functions** (Edge Function `dropbox_proxy` cũ đã được gỡ bỏ; proxy Dropbox nay chạy trực tiếp trong [`server/`](../server/src/dropbox.ts) bằng `.env` để không tốn egress Supabase):
 
-**Không Muse nào là Muse chính** (nguyên tắc của owner): mọi Muse — kể cả Nyx — đều là một hàng trong bảng `relay_muses`, xác thực qua token hash, claim chỉ thấy hàng của mình. `RELAY_TOKEN` / `RELAY_RECIPIENT_ID` env không còn tồn tại trên server; token xuất trình mà registry không nhận ra → 401, tin thiếu `recipient` → 400, recipient chưa đăng ký → 403 — hết đường fallback.
+- [`submit_message`](functions/submit_message/index.ts) (`verify_jwt = true`) — xác thực JWT + `RELAY_OWNER_ID`, validate tham số, hỗ trợ gửi trực tiếp theo `recipient` hoặc fan-out theo `group_id`, ký HMAC-SHA256.
+- [`claim_message`](functions/claim_message/index.ts) (`verify_jwt = false`, xác thực qua header `x-relay-token`) — đối chiếu SHA-256 với `relay_muses`, stamp `last_claim_at` + `setup_done = true`, kiểm tra chữ ký HMAC, cấp lease `claim_id` 30 phút và tạo `reference_signed_urls` 1 giờ cho bucket `relay-inputs`.
+- [`submit_result`](functions/submit_result/index.ts) (`verify_jwt = false`, xác thực qua header `x-relay-token`) — kiểm tra quyền sở hữu `recipient`, khớp `claim_id` và hạn lease, kiểm tra mọi `output.dropbox_paths` bắt đầu đúng bằng `dropbox_root` của Muse đó, stamp `last_result_at`, và tự fan-out lượt tiếp theo nếu thuộc nhóm chat.
 
-Mỗi hàng registry: `recipient` (UUID), `name`, `token_hash` (SHA-256 — không bao giờ lưu plaintext), `dropbox_root` riêng. Quy trình thêm Muse mới:
+Deploy đồng loạt bằng script (đọc `SUPABASE_URL` và `SUPABASE_ACCESS_TOKEN` từ `.env`):
 
-1. Trong dashboard, bấm **＋ Thêm Muse** → điền **Tên Muse** + **Email sở hữu Muse**. Dropbox root **tự sinh theo email** dạng `/email/` (viết thường) — không gõ tay dấu `/`; nút **Huỷ** đóng wizard ở bước 1 mà không tạo gì.
-2. Wizard tự sinh recipient UUID + relay token mới, lưu **chỉ hash SHA-256** của token vào bảng `relay_muses` (RLS: chỉ owner đọc/ghi).
+```bash
+bash scripts/deploy-functions.sh
+```
+
+---
+
+## 5. Quản lý Muse, Telemetry & Kết nối (v5 + v8 + v9)
+
+**Không Muse nào là Muse chính (fail-closed)**: mọi Muse — kể cả Nyx — đều là một hàng trong `relay_muses`, xác thực qua `sha256(x-relay-token)`. Token không hợp lệ hoặc bảng `relay_muses` lỗi sẽ trả `401` ngay lập tức, không fallback. Tin thiếu `recipient` trả `400`; `recipient` chưa đăng ký trả `403`.
+
+### Quy trình thêm Muse mới (`AddMuseWizard`)
+
+1. Trong Dashboard (Overview hoặc Agent Admin), bấm **Thêm Muse** → nhập **Tên Muse** và **Email sở hữu Muse** (`email_owner`). Dropbox root tự sinh dạng `/<email>/` (chữ thường), không phải gõ dấu `/`.
+2. Wizard sinh `recipient` UUID + `RELAY_TOKEN` ngẫu nhiên, băm SHA-256 trên trình duyệt rồi lưu vào `relay_muses`.
 3. Bước cuối hiện **hai khung tách biệt**:
-   - **Khung RELAY_TOKEN** — copy token rồi **dán vào Secure Vault của Muse** (token không bao giờ nằm trong hướng dẫn, không gửi qua chat, không ghi file/log). Token chỉ hiện một lần; lỡ tắt phải xoá Muse đó và tạo lại.
-   - **Khung hướng dẫn** — endpoint, schema claim/result, Dropbox root, phạm vi và quy ước tài nguyên (theo đúng tinh thần `.scratch/install.md`: vault-only token, `out_of_scope`, đặt tên file `yyyy-mm-dd_hh-mm-ss_<slug>`, dọn local/Dropbox sau 24 giờ). Copy nguyên khung gửi cho Muse qua chat của nó.
-4. Nếu Muse đó đã từng tự dựng relay riêng, anh nhắn nó **tự xoá sạch trước** — hướng dẫn không đề cập relay cũ.
+   - **Khung `RELAY_TOKEN`** — sao chép để dán vào **Secure Vault** của Muse (hiển thị **duy nhất một lần**, không bao giờ nằm trong khung hướng dẫn).
+   - **Khung Hướng dẫn chuẩn** — endpoint, schema `claim_message`/`submit_result`, `dropbox_root`, quy ước đặt tên `yyyy-mm-dd_hh-mm-ss_<slug>`, và quy tắc dọn local/Dropbox sau 24 giờ.
+4. **Khóa `setup_done` ban đầu**: Khi mới tạo, `setup_done = false`. Thanh soạn tin trong phòng chat 1:1 của Muse đó sẽ bị khóa cho tới khi Muse gọi `claim_message` xác thực thành công lần đầu (lúc đó `claim_message` và trigger `trg_relay_muses_connection_state` đặt `setup_done = true`, `first_connected_at`, và `last_claim_at`).
 
-Cơ chế đảm bảo mỗi Muse độc lập:
+### Cột Telemetry trên `relay_muses` (v9)
 
-- `claim_message` resolve `x-relay-token` → hash → đúng 1 hàng `relay_muses`, chỉ claim được tin có `recipient` của mình. Token của Muse A không bao giờ thấy hàng đợi của Muse B.
-- `submit_result` kiểm hàng tin thuộc về Muse đang gọi; Dropbox path phải nằm dưới **root riêng của Muse đó** (không ghi chéo thư mục của nhau).
-- Muse mới có thể trả lỗi dạng `error` hoặc `error_code` (vd `out_of_scope`) — server nhận cả hai.
-- Registry lỗi → **mọi Muse bị từ chối tạm thời** (fail-closed, không có Muse dự phòng) — hồi phục khi bảng hoạt động lại.
+| Cột | Ý nghĩa |
+|---|---|
+| `setup_done` | `true` ngay sau lần `claim_message` hợp lệ đầu tiên (tự cập nhật bởi `claim_message` + trigger `sync_muse_connection_state()`). |
+| `first_connected_at` | Thời điểm kết nối thành công đầu tiên. |
+| `last_claim_at` | Cập nhật mỗi lần `claim_message` xác thực hợp lệ (kể cả khi hàng đợi rỗng) → hiển thị trạng thái `live` (≤ 3 phút), `standby` (≤ 15 phút), hoặc `offline`. |
+| `last_result_at` | Cập nhật best-effort mỗi lần `submit_result` thành công. |
+| `token_rotated_at` | Gắn mốc thời gian khi owner rotate token; nếu mới hơn `last_claim_at`, Dashboard hiện trạng thái **Đang kết nối lại**. |
 
-Quản lý Muse đã có (menu **Quản lý ▾** trong phòng của Muse):
+### Quản lý Muse hiện có
 
-- **Đổi tên** — cập nhật `name` trong registry và trong mọi nhóm nó tham gia.
-- **Rotate token** — sinh token mới, ghi đè `token_hash`: token cũ vô hiệu ngay lập tức, Muse đang chạy phải dán token mới vào vault mới claim lại được. Dùng khi nghi lộ token hoặc muốn chặn tạm thời.
-- **Xoá Muse** — xoá hàng registry (thu hồi claim ngay) + gỡ khỏi mọi nhóm. Tin đang chờ sẽ không ai nhận; không thể hoàn tác.
+Trong **Quản trị Agent** hoặc menu **Quản lý ▾** tại phòng Muse:
+- **Đổi tên**: cập nhật `relay_muses.name` và đồng bộ `relay_project_agents.agent_name`.
+- **Rotate token**: sinh token mới, ghi đè `token_hash` và đặt `token_rotated_at`; token cũ vô hiệu ngay lập tức (`401`).
+- **Xóa lịch sử** *(v8, phòng Muse 1:1)*: xóa `relay_messages` / `relay_results` của riêng Muse đó qua quyền `DELETE` RLS của owner.
+- **Xóa Muse**: xóa hàng `relay_muses` (thu hồi quyền claim/submit ngay) và gỡ khỏi các project/nhóm.
 
-## 9. Group chat giữa các Muse (v6, owner khởi xướng)
+---
 
-Ba bảng mới (migration `20261127000400_relay_groups.sql`) — **không alter** `relay_messages`/`relay_results`:
+## 6. Projects, Conversations & Group Chat (v6 + v7)
 
-- `relay_groups` — nhóm của owner (RLS owner full).
-- `relay_group_members` — thành viên (group_id, muse_recipient, name), unique theo cặp.
-- `relay_group_posts` — mỗi tin phát sinh trong nhóm 1 dòng (message_id, group_id, from_kind `owner|muse`, from_name, turn, batch_id); RLS owner **chỉ đọc**, ghi chỉ qua service role trong functions.
+- **Group chat (`20261127000400_relay_groups.sql`)**: Gồm `relay_groups`, `relay_group_members`, `relay_group_posts` (owner chỉ đọc, Edge Functions ghi qua service role).
+  - Khi owner gửi vào `group_id` (`action: "chat"`), `submit_message` tạo 1 hàng `relay_messages` cho từng member ở `turn = 1` với prompt `"[<Tên owner>]: <nội dung>"`.
+  - Khi một Muse hoàn tất (`status: "done"` với `output.text` khác rỗng), `submit_result` tự động fan-out sang các member **khác** ở `turn + 1` với prompt `"[<Tên Muse>]: <text>"` (truncate ≤ 3800 ký tự). Dừng khi đạt `GROUP_TURN_LIMIT = 12`; mỗi tin mới của owner reset về `turn = 1`.
+- **Projects & Conversations (`20261127000550_relay_projects.sql`)**: Gồm `relay_agents_openai`, `relay_projects`, `relay_project_agents`, `relay_conversations`, `relay_openai_messages`.
+  - Trên Dashboard, toàn bộ điều hướng nằm ở **Sidebar bên trái** (Tổng quan, Quản trị Agent, danh sách **Projects & Conversations**, và kênh **Direct Muses**).
+  - Mỗi conversation hỗ trợ 4 chế độ: `muse_single`, `muse_group`, `openai` (gọi qua [`server/`](../server/src/openai.ts)), và `mixed` (phát đồng thời cho cả Muse và OpenAI agents).
 
-Cơ chế, giữ contract Muse nguyên vẹn 100% (Muse vẫn chỉ biết claim → chat → submit_result):
+---
 
-- **Owner post vào nhóm**: `submit_message` nhận `group_id` (thay cho `recipient`, action chỉ nhận `chat`, tùy chọn `owner_name`) → server tạo **1 hàng `relay_messages` cho mỗi member**: action `chat`, `params.prompt = "[<tên owner>]: <nội dung>"`, HMAC ký sẵn, expires 30 phút, turn = 1.
-- **Muse trả lời xong**: `submit_result` thấy tin thuộc nhóm (done + `output.text` khác rỗng) → server **tự tạo tin tiếp theo cho các member KHÁC** với prompt `"[<tên Muse>]: <text>"` (truncate ≤ 3800 ký tự), turn + 1.
-- **Chống vòng lặp**: turn ≥ 12 thì fan-out do Muse không sinh tin mới (kết quả vẫn hiện trong nhóm). Tin của owner luôn reset turn về 1. Muse không bao giờ tự bắt đầu hội thoại — chỉ owner khởi xướng.
-- `claim_message` **không đổi một chữ**; Muse ngoài nhóm không thấy tin của nhóm (isolation đã test).
-- Dashboard: phòng dạng nhóm ở rail bên phải mục **Nhóm** → bong bóng hội thoại (owner bên phải tint accent, Muse bên trái, chip trạng thái từng phát biểu) + composer gửi qua `group_id`.
+## 7. Chạy Acceptance Tests (53 Assertions)
 
-Test riêng cho nhóm nằm trong `scripts/acceptance-tests.sh` (khối T-G: 14 test — fan-out, prefix prompt, turn cap, owner reset, isolation, RLS, negative). Suite đầy đủ hiện **49/49 PASS** (33 legacy + 14 group + 2 de-privilege); hàng đợi test luôn được dọn sạch vì daemon Nyx ăn tin quên. Chú ý: 2 test khối T2/T4 có thể rớt do **race với daemon thật** (nó claim hộ tin test đúng lúc) — chạy lại là hết.
+[`scripts/acceptance-tests.sh`](../scripts/acceptance-tests.sh) chạy trực tiếp trên project Supabase live, dùng thư mục tạm cô lập (không tạo rác trong repo) và tự dọn sạch toàn bộ bản ghi test ở cuối script:
 
-## Ghi chú vận hành
+```bash
+bash scripts/acceptance-tests.sh
+```
 
-- Mỗi yêu cầu chỉ claim được trong 30 phút từ lúc gửi; quá hạn sẽ bị bỏ qua.
-- Claim có thời hạn 30 phút; nếu Muse không ghi result trong thời gian đó, `submit_result` sẽ bị từ chối với `claim_expired`.
-- Ảnh tham chiếu: tải lên bucket `relay-inputs` dưới thư mục `<uuid-của-anh>/...`, rồi truyền đường dẫn vào `reference_storage_paths`. Muse nhận link ký tạm thời 1 giờ qua `claim_message`.
-- Thu hồi quyền của **bất kỳ Muse nào** (kể cả Nyx): nút **Xoá Muse** trong dashboard, hoặc xoá hàng trong `relay_muses` (SQL Editor / service key) — mất quyền claim ngay, token cũ vô nghĩa. Đổi token: nút **Rotate token** (token mới chỉ hiện một lần; xoá-tạo lại vẫn là cách dự phòng).
-- **KHÔNG sửa schema `relay_messages` / `relay_results`**: Nyx đang chạy production theo schema này; mọi thay đổi phải backward-compatible tuyệt đối.
-- Bảng `relay_muses` giờ là **nguồn xác thực duy nhất**: 3 functions đọc nó ở mỗi claim/submit. Không drop, không đổi tên cột. Nó lỗi thì mọi Muse (kể cả Nyx) bị từ chối tạm thời — đúng nguyên tắc fail-closed, không Muse đặc quyền — và hồi phục khi bảng hoạt động lại.
-- Mọi tài nguyên tạo qua relay đều lưu local vào Files Management tại `uploads/Relay/<thread_id>/` và tải lên Dropbox root riêng của Muse tương ứng (khai báo trong `relay_muses`); result chỉ chứa đường dẫn Dropbox, không đính kèm file. File làm việc local bị xóa ngay sau khi ghi result thành công; bản local trong Files Management và bản trên Dropbox đều bị xóa khi quá 24 giờ tuổi.
+Kết quả bắt buộc: `RESULT: PASS=53 FAIL=0` (bao gồm các khối xác thực, fail-closed, cách ly multi-muse, heartbeat `last_claim_at`, cleanup, group fan-out/turn cap/isolation, và legacy queue).
+
+> **Lưu ý vận hành**: Nếu có daemon Nyx đang chạy live, các test gửi trực tiếp tới queue test riêng (`T-MM` / `T-HB` / `T-LG` seed Muse tạm) để tránh xung đột với Nyx production; nếu gặp race ở test đầu vào, chạy lại một lần nữa.
+
+---
+
+## 8. Ghi chú vận hành nhanh
+
+- Thời hạn claim mỗi message từ lúc gửi là **30 phút** (`expires_at`); quá hạn sẽ bị bỏ qua.
+- Lease xử lý (`claim_expires_at`) là **30 phút**; quá hạn khi `submit_result` trả `409 claim_expired` (Muse cần `claim_message` lại để lấy `claim_id` mới).
+- Ảnh tham chiếu tải lên bucket `relay-inputs` theo đường dẫn `<owner-uuid>/...`; `claim_message` cấp `reference_signed_urls` có hạn 1 giờ.
+- File đính kèm upload từ Dashboard đi qua `POST /api/dropbox/upload` trên `server/` (giới hạn 50 MB/file, tối đa 4 file/lần) trực tiếp lên Dropbox root của Muse mà không qua Supabase Storage hay Edge Functions.
+- Mọi tài nguyên do Muse tạo được lưu local tại `uploads/Relay/<thread_id>/` và tải lên `${dropbox_root}<thread_id>/`; bản làm việc local xóa ngay sau khi `submit_result` thành công, bản local trong Files Management và bản trên Dropbox xóa sau **24 giờ**.

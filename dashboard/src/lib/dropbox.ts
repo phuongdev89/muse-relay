@@ -42,16 +42,6 @@ const KIND_KEY: Record<ResourceKind, I18nKey> = {
   other: "res.other",
 };
 
-const KIND_ICON: Record<ResourceKind, string> = {
-  image: "🖼",
-  video: "🎬",
-  audio: "🎧",
-  document: "📄",
-  spreadsheet: "📊",
-  archive: "🗃",
-  other: "📎",
-};
-
 function extOf(path: string): string {
   const name = path.split("/").pop() ?? "";
   const dot = name.lastIndexOf(".");
@@ -64,10 +54,6 @@ export function resourceKind(path: string): ResourceKind {
 
 export function resourceLabel(path: string, lang: Lang = getStoredLang()): string {
   return translate(lang, KIND_KEY[resourceKind(path)]);
-}
-
-export function resourceIcon(path: string): string {
-  return KIND_ICON[resourceKind(path)];
 }
 
 /** Last path segment, for card titles. */
@@ -83,7 +69,7 @@ export function extractUrls(text: string): string[] {
   return text.match(URL_RE) ?? [];
 }
 
-export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const MAX_ATTACH_FILES = 4;
 
 /** Validates and merges newly picked/dropped files against attachment limits. */
@@ -123,4 +109,17 @@ export function isImageUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+const MAX_PROMPT_LEN = 4000;
+
+export function appendDropboxPathsToPrompt(basePrompt: string, paths: string[]): string {
+  if (paths.length === 0) return basePrompt;
+  const allMentioned = paths.every((p) => basePrompt.includes(p));
+  if (allMentioned) return basePrompt;
+  const note = `\n\n[Dropbox input: ${paths.join(", ")}]`;
+  if (basePrompt.length + note.length <= MAX_PROMPT_LEN) {
+    return `${basePrompt}${note}`;
+  }
+  return basePrompt;
 }
