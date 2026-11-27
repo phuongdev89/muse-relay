@@ -13,3 +13,6 @@ verify_jwt = false
 
 [functions.submit_result]
 verify_jwt = false
+
+[functions.dropbox_proxy]
+verify_jwt = true

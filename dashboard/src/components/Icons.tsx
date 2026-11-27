@@ -369,6 +369,24 @@ export function PlugIcon({ size = 14, className, style }: IconProps) {
   );
 }
 
+export function DownloadIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="M7 10l5 5 5-5M12 15V3" />
+    </svg>
+  );
+}
+
+export function ExternalLinkIcon({ size = 13, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <path d="M15 3h6v6M10 14L21 3" />
+    </svg>
+  );
+}
+
 export function ResourceKindIcon({ path, size = 18, className, style }: { path: string } & IconProps) {
   const kind: ResourceKind = resourceKind(path);
   switch (kind) {

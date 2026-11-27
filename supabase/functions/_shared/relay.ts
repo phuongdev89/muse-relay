@@ -187,17 +187,24 @@ export async function resolveMuse(req: Request): Promise<ResolvedMuse | null> {
 // True when submit_message may address this recipient: any registered muse
 // row. Registry lookup errors REJECT the submission (fail-closed) — there is
 // no privileged recipient that bypasses the registry.
+export async function resolveRecipientRoot(
+  supabase: ReturnType<typeof adminClient>,
+  recipient: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("relay_muses")
+    .select("dropbox_root")
+    .eq("recipient", recipient)
+    .maybeSingle();
+  if (error || !data?.dropbox_root) return null;
+  return String(data.dropbox_root);
+}
+
 export async function recipientIsKnown(
   supabase: ReturnType<typeof adminClient>,
   recipient: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("relay_muses")
-    .select("recipient")
-    .eq("recipient", recipient)
-    .maybeSingle();
-  if (error) return false;
-  return Boolean(data);
+  return Boolean(await resolveRecipientRoot(supabase, recipient));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -317,6 +324,28 @@ function readReferencePaths(
   return paths;
 }
 
+function readReferenceDropboxPaths(
+  params: Record<string, unknown>,
+  maxItems: number,
+): string[] | undefined {
+  if (params["reference_dropbox_paths"] === undefined) return undefined;
+  const value = params["reference_dropbox_paths"];
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw new Error(`reference_dropbox_paths must be an array of at most ${maxItems} paths`);
+  }
+  const paths: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") {
+      throw new Error("reference_dropbox_paths items must be strings");
+    }
+    if (!item.startsWith("/") || item.includes("..") || item.length > 512) {
+      throw new Error("reference_dropbox_paths must be valid absolute Dropbox paths");
+    }
+    paths.push(item);
+  }
+  return paths.length > 0 ? paths : undefined;
+}
+
 export function validateParams(
   action: unknown,
   params: unknown,
@@ -335,8 +364,10 @@ export function validateParams(
       "count",
       "duration_seconds",
       "reference_storage_paths",
+      "reference_dropbox_paths",
     ]);
     const resourceType = readResourceType(params);
+    const dbxPaths = readReferenceDropboxPaths(params, 4);
     return {
       action,
       params: {
@@ -355,6 +386,7 @@ export function validateParams(
         count: readIntInRange(params, "count", 1, 1, 4),
         duration_seconds: readIntInRange(params, "duration_seconds", 8, 5, 10),
         reference_storage_paths: readReferencePaths(params, ownerId, 4),
+        ...(dbxPaths ? { reference_dropbox_paths: dbxPaths } : {}),
       },
     };
   }
@@ -365,8 +397,10 @@ export function validateParams(
       "aspect_ratio",
       "count",
       "reference_storage_paths",
+      "reference_dropbox_paths",
       "thread_id",
     ]);
+    const dbxPaths = readReferenceDropboxPaths(params, 4);
     return {
       action,
       params: {
@@ -379,6 +413,7 @@ export function validateParams(
         ),
         count: readIntInRange(params, "count", 1, 1, 4),
         reference_storage_paths: readReferencePaths(params, ownerId, 4),
+        ...(dbxPaths ? { reference_dropbox_paths: dbxPaths } : {}),
       },
     };
   }
@@ -389,8 +424,10 @@ export function validateParams(
       "aspect_ratio",
       "duration_seconds",
       "reference_storage_paths",
+      "reference_dropbox_paths",
       "thread_id",
     ]);
+    const dbxPaths = readReferenceDropboxPaths(params, 2);
     return {
       action,
       params: {
@@ -399,6 +436,7 @@ export function validateParams(
         aspect_ratio: readAspectRatio(params, ["9:16", "16:9"], "9:16"),
         duration_seconds: readIntInRange(params, "duration_seconds", 8, 5, 10),
         reference_storage_paths: readReferencePaths(params, ownerId, 2),
+        ...(dbxPaths ? { reference_dropbox_paths: dbxPaths } : {}),
       },
     };
   }

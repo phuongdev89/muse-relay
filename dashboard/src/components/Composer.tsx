@@ -1,37 +1,54 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { MAX_ATTACH_FILES, mergeAttachmentFiles } from "../lib/dropbox";
+import { fmtFileSize } from "../lib/format";
 import { useLang } from "../lib/i18n";
 import type { ActionMode, MessageParams } from "../types";
 import {
   ChevronDownIcon,
   ImageIcon,
   MessageIcon,
+  PaperclipIcon,
   SendIcon,
   SlidersIcon,
   VideoIcon,
+  XIcon,
 } from "./Icons";
 import { ErrorMsg } from "./ui";
 
 const MAX_PROMPT_LEN = 4000;
+const THREAD_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 // One composer, three modes (default chat). Builds the exact params payload
 // the submit_message contract validates server-side.
 export function Composer(props: {
   placeholder: string;
-  onSend: (action: ActionMode, params: MessageParams) => Promise<string | null>;
+  onSend: (action: ActionMode, params: MessageParams, files: File[]) => void | Promise<unknown>;
   /** image/video modes are disabled in group / openai / mixed rooms */
   mediaModes?: boolean;
   /** hides the manual thread_id field when a conversation locks thread_id */
   hideThreadInput?: boolean;
+  /** allows attaching up to 4 files (<= 15 MB) to upload to Muse's Dropbox */
+  allowAttachments?: boolean;
+  /** optional controlled attachment list (used for room-wide drag & drop) */
+  files?: File[];
+  onFilesChange?: (files: File[]) => void;
   /** disables composing & sending (e.g. direct Muse channel not yet set up) */
   disabled?: boolean;
   /** banner rendered right above the composer shell while disabled */
   disabledBanner?: ReactNode;
 }) {
-  const { mediaModes = true, hideThreadInput = false, disabled = false, disabledBanner } = props;
-  const { t } = useLang();
+  const {
+    mediaModes = true,
+    hideThreadInput = false,
+    allowAttachments = false,
+    disabled = false,
+    disabledBanner,
+  } = props;
+  const { lang, t } = useLang();
 
   const [mode, setMode] = useState<ActionMode>("chat");
   const [prompt, setPrompt] = useState("");
+  const [internalFiles, setInternalFiles] = useState<File[]>([]);
   const [ar, setAr] = useState("9:16");
   const [count, setCount] = useState(1);
   const [dur, setDur] = useState(8);
@@ -39,10 +56,33 @@ export function Composer(props: {
   const [resType, setResType] = useState("auto");
   const [outFmt, setOutFmt] = useState("auto");
   const [optsOpen, setOptsOpen] = useState(false);
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
 
-  const THREAD_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const attachedFiles = props.files ?? internalFiles;
+  const setAttachedFiles = (next: File[]) => {
+    if (props.onFilesChange) props.onFilesChange(next);
+    else setInternalFiles(next);
+  };
+
+  // Create & revoke thumbnail object URLs cleanly inside useEffect (StrictMode-safe)
+  const [thumbUrls, setThumbUrls] = useState<Map<File, string>>(() => new Map());
+
+  useEffect(() => {
+    const next = new Map<File, string>();
+    for (const file of attachedFiles) {
+      if (file.type.startsWith("image/")) {
+        next.set(file, URL.createObjectURL(file));
+      }
+    }
+    setThumbUrls(next);
+    return () => {
+      for (const url of next.values()) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [attachedFiles]);
 
   function switchMode(next: ActionMode) {
     if (disabled) return;
@@ -53,16 +93,60 @@ export function Composer(props: {
     }
   }
 
+  function handlePickFiles(e: ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (picked.length === 0) return;
+    setError("");
+    const maxForMode = mode === "video" ? 2 : MAX_ATTACH_FILES;
+    const { files, rejectedLarge, overflowCount } = mergeAttachmentFiles(
+      attachedFiles,
+      picked,
+      maxForMode,
+    );
+    setAttachedFiles(files);
+    if (rejectedLarge.length > 0) {
+      setError(t("composer.fileSizeErr", { name: rejectedLarge[0].name }));
+    } else if (overflowCount > 0) {
+      setError(
+        mode === "video"
+          ? t("composer.videoMaxFilesErr")
+          : t("composer.maxFilesErr", { max: MAX_ATTACH_FILES }),
+      );
+    }
+  }
+
+  function removeFile(idx: number) {
+    setAttachedFiles(attachedFiles.filter((_, i) => i !== idx));
+    setError("");
+  }
+
   function buildParams(): MessageParams | string {
-    const p = prompt.trim();
-    if (p.length < 1 || p.length > MAX_PROMPT_LEN) {
+    const rawTrimmed = prompt.trim();
+    if (rawTrimmed.length === 0 && attachedFiles.length === 0) {
       return t("composer.lenErr", { max: MAX_PROMPT_LEN });
     }
+    if (rawTrimmed.length > MAX_PROMPT_LEN) {
+      return t("composer.lenErr", { max: MAX_PROMPT_LEN });
+    }
+    if (mode === "video" && attachedFiles.length > 2) {
+      return t("composer.videoMaxFilesErr");
+    }
+
+    const effectivePrompt =
+      rawTrimmed.length > 0
+        ? rawTrimmed
+        : t("composer.attachedFallback", {
+            names: attachedFiles.map((f) => f.name).join(", "),
+          })
+            .slice(0, MAX_PROMPT_LEN)
+            .trim();
+
     const th = hideThreadInput ? "" : thread.trim();
     if (th && !THREAD_RE.test(th)) {
       return t("composer.threadErr");
     }
-    const params: MessageParams = { prompt: p };
+    const params: MessageParams = { prompt: effectivePrompt };
     if (th) params.thread_id = th;
     if (mode === "chat") {
       params.resource_type = resType;
@@ -81,22 +165,23 @@ export function Composer(props: {
     return params;
   }
 
-  async function submit() {
-    if (disabled || sending) return;
+  function submit() {
+    if (disabled) return;
     setError("");
     const built = buildParams();
     if (typeof built === "string") {
       setError(built);
       return;
     }
-    setSending(true);
-    const err = await props.onSend(mode, built);
-    setSending(false);
-    if (err) {
-      setError(t("composer.sendErr", { err }));
-      return;
-    }
+    const filesSnapshot = [...attachedFiles];
+    const modeSnapshot = mode;
+
+    // Clear composer synchronously so user can immediately type the next message
     setPrompt("");
+    setAttachedFiles([]);
+    setError("");
+
+    void props.onSend(modeSnapshot, built, filesSnapshot);
   }
 
   const charCount = prompt.length;
@@ -127,10 +212,45 @@ export function Composer(props: {
             if (disabled) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              void submit();
+              submit();
             }
           }}
         />
+
+        {allowAttachments && !disabled && attachedFiles.length > 0 && (
+          <div className="composer-attachments">
+            {attachedFiles.map((file, idx) => {
+              const url = thumbUrls.get(file) ?? null;
+              return (
+              <div
+                key={`${file.name}-${file.size}-${file.lastModified}-${idx}`}
+                className="attach-chip"
+              >
+                {url ? (
+                  <img src={url} alt={file.name} className="attach-thumb" />
+                ) : (
+                  <span className="attach-icon" aria-hidden="true">
+                    <PaperclipIcon size={13} />
+                  </span>
+                )}
+                <span className="attach-meta">
+                  <span className="attach-name" title={file.name}>{file.name}</span>
+                  <span className="attach-size">{fmtFileSize(file.size, lang)}</span>
+                </span>
+                <button
+                  type="button"
+                  className="attach-remove"
+                  onClick={() => removeFile(idx)}
+                  aria-label={t("composer.removeFileAria", { name: file.name })}
+                  title={t("composer.removeFileAria", { name: file.name })}
+                >
+                  <XIcon size={12} />
+                </button>
+              </div>
+              );
+            })}
+          </div>
+        )}
 
         {mediaModes && optsOpen && !disabled && (
           <div className="composer-drawer">
@@ -217,11 +337,35 @@ export function Composer(props: {
         )}
 
         <div className="composer-bar">
+          {allowAttachments && !disabled && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={handlePickFiles}
+              />
+              <button
+                type="button"
+                className="composer-attach-btn"
+                onClick={() => fileInputRef.current?.click()}
+                title={t("composer.attachTitle")}
+                aria-label={t("composer.attachAria")}
+              >
+                <PaperclipIcon size={14} />
+                <span className="hide-xs">{t("composer.attach")}</span>
+              </button>
+            </>
+          )}
+
           {mediaModes && activeThread && (
             <span className="composer-thread-pill" title={t("composer.threadAttachedTitle")}>
               #{activeThread}
             </span>
           )}
+
+          <span className="grow" />
 
           <span className={`char-counter${charState ? ` ${charState}` : ""}`}>
             {charCount} / {MAX_PROMPT_LEN}
@@ -268,12 +412,12 @@ export function Composer(props: {
           <button
             id="composer-send"
             type="button"
-            className={`btn btn-send${sending ? " is-loading" : ""}`}
-            disabled={disabled || sending}
+            className="btn btn-send"
+            disabled={disabled}
             onClick={submit}
           >
             <SendIcon size={14} />
-            <span>{sending ? t("composer.sending") : t("composer.send")}</span>
+            <span>{t("composer.send")}</span>
           </button>
         </div>
       </div>

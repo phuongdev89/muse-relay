@@ -4,7 +4,7 @@ import {
   corsHeaders,
   fanoutGroupMessage,
   jsonResponse,
-  recipientIsKnown,
+  resolveRecipientRoot,
   signMessage,
   userClient,
   validateParams,
@@ -109,11 +109,20 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "recipient is required" }, 400);
     }
     const recipient = body.recipient.trim().toLowerCase();
-    if (!(await recipientIsKnown(adminClient(), recipient))) {
+    const dropboxRoot = await resolveRecipientRoot(adminClient(), recipient);
+    if (!dropboxRoot) {
       return jsonResponse({ error: "recipient_mismatch" }, 403);
     }
 
     const validated = validateParams(body.action, body.params, user.id);
+    const refDropboxPaths = validated.params["reference_dropbox_paths"];
+    if (Array.isArray(refDropboxPaths)) {
+      for (const p of refDropboxPaths) {
+        if (typeof p !== "string" || !p.startsWith(dropboxRoot)) {
+          throw new Error(`reference_dropbox_paths must stay under ${dropboxRoot}`);
+        }
+      }
+    }
     const id = crypto.randomUUID();
     const nonce = crypto.randomUUID();
     const expiresAtUnix = Math.floor(Date.now() / 1000) + CLAIM_WINDOW_SECONDS;

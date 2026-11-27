@@ -17,6 +17,7 @@ import type {
   RelayResult,
   ThreadItem,
 } from "../types";
+import { MAX_UPLOAD_BYTES } from "./dropbox";
 import { tNow } from "./i18n";
 import { db } from "./supabase";
 
@@ -201,6 +202,30 @@ export async function clearMuseThread(
 
 // ---- sending ---------------------------------------------------------------
 
+async function extractFunctionError(
+  error: unknown,
+): Promise<{ code: string; message: string }> {
+  if (error && typeof error === "object" && "context" in error) {
+    const ctx = (error as { context?: unknown }).context;
+    if (ctx instanceof Response) {
+      try {
+        const body = (await ctx.clone().json()) as { error?: unknown } | null;
+        if (body && typeof body.error === "string" && body.error.trim()) {
+          const msg = body.error.trim();
+          return { code: msg, message: msg };
+        }
+      } catch {
+        // ignore JSON parse failure on error body
+      }
+    }
+  }
+  const msg =
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message ?? "").trim()
+      : String(error ?? "").trim();
+  return { code: msg, message: msg || tNow("api.failed") };
+}
+
 export async function sendMessage(input: {
   recipient: string;
   action: ActionMode;
@@ -209,7 +234,11 @@ export async function sendMessage(input: {
   const { data, error } = await db.functions.invoke("submit_message", {
     body: { recipient: input.recipient, action: input.action, params: input.params },
   });
-  return { data: (data as never) ?? null, error: error?.message ?? null };
+  if (error) {
+    const parsed = await extractFunctionError(error);
+    return { data: null, error: parsed.message };
+  }
+  return { data: (data as never) ?? null, error: null };
 }
 
 export async function sendGroupMessage(input: {
@@ -225,7 +254,151 @@ export async function sendGroupMessage(input: {
       owner_name: input.ownerName,
     },
   });
-  return { error: error?.message ?? null };
+  if (error) {
+    const parsed = await extractFunctionError(error);
+    return { error: parsed.message };
+  }
+  return { error: null };
+}
+
+// ---- dropbox_proxy (temp_link cache + upload) ------------------------------
+
+export interface DropboxTempLinkResult {
+  link: string | null;
+  name?: string;
+  size?: number | null;
+  path?: string;
+  notConfigured?: boolean;
+  error?: string;
+}
+
+const TEMP_LINK_TTL_MS = 30 * 60 * 1000;
+const NOT_CONFIGURED_TTL_MS = 30 * 1000;
+
+const tempLinkCache = new Map<string, { res: DropboxTempLinkResult; expiresAt: number }>();
+const inflightTempLinks = new Map<string, Promise<DropboxTempLinkResult>>();
+
+export function getDropboxTempLink(path: string): Promise<DropboxTempLinkResult> {
+  const key = path.trim();
+  const cached = tempLinkCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return Promise.resolve(cached.res);
+  }
+  const existing = inflightTempLinks.get(key);
+  if (existing) return existing;
+
+  const task = (async (): Promise<DropboxTempLinkResult> => {
+    try {
+      const { data, error } = await db.functions.invoke("dropbox_proxy", {
+        body: { action: "temp_link", path: key },
+      });
+      if (error) {
+        const parsed = await extractFunctionError(error);
+        if (parsed.code === "dropbox_not_configured" || parsed.message.includes("dropbox_not_configured")) {
+          const res: DropboxTempLinkResult = { link: null, notConfigured: true };
+          tempLinkCache.set(key, { res, expiresAt: Date.now() + NOT_CONFIGURED_TTL_MS });
+          return res;
+        }
+        return { link: null, error: parsed.message };
+      }
+      const payload = data as { link?: unknown; name?: unknown; size?: unknown; path?: unknown; error?: unknown } | null;
+      if (payload?.error === "dropbox_not_configured") {
+        const res: DropboxTempLinkResult = { link: null, notConfigured: true };
+        tempLinkCache.set(key, { res, expiresAt: Date.now() + NOT_CONFIGURED_TTL_MS });
+        return res;
+      }
+      if (!payload || typeof payload.link !== "string" || !payload.link) {
+        return {
+          link: null,
+          error: typeof payload?.error === "string" ? payload.error : tNow("api.failed"),
+        };
+      }
+      const res: DropboxTempLinkResult = {
+        link: payload.link,
+        name: typeof payload.name === "string" ? payload.name : undefined,
+        size: typeof payload.size === "number" ? payload.size : null,
+        path: typeof payload.path === "string" ? payload.path : key,
+      };
+      tempLinkCache.set(key, { res, expiresAt: Date.now() + TEMP_LINK_TTL_MS });
+      return res;
+    } catch (err) {
+      return { link: null, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      inflightTempLinks.delete(key);
+    }
+  })();
+
+  inflightTempLinks.set(key, task);
+  return task;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("file_read_failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function uploadFileToMuseDropbox(input: {
+  recipient: string;
+  threadId?: string | null;
+  file: File;
+}): Promise<{ dropbox_path: string | null; name?: string; size?: number; error: string | null }> {
+  if (input.file.size < 1 || input.file.size > MAX_UPLOAD_BYTES) {
+    return {
+      dropbox_path: null,
+      error: tNow("composer.fileSizeErr", { name: input.file.name }),
+    };
+  }
+  try {
+    const contentBase64 = await fileToBase64(input.file);
+    const { data, error } = await db.functions.invoke("dropbox_proxy", {
+      body: {
+        action: "upload",
+        recipient: input.recipient,
+        thread_id: input.threadId ?? undefined,
+        file_name: input.file.name,
+        content_base64: contentBase64,
+      },
+    });
+    if (error) {
+      const parsed = await extractFunctionError(error);
+      if (parsed.code === "dropbox_not_configured" || parsed.message.includes("dropbox_not_configured")) {
+        return { dropbox_path: null, error: tNow("dropbox.notConfiguredErr") };
+      }
+      return { dropbox_path: null, error: parsed.message };
+    }
+    const payload = data as {
+      dropbox_path?: unknown;
+      name?: unknown;
+      size?: unknown;
+      error?: unknown;
+    } | null;
+    if (!payload || typeof payload.dropbox_path !== "string" || !payload.dropbox_path) {
+      const rawErr = typeof payload?.error === "string" ? payload.error : tNow("api.failed");
+      return {
+        dropbox_path: null,
+        error: rawErr === "dropbox_not_configured" ? tNow("dropbox.notConfiguredErr") : rawErr,
+      };
+    }
+    return {
+      dropbox_path: payload.dropbox_path,
+      name: typeof payload.name === "string" ? payload.name : input.file.name,
+      size: typeof payload.size === "number" ? payload.size : input.file.size,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      dropbox_path: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 // ---- muse thread (1:1 chat) ------------------------------------------------

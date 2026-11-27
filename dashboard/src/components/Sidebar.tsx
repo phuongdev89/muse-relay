@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { museConnectionInfo, type MuseFleetSummary } from "../lib/format";
+import { museConnectionInfo, museEmailOf, type MuseFleetSummary } from "../lib/format";
 import { useLang, type I18nKey } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 import type {
@@ -129,11 +129,14 @@ export function Sidebar(props: {
 
   const filteredMuses = useMemo(() => {
     if (!q) return muses;
-    return muses.filter(
-      (m) =>
+    return muses.filter((m) => {
+      const email = museEmailOf(m)?.toLowerCase() ?? "";
+      return (
         m.name.toLowerCase().includes(q) ||
-        m.dropbox_root.toLowerCase().includes(q),
-    );
+        m.dropbox_root.toLowerCase().includes(q) ||
+        email.includes(q)
+      );
+    });
   }, [muses, q]);
 
   function selectRoom(room: ActiveRoom) {
@@ -393,6 +396,7 @@ export function Sidebar(props: {
                 const conn = museConnectionInfo(m, lang);
                 const summary = fleetSummary.get(m.recipient);
                 const activeJobs = summary?.activeCount ?? 0;
+                const email = museEmailOf(m);
 
                 return (
                   <button
@@ -400,10 +404,13 @@ export function Sidebar(props: {
                     type="button"
                     className={`room${isMuseActive ? " active" : ""}`}
                     onClick={() => selectRoom({ kind: "muse", recipient: m.recipient })}
-                    title={`${m.name} · ${conn.label} (${conn.detail})`}
+                    title={`${m.name}${email ? ` (${email})` : ""} · ${conn.label} (${conn.detail})`}
                   >
                     <span className={`dot ${conn.dotClass}`} aria-hidden="true" />
-                    <span className="nm">{m.name}</span>
+                    <span className="room-meta">
+                      <span className="nm">{m.name}</span>
+                      {email && <span className="room-sub">{email}</span>}
+                    </span>
                     {activeJobs > 0 ? (
                       <span
                         className="rail-badge busy"

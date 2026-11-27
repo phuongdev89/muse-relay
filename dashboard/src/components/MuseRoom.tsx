@@ -1,23 +1,51 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchMuseThread, sendMessage } from "../lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { fetchMuseThread, sendMessage, uploadFileToMuseDropbox } from "../lib/api";
+import { MAX_ATTACH_FILES, mergeAttachmentFiles } from "../lib/dropbox";
 import { fmtClock, fmtTime, museConnectionInfo, ownerState, paramsSummary } from "../lib/format";
 import { useLang } from "../lib/i18n";
 import type { ActionMode, MessageParams, Muse, ThreadItem } from "../types";
 import { Composer } from "./Composer";
-import { ArrowDownIcon, KeyIcon, LockIcon, PanelRightIcon, RefreshIcon, TrashIcon } from "./Icons";
+import {
+  ArrowDownIcon,
+  KeyIcon,
+  LockIcon,
+  PanelRightIcon,
+  PaperclipIcon,
+  RefreshIcon,
+  TrashIcon,
+} from "./Icons";
 import { MarkdownBody } from "./MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "./MessageBubble";
 import { MuseManageMenu } from "./MuseManage";
-import { Chip } from "./ui";
+import { Chip, toast } from "./ui";
 
 interface OptimisticSend {
   tempId: string;
-  prompt: string;
   action: ActionMode;
+  params: MessageParams;
+  prompt: string;
+  finalPrompt?: string;
+  files: File[];
   sentAt: number;
+  status: "sending" | "pending" | "failed";
+  uploadingCount?: number;
+  error?: string;
+  messageId?: string;
 }
 
 const POLL_MS = 10000;
+const MAX_PROMPT_LEN = 4000;
+
+function appendDropboxPathsToPrompt(basePrompt: string, paths: string[]): string {
+  if (paths.length === 0) return basePrompt;
+  const allMentioned = paths.every((p) => basePrompt.includes(p));
+  if (allMentioned) return basePrompt;
+  const note = `\n\n[Dropbox input: ${paths.join(", ")}]`;
+  if (basePrompt.length + note.length <= MAX_PROMPT_LEN) {
+    return `${basePrompt}${note}`;
+  }
+  return basePrompt;
+}
 
 export function MuseRoom(props: {
   muse: Muse;
@@ -36,12 +64,17 @@ export function MuseRoom(props: {
   const [loadError, setLoadError] = useState("");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [pending, setPending] = useState<OptimisticSend[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
 
   const threadRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const forceScrollRef = useRef(true);
   const lastPathsKeyRef = useRef("");
+  const dragDepthRef = useRef(0);
+  const recipientRef = useRef(muse.recipient);
+  recipientRef.current = muse.recipient;
 
   const scrollToBottom = useCallback((smooth = false) => {
     const el = threadRef.current;
@@ -57,7 +90,9 @@ export function MuseRoom(props: {
   }, []);
 
   const load = useCallback(async () => {
-    const { items: fresh, error } = await fetchMuseThread(muse.recipient);
+    const targetRecipient = muse.recipient;
+    const { items: fresh, error } = await fetchMuseThread(targetRecipient);
+    if (recipientRef.current !== targetRecipient) return;
     setLoading(false);
     if (error) {
       setLoadError(error);
@@ -68,10 +103,13 @@ export function MuseRoom(props: {
     setUpdatedAt(new Date());
     setPending((cur) =>
       cur.filter((o) => {
+        if (o.status === "failed" || o.status === "sending") return true;
+        const targetPrompt = o.finalPrompt ?? o.prompt;
         const landed = fresh.some(
           (it) =>
-            it.message.params.prompt === o.prompt &&
-            new Date(it.message.created_at).getTime() >= o.sentAt - 2000,
+            (o.messageId && it.message.id === o.messageId) ||
+            (it.message.params.prompt === targetPrompt &&
+              new Date(it.message.created_at).getTime() >= o.sentAt - 2000),
         );
         const stale = Date.now() - o.sentAt > 30000;
         return !landed && !stale;
@@ -83,6 +121,9 @@ export function MuseRoom(props: {
   useEffect(() => {
     setItems([]);
     setPending([]);
+    setAttachedFiles([]);
+    setIsDragging(false);
+    dragDepthRef.current = 0;
     setUpdatedAt(null);
     setLoadError("");
     setLoading(true);
@@ -107,6 +148,9 @@ export function MuseRoom(props: {
   const aggregatedPaths = useMemo(() => {
     const seen = new Set<string>();
     for (const it of items) {
+      for (const p of it.message.params.reference_dropbox_paths ?? []) {
+        if (p) seen.add(p);
+      }
       for (const p of it.result?.output?.dropbox_paths ?? []) {
         if (p) seen.add(p);
       }
@@ -130,17 +174,144 @@ export function MuseRoom(props: {
     setIsNearBottom(near);
   }
 
-  async function handleSend(action: ActionMode, params: MessageParams): Promise<string | null> {
-    const { error } = await sendMessage({ recipient: muse.recipient, action, params });
-    if (error) return error;
+  async function dispatchOptimisticSend(
+    tempId: string,
+    targetRecipient: string,
+    action: ActionMode,
+    params: MessageParams,
+    files: File[],
+  ) {
+    let finalParams: MessageParams = { ...params };
+    if (files.length > 0) {
+      const uploadedPaths: string[] = [];
+      for (const file of files) {
+        const res = await uploadFileToMuseDropbox({
+          recipient: targetRecipient,
+          threadId: params.thread_id,
+          file,
+        });
+        if (res.error || !res.dropbox_path) {
+          if (recipientRef.current !== targetRecipient) return;
+          setPending((cur) =>
+            cur.map((item) =>
+              item.tempId === tempId
+                ? {
+                    ...item,
+                    status: "failed",
+                    uploadingCount: undefined,
+                    error: t("dropbox.uploadErr", {
+                      name: file.name,
+                      err: res.error ?? t("api.failed"),
+                    }),
+                  }
+                : item,
+            ),
+          );
+          return;
+        }
+        uploadedPaths.push(res.dropbox_path);
+      }
+
+      const existingRefs = finalParams.reference_dropbox_paths ?? [];
+      const mergedRefs = [...existingRefs, ...uploadedPaths];
+      const nextPrompt = appendDropboxPathsToPrompt(
+        finalParams.prompt ?? "",
+        uploadedPaths,
+      );
+      finalParams = {
+        ...finalParams,
+        prompt: nextPrompt,
+        reference_dropbox_paths: mergedRefs,
+      };
+    }
+
+    const { data, error } = await sendMessage({
+      recipient: targetRecipient,
+      action,
+      params: finalParams,
+    });
+
+    if (recipientRef.current !== targetRecipient) return;
+
+    if (error) {
+      setPending((cur) =>
+        cur.map((item) =>
+          item.tempId === tempId
+            ? {
+                ...item,
+                status: "failed",
+                uploadingCount: undefined,
+                error,
+              }
+            : item,
+        ),
+      );
+      return;
+    }
+
+    setPending((cur) =>
+      cur.map((item) =>
+        item.tempId === tempId
+          ? {
+              ...item,
+              status: "pending",
+              uploadingCount: undefined,
+              error: undefined,
+              finalPrompt: finalParams.prompt,
+              messageId: data?.message_id,
+            }
+          : item,
+      ),
+    );
+    await load();
+    props.onMessageSent?.();
+  }
+
+  function handleSend(action: ActionMode, params: MessageParams, files: File[]) {
+    const tempId = crypto.randomUUID();
+    const sentAt = Date.now();
+    const promptText = params.prompt ?? "";
     forceScrollRef.current = true;
     setPending((cur) => [
       ...cur,
-      { tempId: crypto.randomUUID(), prompt: params.prompt ?? "", action, sentAt: Date.now() },
+      {
+        tempId,
+        action,
+        params,
+        prompt: promptText,
+        files,
+        sentAt,
+        status: "sending",
+        uploadingCount: files.length > 0 ? files.length : undefined,
+      },
     ]);
-    await load();
-    props.onMessageSent?.();
-    return null;
+    void dispatchOptimisticSend(tempId, muse.recipient, action, params, files);
+  }
+
+  function retrySend(tempId: string) {
+    const target = pending.find((o) => o.tempId === tempId);
+    if (!target || target.status !== "failed") return;
+    const retriedAt = Date.now();
+    setPending((cur) =>
+      cur.map((item) =>
+        item.tempId === tempId
+          ? {
+              ...item,
+              sentAt: retriedAt,
+              status: "sending",
+              error: undefined,
+              uploadingCount: item.files.length > 0 ? item.files.length : undefined,
+            }
+          : item,
+      ),
+    );
+    void dispatchOptimisticSend(
+      tempId,
+      muse.recipient,
+      target.action,
+      target.params,
+      target.files,
+    );
   }
 
   const ownerStatusText = (it: ThreadItem): string | null => {
@@ -150,7 +321,6 @@ export function MuseRoom(props: {
       it.message.claim_expires_at,
     );
     if (st === "pending") return t("museRoom.statusPending");
-    if (st === "processing") return t("museRoom.statusProcessing", { name: muse.name });
     if (st === "expired") return t("museRoom.statusExpired");
     return null;
   };
@@ -160,8 +330,71 @@ export function MuseRoom(props: {
   const conn = museConnectionInfo(muse, lang);
   const isLocked = !conn.setupDone;
 
+  function hasFilePayload(e: DragEvent<HTMLElement>): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  }
+
+  function handleDragEnter(e: DragEvent<HTMLElement>) {
+    if (isLocked || !hasFilePayload(e)) return;
+    e.preventDefault();
+    dragDepthRef.current++;
+    setIsDragging(true);
+  }
+
+  function handleDragOver(e: DragEvent<HTMLElement>) {
+    if (isLocked || !hasFilePayload(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+
+  function handleDragLeave(e: DragEvent<HTMLElement>) {
+    if (isLocked) return;
+    if (dragDepthRef.current > 0) dragDepthRef.current--;
+    if (dragDepthRef.current === 0 || !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      dragDepthRef.current = 0;
+      setIsDragging(false);
+    }
+  }
+
+  function handleDrop(e: DragEvent<HTMLElement>) {
+    if (isLocked || !hasFilePayload(e)) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragging(false);
+    const dropped = Array.from(e.dataTransfer.files ?? []);
+    if (dropped.length === 0) return;
+    const { files, rejectedLarge, overflowCount } = mergeAttachmentFiles(
+      attachedFiles,
+      dropped,
+      MAX_ATTACH_FILES,
+    );
+    setAttachedFiles(files);
+    if (rejectedLarge.length > 0) {
+      toast(t("composer.fileSizeErr", { name: rejectedLarge[0].name }));
+    } else if (overflowCount > 0) {
+      toast(t("composer.maxFilesErr", { max: MAX_ATTACH_FILES }));
+    }
+  }
+
   return (
-    <section className="room-pane fade" aria-label={t("museRoom.aria", { name: muse.name })}>
+    <section
+      className="room-pane fade"
+      aria-label={t("museRoom.aria", { name: muse.name })}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && !isLocked && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-overlay-card">
+            <PaperclipIcon size={24} />
+            <strong>{t("dropbox.dropTitle")}</strong>
+            <span>{t("dropbox.dropSub")}</span>
+          </div>
+        </div>
+      )}
+
       <div className="pane-head">
         <div className="pane-title-group">
           <div className="pane-title-row">
@@ -243,6 +476,7 @@ export function MuseRoom(props: {
             const st = ownerState(it.message.status, it.message.expires_at, it.message.claim_expires_at);
             const summary = paramsSummary(it.message.action, it.message.params, lang);
             const promptText = it.message.params.prompt ?? "";
+            const refPaths = it.message.params.reference_dropbox_paths ?? [];
             return (
               <div key={it.message.id} className="exchange">
                 <MessageBubble
@@ -255,27 +489,83 @@ export function MuseRoom(props: {
                   statusText={st === "failed" ? null : ownerStatusText(it)}
                 >
                   <div className="body">{promptText}</div>
+                  {refPaths.length > 0 && <ResourceCards paths={refPaths} />}
                   {st === "failed" && it.result?.error && (
                     <div className="statusline err">{it.result.error}</div>
                   )}
                 </MessageBubble>
+                {!it.result && st === "processing" && (
+                  <MessageBubble
+                    side="muse"
+                    who={muse.name}
+                    dotColor="var(--color-busy)"
+                    state="processing"
+                  >
+                    <div
+                      className="body typing-dots"
+                      role="status"
+                      aria-label={t("museRoom.typingAria", { name: muse.name })}
+                    >
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                  </MessageBubble>
+                )}
                 {it.result && <MuseReply item={it} />}
               </div>
             );
           })}
 
-          {pending.map((o) => (
-            <div key={o.tempId} className="exchange">
-              <MessageBubble
-                side="owner"
-                state="pending"
-                timeLabel={fmtTime(new Date(o.sentAt).toISOString(), lang)}
-                copyValue={o.prompt}
-              >
-                <div className="body">{o.prompt}</div>
-              </MessageBubble>
-            </div>
-          ))}
+          {pending.map((o) => {
+            const summary = paramsSummary(o.action, o.params, lang);
+            const optStatusText =
+              o.status === "sending"
+                ? o.uploadingCount
+                  ? t("museRoom.uploadingFiles", { count: o.uploadingCount })
+                  : t("museRoom.sendingStatus")
+                : o.status === "pending"
+                  ? t("museRoom.statusPending")
+                  : null;
+            return (
+              <div key={o.tempId} className="exchange">
+                <MessageBubble
+                  side="owner"
+                  state={o.status === "failed" ? "failed" : "pending"}
+                  failed={o.status === "failed"}
+                  timeLabel={fmtTime(new Date(o.sentAt).toISOString(), lang)}
+                  copyValue={o.prompt}
+                  footer={summary || null}
+                  statusText={optStatusText}
+                  after={
+                    o.status === "failed" ? (
+                      <div className="bubble-retry-row">
+                        <button
+                          type="button"
+                          className="btn-ghost btn-sm bubble-retry-btn"
+                          onClick={() => retrySend(o.tempId)}
+                        >
+                          <RefreshIcon size={12} />
+                          <span>{t("common.retry")}</span>
+                        </button>
+                      </div>
+                    ) : undefined
+                  }
+                >
+                  <div className="body">{o.prompt}</div>
+                  {o.files.length > 0 && (
+                    <div className="statusline">
+                      {t("dropbox.attachedFiles", { count: o.files.length })}:{" "}
+                      {o.files.map((f) => f.name).join(", ")}
+                    </div>
+                  )}
+                  {o.status === "failed" && o.error && (
+                    <div className="statusline err">{o.error}</div>
+                  )}
+                </MessageBubble>
+              </div>
+            );
+          })}
         </div>
 
         {!isNearBottom && hasContent && (
@@ -298,6 +588,9 @@ export function MuseRoom(props: {
             : t("museRoom.composerPlaceholder", { name: muse.name })
         }
         onSend={handleSend}
+        allowAttachments={!isLocked}
+        files={attachedFiles}
+        onFilesChange={setAttachedFiles}
         disabled={isLocked}
         disabledBanner={
           isLocked ? (

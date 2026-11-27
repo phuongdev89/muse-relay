@@ -83,6 +83,40 @@ export function extractUrls(text: string): string[] {
   return text.match(URL_RE) ?? [];
 }
 
+export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+export const MAX_ATTACH_FILES = 4;
+
+/** Validates and merges newly picked/dropped files against attachment limits. */
+export function mergeAttachmentFiles(
+  existing: File[],
+  incoming: File[],
+  maxFiles = MAX_ATTACH_FILES,
+): { files: File[]; rejectedLarge: File[]; overflowCount: number } {
+  const valid: File[] = [];
+  const rejectedLarge: File[] = [];
+  for (const file of incoming) {
+    if (file.size < 1 || file.size > MAX_UPLOAD_BYTES) {
+      rejectedLarge.push(file);
+    } else {
+      valid.push(file);
+    }
+  }
+  const combined = [...existing];
+  let overflowCount = 0;
+  for (const file of valid) {
+    const dup = combined.some(
+      (f) => f.name === file.name && f.size === file.size && f.lastModified === file.lastModified,
+    );
+    if (dup) continue;
+    if (combined.length < maxFiles) {
+      combined.push(file);
+    } else {
+      overflowCount++;
+    }
+  }
+  return { files: combined, rejectedLarge, overflowCount };
+}
+
 export function isImageUrl(url: string): boolean {
   try {
     return IMAGE_EXT.has(extOf(new URL(url).pathname));

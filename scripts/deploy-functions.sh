@@ -10,3 +10,4 @@ echo "Project ref: $REF"
 npx --yes supabase functions deploy submit_message  --project-ref "$REF" --yes
 npx --yes supabase functions deploy claim_message  --project-ref "$REF" --yes
 npx --yes supabase functions deploy submit_result --project-ref "$REF" --yes
+npx --yes supabase functions deploy dropbox_proxy --project-ref "$REF" --yes

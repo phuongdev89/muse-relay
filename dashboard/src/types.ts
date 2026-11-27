@@ -27,6 +27,7 @@ export interface MessageParams {
   resource_type?: string;
   output_format?: string;
   reference_storage_paths?: string[];
+  reference_dropbox_paths?: string[];
 }
 
 export interface RelayMessage {

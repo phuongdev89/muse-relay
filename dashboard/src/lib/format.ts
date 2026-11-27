@@ -170,6 +170,31 @@ export function initialsOf(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/** Extracts Muse owner email from `email_owner` or `/<email>/` dropbox_root. */
+export function museEmailOf(
+  muse: Pick<Muse, "email_owner" | "dropbox_root"> | undefined | null,
+): string | null {
+  if (!muse) return null;
+  const direct = muse.email_owner?.trim();
+  if (direct) return direct;
+  const root = muse.dropbox_root?.trim();
+  if (root && root.includes("@")) {
+    const stripped = root.replace(/^\/+|\/+$/g, "");
+    if (stripped && !stripped.includes("/")) return stripped;
+  }
+  return null;
+}
+
+/** Locale-aware file size formatter (B / KB / MB). */
+export function fmtFileSize(bytes: number, lang: Lang = getStoredLang()): string {
+  const locale = intlLocale(lang);
+  if (bytes < 1024) return `${new Intl.NumberFormat(locale).format(bytes)} B`;
+  if (bytes < 1024 * 1024) {
+    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(bytes / 1024)} KB`;
+  }
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(bytes / (1024 * 1024))} MB`;
+}
+
 const MEMBER_HUES = [75, 155, 240, 25, 320, 190, 280];
 
 export function memberDotColor(index: number): string {

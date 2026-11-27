@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   callOpenAIChatCompletion,
   deleteConversation,
@@ -8,9 +8,18 @@ import {
   insertOpenAIMessage,
   sendGroupMessage,
   sendMessage,
+  uploadFileToMuseDropbox,
 } from "../lib/api";
 import { OWNER_DISPLAY_NAME } from "../lib/config";
-import { fmtClock, fmtTime, memberDotColor, ownerState, paramsSummary } from "../lib/format";
+import { MAX_ATTACH_FILES, mergeAttachmentFiles } from "../lib/dropbox";
+import {
+  fmtClock,
+  fmtTime,
+  memberDotColor,
+  museEmailOf,
+  ownerState,
+  paramsSummary,
+} from "../lib/format";
 import { useLang, type I18nKey } from "../lib/i18n";
 import type {
   ActionMode,
@@ -28,6 +37,7 @@ import { Composer } from "./Composer";
 import {
   ArrowDownIcon,
   PanelRightIcon,
+  PaperclipIcon,
   RefreshIcon,
   TrashIcon,
 } from "./Icons";
@@ -36,6 +46,7 @@ import { MessageBubble, ResourceCards, UrlPreviews } from "./MessageBubble";
 import { ErrorMsg, Modal, toast } from "./ui";
 
 const POLL_MS = 10000;
+const MAX_PROMPT_LEN = 4000;
 
 const MODE_KEY: Record<ConversationMode, I18nKey> = {
   muse_single: "convMode.muse_single",
@@ -44,10 +55,30 @@ const MODE_KEY: Record<ConversationMode, I18nKey> = {
   mixed: "convMode.mixedFull",
 };
 
-interface OptimisticMuseSend {
+function appendDropboxPathsToPrompt(basePrompt: string, paths: string[]): string {
+  if (paths.length === 0) return basePrompt;
+  const allMentioned = paths.every((p) => basePrompt.includes(p));
+  if (allMentioned) return basePrompt;
+  const note = `\n\n[Dropbox input: ${paths.join(", ")}]`;
+  if (basePrompt.length + note.length <= MAX_PROMPT_LEN) {
+    return `${basePrompt}${note}`;
+  }
+  return basePrompt;
+}
+
+interface OptimisticConvSend {
   tempId: string;
+  action: ActionMode;
+  params: MessageParams;
   prompt: string;
+  finalPrompt?: string;
+  files: File[];
   sentAt: number;
+  status: "sending" | "pending" | "failed";
+  uploadingCount?: number;
+  error?: string;
+  messageId?: string;
+  priorSnapshot: UnifiedItem[];
 }
 
 interface InflightOpenAI {
@@ -66,6 +97,8 @@ interface UnifiedItem {
   timeLabel: string;
   state?: string;
   failed?: boolean;
+  isTyping?: boolean;
+  typingAria?: string;
   statusText?: string | null;
   footer?: string | null;
   copyValue?: string;
@@ -75,6 +108,9 @@ interface UnifiedItem {
   notes: string | null;
   errorText: string | null;
   extraLine?: string | null;
+  retryTempId?: string;
+  retryError?: string | null;
+  attachedFileNames?: string[];
 }
 
 export function ConversationRoom(props: {
@@ -94,8 +130,10 @@ export function ConversationRoom(props: {
   const [museItems, setMuseItems] = useState<ThreadItem[]>([]);
   const [groupBubbles, setGroupBubbles] = useState<GroupBubble[]>([]);
   const [openaiMsgs, setOpenaiMsgs] = useState<OpenAIMessage[]>([]);
-  const [optimisticMuse, setOptimisticMuse] = useState<OptimisticMuseSend[]>([]);
+  const [optimisticSends, setOptimisticSends] = useState<OptimisticConvSend[]>([]);
   const [inflightOai, setInflightOai] = useState<InflightOpenAI[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -110,6 +148,9 @@ export function ConversationRoom(props: {
   const isNearBottomRef = useRef(true);
   const forceScrollRef = useRef(true);
   const lastPathsKeyRef = useRef("");
+  const dragDepthRef = useRef(0);
+  const convIdRef = useRef(conversation.id);
+  convIdRef.current = conversation.id;
 
   const museParticipants = useMemo(
     () => conversation.participants.filter((p) => p.kind === "muse"),
@@ -163,29 +204,43 @@ export function ConversationRoom(props: {
     (singleMuseRef ? museByRef.get(singleMuseRef)?.name : undefined) ??
     museParticipants[0]?.name ??
     "Muse";
+  const groupMusesLabel = useMemo(
+    () =>
+      museParticipants
+        .map((p) => museByRef.get(p.ref)?.name ?? p.name)
+        .filter(Boolean)
+        .join(", ") || "Muse",
+    [museParticipants, museByRef],
+  );
 
   const load = useCallback(async () => {
+    const targetConvId = conversation.id;
     const errs: string[] = [];
-
     const tasks: Promise<void>[] = [];
 
     if (usesSingleMuse && singleMuseRef) {
       tasks.push(
-        fetchMuseThread(singleMuseRef, conversation.id).then(({ items, error }) => {
+        fetchMuseThread(singleMuseRef, targetConvId).then(({ items, error }) => {
+          if (convIdRef.current !== targetConvId) return;
           if (error) errs.push(error);
           else {
             setMuseItems(items);
-            setOptimisticMuse((cur) =>
-              cur.filter((o) => {
-                const landed = items.some(
-                  (it) =>
-                    it.message.params.prompt === o.prompt &&
-                    new Date(it.message.created_at).getTime() >= o.sentAt - 2000,
-                );
-                const stale = Date.now() - o.sentAt > 30000;
-                return !landed && !stale;
-              }),
-            );
+            if (conversation.mode === "muse_single") {
+              setOptimisticSends((cur) =>
+                cur.filter((o) => {
+                  if (o.status === "failed" || o.status === "sending") return true;
+                  const targetPrompt = o.finalPrompt ?? o.prompt;
+                  const landed = items.some(
+                    (it) =>
+                      (o.messageId && it.message.id === o.messageId) ||
+                      (it.message.params.prompt === targetPrompt &&
+                        new Date(it.message.created_at).getTime() >= o.sentAt - 2000),
+                  );
+                  const stale = Date.now() - o.sentAt > 30000;
+                  return !landed && !stale;
+                }),
+              );
+            }
           }
         }),
       );
@@ -194,15 +249,34 @@ export function ConversationRoom(props: {
     if (usesGroupMuse && conversation.group_id) {
       tasks.push(
         fetchGroupThread(conversation.group_id).then(({ bubbles, error }) => {
+          if (convIdRef.current !== targetConvId) return;
           if (error) errs.push(error);
-          else setGroupBubbles(bubbles);
+          else {
+            setGroupBubbles(bubbles);
+            if (conversation.mode === "muse_group") {
+              setOptimisticSends((cur) =>
+                cur.filter((o) => {
+                  if (o.status === "failed" || o.status === "sending") return true;
+                  const landed = bubbles.some(
+                    (b) =>
+                      b.kind === "owner" &&
+                      b.text.trim() === o.prompt.trim() &&
+                      new Date(b.time).getTime() >= o.sentAt - 2000,
+                  );
+                  const stale = Date.now() - o.sentAt > 30000;
+                  return !landed && !stale;
+                }),
+              );
+            }
+          }
         }),
       );
     }
 
     if (usesOpenAI) {
       tasks.push(
-        fetchOpenAIMessages(conversation.id).then(({ data, error }) => {
+        fetchOpenAIMessages(targetConvId).then(({ data, error }) => {
+          if (convIdRef.current !== targetConvId) return;
           if (error) errs.push(error);
           else setOpenaiMsgs(data);
         }),
@@ -210,17 +284,29 @@ export function ConversationRoom(props: {
     }
 
     await Promise.all(tasks);
+    if (convIdRef.current !== targetConvId) return;
     setLoading(false);
     setLoadError(errs.join(" · "));
     setUpdatedAt(new Date());
-  }, [conversation.id, conversation.group_id, singleMuseRef, usesGroupMuse, usesOpenAI, usesSingleMuse]);
+  }, [
+    conversation.id,
+    conversation.group_id,
+    conversation.mode,
+    singleMuseRef,
+    usesGroupMuse,
+    usesOpenAI,
+    usesSingleMuse,
+  ]);
 
   useEffect(() => {
     setMuseItems([]);
     setGroupBubbles([]);
     setOpenaiMsgs([]);
-    setOptimisticMuse([]);
+    setOptimisticSends([]);
     setInflightOai([]);
+    setAttachedFiles([]);
+    setIsDragging(false);
+    dragDepthRef.current = 0;
     setUpdatedAt(null);
     setLoadError("");
     setLoading(true);
@@ -237,6 +323,46 @@ export function ConversationRoom(props: {
 
   // Build unified chronological items
   const unifiedItems = useMemo<UnifiedItem[]>(() => {
+    const appendOptimistic = (list: UnifiedItem[]) => {
+      for (const o of optimisticSends) {
+        const summary = paramsSummary(o.action, o.params, lang);
+        const optStatus =
+          o.status === "sending"
+            ? o.uploadingCount
+              ? t("museRoom.uploadingFiles", { count: o.uploadingCount })
+              : t("museRoom.sendingStatus")
+            : o.status === "pending"
+              ? conversation.mode === "muse_group"
+                ? t("convRoom.waitingGroup")
+                : t("museRoom.statusPending")
+              : null;
+        list.push({
+          id: `opt-${o.tempId}`,
+          sortMs: o.sentAt,
+          side: "owner",
+          who: conversation.mode === "mixed" || conversation.mode === "muse_group"
+            ? OWNER_DISPLAY_NAME
+            : undefined,
+          dotColor: "var(--color-accent)",
+          timeLabel: fmtTime(new Date(o.sentAt).toISOString(), lang),
+          state: o.status === "failed" ? "failed" : "pending",
+          failed: o.status === "failed",
+          statusText: optStatus,
+          footer: summary || null,
+          copyValue: o.prompt,
+          text: o.prompt,
+          isMarkdown: false,
+          paths: [],
+          notes: null,
+          errorText: null,
+          retryTempId: o.status === "failed" ? o.tempId : undefined,
+          retryError: o.status === "failed" ? o.error ?? t("api.failed") : null,
+          attachedFileNames: o.files.length > 0 ? o.files.map((f) => f.name) : undefined,
+        });
+      }
+      return list;
+    };
+
     // Pure single Muse mode
     if (conversation.mode === "muse_single") {
       const list: UnifiedItem[] = [];
@@ -247,19 +373,19 @@ export function ConversationRoom(props: {
           it.message.claim_expires_at,
         );
         const promptText = it.message.params.prompt ?? "";
+        const refPaths = it.message.params.reference_dropbox_paths ?? [];
         const statusText =
           st === "pending"
             ? t("museRoom.statusPending")
-            : st === "processing"
-              ? t("museRoom.statusProcessing", { name: singleMuseName })
-              : st === "expired"
-                ? t("museRoom.statusExpired")
-                : null;
+            : st === "expired"
+              ? t("museRoom.statusExpired")
+              : null;
         const summary = paramsSummary(it.message.action, it.message.params, lang);
+        const createdMs = new Date(it.message.created_at).getTime();
 
         list.push({
           id: `m-owner-${it.message.id}`,
-          sortMs: new Date(it.message.created_at).getTime(),
+          sortMs: createdMs,
           side: "owner",
           timeLabel: fmtTime(it.message.created_at, lang),
           state: st,
@@ -269,10 +395,29 @@ export function ConversationRoom(props: {
           copyValue: promptText,
           text: promptText,
           isMarkdown: false,
-          paths: [],
+          paths: refPaths,
           notes: null,
           errorText: st === "failed" && it.result?.error ? it.result.error : null,
         });
+
+        if (!it.result && st === "processing") {
+          list.push({
+            id: `m-typing-${it.message.id}`,
+            sortMs: createdMs + 1,
+            side: "muse",
+            who: singleMuseName,
+            dotColor: participantColorMap.get(`muse:${singleMuseRef}`),
+            timeLabel: "",
+            state: "processing",
+            isTyping: true,
+            typingAria: t("museRoom.typingAria", { name: singleMuseName }),
+            text: "",
+            isMarkdown: false,
+            paths: [],
+            notes: null,
+            errorText: null,
+          });
+        }
 
         if (it.result) {
           if (it.result.status === "failed") {
@@ -320,46 +465,36 @@ export function ConversationRoom(props: {
         }
       }
 
-      for (const o of optimisticMuse) {
-        list.push({
-          id: `opt-${o.tempId}`,
-          sortMs: o.sentAt,
-          side: "owner",
-          timeLabel: fmtTime(new Date(o.sentAt).toISOString(), lang),
-          state: "pending",
-          copyValue: o.prompt,
-          text: o.prompt,
-          isMarkdown: false,
-          paths: [],
-          notes: null,
-          errorText: null,
-        });
-      }
-      return list;
+      return appendOptimistic(list);
     }
 
     // Pure Muse group mode
     if (conversation.mode === "muse_group") {
-      return groupBubbles.map((b) => {
+      const list: UnifiedItem[] = [];
+      const hasMuseProcessingBubble = groupBubbles.some(
+        (b) => b.kind === "muse" && b.state === "processing",
+      );
+      groupBubbles.forEach((b) => {
         const isOwner = b.kind === "owner";
         const failed = b.state === "failed";
+        const isMuseTyping = !isOwner && b.state === "processing";
         const stateText =
-          b.state === "pending"
-            ? t("convRoom.waitingGroup")
-            : b.state === "processing"
-              ? t("convRoom.processingGroup")
-              : null;
-        return {
+          isOwner && b.state === "pending" ? t("convRoom.waitingGroup") : null;
+        const sortMs = new Date(b.time).getTime();
+
+        list.push({
           id: `grp-${b.batchId}`,
-          sortMs: new Date(b.time).getTime(),
+          sortMs,
           side: isOwner ? "owner" : "muse",
           who: b.name,
           dotColor: isOwner
             ? "var(--color-accent)"
             : participantColorMap.get(b.name) ?? "var(--color-busy)",
-          timeLabel: fmtTime(b.time, lang),
+          timeLabel: isMuseTyping ? "" : fmtTime(b.time, lang),
           state: b.state,
           failed,
+          isTyping: isMuseTyping,
+          typingAria: isMuseTyping ? t("museRoom.typingAria", { name: b.name }) : undefined,
           statusText: failed ? (b.text ? b.error ?? t("api.failed") : null) : stateText,
           copyValue: b.text || undefined,
           text: b.text,
@@ -367,13 +502,36 @@ export function ConversationRoom(props: {
           paths: b.paths,
           notes: b.notes,
           errorText: failed && !b.text ? b.error ?? t("api.failed") : null,
-        };
+        });
+
+        if (isOwner && b.state === "processing" && !hasMuseProcessingBubble) {
+          list.push({
+            id: `grp-typing-${b.batchId}`,
+            sortMs: sortMs + 1,
+            side: "muse",
+            who: groupMusesLabel,
+            dotColor: "var(--color-busy)",
+            timeLabel: "",
+            state: "processing",
+            isTyping: true,
+            typingAria: t("convRoom.museTypingAria"),
+            text: "",
+            isMarkdown: false,
+            paths: [],
+            notes: null,
+            errorText: null,
+          });
+        }
       });
+      return appendOptimistic(list);
     }
 
     // Pure OpenAI or Mixed mode: merge OpenAI messages + Muse stream chronologically
     const merged: UnifiedItem[] = [];
     const matchedMuseOwnerIds = new Set<string>();
+    const hasGroupMuseProcessingBubble = groupBubbles.some(
+      (b) => b.kind === "muse" && b.state === "processing",
+    );
 
     for (const m of openaiMsgs) {
       const mMs = new Date(m.created_at).getTime();
@@ -382,6 +540,8 @@ export function ConversationRoom(props: {
         let failed = false;
         let statusText: string | null = null;
         let errorText: string | null = null;
+        let ownerPaths: string[] = [];
+        let pendingTypingItem: UnifiedItem | null = null;
 
         if (conversation.mode === "mixed") {
           if (usesSingleMuse) {
@@ -393,6 +553,7 @@ export function ConversationRoom(props: {
             );
             if (match) {
               matchedMuseOwnerIds.add(match.message.id);
+              ownerPaths = match.message.params.reference_dropbox_paths ?? [];
               const st = ownerState(
                 match.message.status,
                 match.message.expires_at,
@@ -403,13 +564,29 @@ export function ConversationRoom(props: {
               statusText =
                 st === "pending"
                   ? t("convRoom.waitingNamedMuse", { name: singleMuseName })
-                  : st === "processing"
-                    ? t("museRoom.statusProcessing", { name: singleMuseName })
-                    : st === "expired"
-                      ? t("convRoom.expiredNamedMuse", { name: singleMuseName })
-                      : null;
+                  : st === "expired"
+                    ? t("convRoom.expiredNamedMuse", { name: singleMuseName })
+                    : null;
               if (st === "failed" && match.result?.error) {
                 errorText = match.result.error;
+              }
+              if (!match.result && st === "processing") {
+                pendingTypingItem = {
+                  id: `mix-m-typing-${match.message.id}`,
+                  sortMs: mMs + 1,
+                  side: "muse",
+                  who: singleMuseName,
+                  dotColor: participantColorMap.get(`muse:${singleMuseRef}`),
+                  timeLabel: "",
+                  state: "processing",
+                  isTyping: true,
+                  typingAria: t("museRoom.typingAria", { name: singleMuseName }),
+                  text: "",
+                  isMarkdown: false,
+                  paths: [],
+                  notes: null,
+                  errorText: null,
+                };
               }
             }
           } else if (usesGroupMuse) {
@@ -427,11 +604,27 @@ export function ConversationRoom(props: {
               statusText =
                 match.state === "pending"
                   ? t("convRoom.waitingGroup")
-                  : match.state === "processing"
-                    ? t("convRoom.musesProcessing")
-                    : match.state === "failed"
-                      ? match.error ?? t("convRoom.museFailed")
-                      : null;
+                  : match.state === "failed"
+                    ? match.error ?? t("convRoom.museFailed")
+                    : null;
+              if (match.state === "processing" && !hasGroupMuseProcessingBubble) {
+                pendingTypingItem = {
+                  id: `mix-g-typing-${match.batchId}`,
+                  sortMs: mMs + 1,
+                  side: "muse",
+                  who: groupMusesLabel,
+                  dotColor: "var(--color-busy)",
+                  timeLabel: "",
+                  state: "processing",
+                  isTyping: true,
+                  typingAria: t("convRoom.museTypingAria"),
+                  text: "",
+                  isMarkdown: false,
+                  paths: [],
+                  notes: null,
+                  errorText: null,
+                };
+              }
             }
           }
         }
@@ -449,10 +642,11 @@ export function ConversationRoom(props: {
           copyValue: m.content,
           text: m.content,
           isMarkdown: false,
-          paths: [],
+          paths: ownerPaths,
           notes: null,
           errorText,
         });
+        if (pendingTypingItem) merged.push(pendingTypingItem);
       } else {
         const failed = m.status === "failed";
         const errText = failed ? m.error || t("convRoom.modelError") : null;
@@ -482,29 +676,55 @@ export function ConversationRoom(props: {
     if (conversation.mode === "mixed") {
       if (usesSingleMuse) {
         for (const it of museItems) {
+          const createdMs = new Date(it.message.created_at).getTime();
+          const st = ownerState(
+            it.message.status,
+            it.message.expires_at,
+            it.message.claim_expires_at,
+          );
           if (!matchedMuseOwnerIds.has(it.message.id)) {
-            const st = ownerState(
-              it.message.status,
-              it.message.expires_at,
-              it.message.claim_expires_at,
-            );
             const promptText = it.message.params.prompt ?? "";
+            const refPaths = it.message.params.reference_dropbox_paths ?? [];
             merged.push({
               id: `mix-m-owner-${it.message.id}`,
-              sortMs: new Date(it.message.created_at).getTime(),
+              sortMs: createdMs,
               side: "owner",
               who: OWNER_DISPLAY_NAME,
               dotColor: "var(--color-accent)",
               timeLabel: fmtTime(it.message.created_at, lang),
               state: st,
               failed: st === "failed",
+              statusText:
+                st === "pending"
+                  ? t("convRoom.waitingNamedMuse", { name: singleMuseName })
+                  : st === "expired"
+                    ? t("convRoom.expiredNamedMuse", { name: singleMuseName })
+                    : null,
               copyValue: promptText,
               text: promptText,
               isMarkdown: false,
-              paths: [],
+              paths: refPaths,
               notes: null,
               errorText: st === "failed" && it.result?.error ? it.result.error : null,
             });
+            if (!it.result && st === "processing") {
+              merged.push({
+                id: `mix-m-typing-${it.message.id}`,
+                sortMs: createdMs + 1,
+                side: "muse",
+                who: singleMuseName,
+                dotColor: participantColorMap.get(`muse:${singleMuseRef}`),
+                timeLabel: "",
+                state: "processing",
+                isTyping: true,
+                typingAria: t("museRoom.typingAria", { name: singleMuseName }),
+                text: "",
+                isMarkdown: false,
+                paths: [],
+                notes: null,
+                errorText: null,
+              });
+            }
           }
 
           if (it.result) {
@@ -536,17 +756,21 @@ export function ConversationRoom(props: {
           if (b.kind === "owner" && matchedMuseOwnerIds.has(b.batchId)) continue;
           const isOwner = b.kind === "owner";
           const failed = b.state === "failed";
+          const isMuseTyping = !isOwner && b.state === "processing";
+          const sortMs = new Date(b.time).getTime();
           merged.push({
             id: `mix-g-${b.batchId}`,
-            sortMs: new Date(b.time).getTime(),
+            sortMs,
             side: isOwner ? "owner" : "muse",
             who: b.name,
             dotColor: isOwner
               ? "var(--color-accent)"
               : participantColorMap.get(b.name) ?? "var(--color-busy)",
-            timeLabel: fmtTime(b.time, lang),
+            timeLabel: isMuseTyping ? "" : fmtTime(b.time, lang),
             state: b.state,
             failed,
+            isTyping: isMuseTyping,
+            typingAria: isMuseTyping ? t("museRoom.typingAria", { name: b.name }) : undefined,
             statusText: failed && b.text ? b.error ?? t("api.failed") : null,
             copyValue: b.text || undefined,
             text: b.text,
@@ -555,9 +779,29 @@ export function ConversationRoom(props: {
             notes: b.notes,
             errorText: failed && !b.text ? b.error ?? t("api.failed") : null,
           });
+          if (isOwner && b.state === "processing" && !hasGroupMuseProcessingBubble) {
+            merged.push({
+              id: `mix-g-typing-${b.batchId}`,
+              sortMs: sortMs + 1,
+              side: "muse",
+              who: groupMusesLabel,
+              dotColor: "var(--color-busy)",
+              timeLabel: "",
+              state: "processing",
+              isTyping: true,
+              typingAria: t("convRoom.museTypingAria"),
+              text: "",
+              isMarkdown: false,
+              paths: [],
+              notes: null,
+              errorText: null,
+            });
+          }
         }
       }
     }
+
+    appendOptimistic(merged);
 
     merged.sort((a, b) => {
       if (a.sortMs !== b.sortMs) return a.sortMs - b.sortMs;
@@ -569,11 +813,12 @@ export function ConversationRoom(props: {
   }, [
     conversation.mode,
     groupBubbles,
+    groupMusesLabel,
     lang,
     museItems,
     oaiByRef,
     openaiMsgs,
-    optimisticMuse,
+    optimisticSends,
     participantColorMap,
     singleMuseName,
     singleMuseRef,
@@ -639,7 +884,7 @@ export function ConversationRoom(props: {
 
     const multiAgent = conversation.participants.length > 1;
     const historyTurns = priorHistory
-      .filter((u) => !u.failed && u.text.trim().length > 0)
+      .filter((u) => !u.failed && !u.isTyping && u.text.trim().length > 0)
       .slice(-24)
       .map((u) => ({
         role: (u.side === "owner" ? "user" : "assistant") as "user" | "assistant",
@@ -707,62 +952,180 @@ export function ConversationRoom(props: {
 
   const singleMuseAlive = Boolean(singleMuseRef && museByRef.has(singleMuseRef));
   const activeGroupMuseCount = museParticipants.filter((p) => museByRef.has(p.ref)).length;
+  const canAttach = usesSingleMuse && singleMuseAlive;
 
-  async function handleSend(action: ActionMode, params: MessageParams): Promise<string | null> {
-    const prompt = params.prompt ?? "";
+  function markOptimisticFailed(tempId: string, convId: string, error: string) {
+    if (convIdRef.current !== convId) return;
+    setOptimisticSends((cur) =>
+      cur.map((item) =>
+        item.tempId === tempId
+          ? { ...item, status: "failed", uploadingCount: undefined, error }
+          : item,
+      ),
+    );
+  }
+
+  async function uploadAttachedFiles(
+    tempId: string,
+    convId: string,
+    targetRecipient: string,
+    files: File[],
+  ): Promise<string[] | null> {
+    const uploadedPaths: string[] = [];
+    for (const file of files) {
+      const res = await uploadFileToMuseDropbox({
+        recipient: targetRecipient,
+        threadId: convId,
+        file,
+      });
+      if (res.error || !res.dropbox_path) {
+        markOptimisticFailed(
+          tempId,
+          convId,
+          t("dropbox.uploadErr", {
+            name: file.name,
+            err: res.error ?? t("api.failed"),
+          }),
+        );
+        return null;
+      }
+      uploadedPaths.push(res.dropbox_path);
+    }
+    return uploadedPaths;
+  }
+
+  async function dispatchConvSend(
+    tempId: string,
+    convId: string,
+    action: ActionMode,
+    params: MessageParams,
+    files: File[],
+    priorSnapshot: UnifiedItem[],
+  ) {
+    const basePrompt = params.prompt ?? "";
 
     // 1. Pure single Muse mode (supports Chat, Image, Video + thread_id = conversation.id)
     if (conversation.mode === "muse_single") {
-      if (!singleMuseRef) return t("convRoom.noMuseErr");
-      if (!singleMuseAlive) {
-        return t("convRoom.museDeletedErr", { name: singleMuseName });
+      if (!singleMuseRef) {
+        markOptimisticFailed(tempId, convId, t("convRoom.noMuseErr"));
+        return;
       }
-      const { error } = await sendMessage({
+      if (!singleMuseAlive) {
+        markOptimisticFailed(
+          tempId,
+          convId,
+          t("convRoom.museDeletedErr", { name: singleMuseName }),
+        );
+        return;
+      }
+
+      let finalParams: MessageParams = { ...params, thread_id: convId };
+      if (files.length > 0) {
+        const uploadedPaths = await uploadAttachedFiles(tempId, convId, singleMuseRef, files);
+        if (!uploadedPaths) return;
+        const mergedRefs = [...(finalParams.reference_dropbox_paths ?? []), ...uploadedPaths];
+        finalParams = {
+          ...finalParams,
+          prompt: appendDropboxPathsToPrompt(basePrompt, uploadedPaths),
+          reference_dropbox_paths: mergedRefs,
+        };
+      }
+
+      const { data, error } = await sendMessage({
         recipient: singleMuseRef,
         action,
-        params: { ...params, thread_id: conversation.id },
+        params: finalParams,
       });
-      if (error) return error;
-      forceScrollRef.current = true;
-      setOptimisticMuse((cur) => [
-        ...cur,
-        { tempId: crypto.randomUUID(), prompt, sentAt: Date.now() },
-      ]);
+      if (convIdRef.current !== convId) return;
+      if (error) {
+        markOptimisticFailed(tempId, convId, error);
+        return;
+      }
+
+      setOptimisticSends((cur) =>
+        cur.map((item) =>
+          item.tempId === tempId
+            ? {
+                ...item,
+                status: "pending",
+                uploadingCount: undefined,
+                error: undefined,
+                finalPrompt: finalParams.prompt,
+                messageId: data?.message_id,
+              }
+            : item,
+        ),
+      );
       await load();
       props.onMessageSent?.();
-      return null;
+      return;
     }
 
     // 2. Pure Muse group mode
     if (conversation.mode === "muse_group") {
-      if (!conversation.group_id) return t("convRoom.noGroupErr");
+      if (!conversation.group_id) {
+        markOptimisticFailed(tempId, convId, t("convRoom.noGroupErr"));
+        return;
+      }
       if (activeGroupMuseCount === 0) {
-        return t("convRoom.allGroupMusesDeletedErr");
+        markOptimisticFailed(tempId, convId, t("convRoom.allGroupMusesDeletedErr"));
+        return;
       }
       const { error } = await sendGroupMessage({
         groupId: conversation.group_id,
-        prompt,
+        prompt: basePrompt,
         ownerName: OWNER_DISPLAY_NAME,
       });
-      if (error) return error;
-      forceScrollRef.current = true;
+      if (convIdRef.current !== convId) return;
+      if (error) {
+        markOptimisticFailed(tempId, convId, error);
+        return;
+      }
+      setOptimisticSends((cur) =>
+        cur.map((item) =>
+          item.tempId === tempId
+            ? { ...item, status: "pending", uploadingCount: undefined, error: undefined }
+            : item,
+        ),
+      );
       await load();
       props.onMessageSent?.();
-      return null;
+      return;
     }
 
-    // 3. OpenAI or Mixed mode: persist owner message in relay_openai_messages first
-    const priorSnapshot = [...unifiedItems];
+    // 3. OpenAI or Mixed mode: upload attachments if single Muse present, then persist owner message
+    let finalPrompt = basePrompt;
+    let uploadedRefs: string[] = [];
+    if (conversation.mode === "mixed" && usesSingleMuse && files.length > 0) {
+      if (!singleMuseRef || !singleMuseAlive) {
+        markOptimisticFailed(
+          tempId,
+          convId,
+          t("convRoom.museDeletedErr", { name: singleMuseName }),
+        );
+        return;
+      }
+      const uploaded = await uploadAttachedFiles(tempId, convId, singleMuseRef, files);
+      if (!uploaded) return;
+      uploadedRefs = uploaded;
+      finalPrompt = appendDropboxPathsToPrompt(basePrompt, uploadedRefs);
+    }
+
     const { data: savedOwner, error: ownerErr } = await insertOpenAIMessage({
-      conversation_id: conversation.id,
+      conversation_id: convId,
       role: "owner",
       agent_ref: null,
       agent_name: OWNER_DISPLAY_NAME,
-      content: prompt,
+      content: finalPrompt,
       status: "done",
     });
-    if (ownerErr) return ownerErr;
+    if (convIdRef.current !== convId) return;
+    if (ownerErr) {
+      markOptimisticFailed(tempId, convId, ownerErr);
+      return;
+    }
 
+    setOptimisticSends((cur) => cur.filter((item) => item.tempId !== tempId));
     if (savedOwner) {
       setOpenaiMsgs((cur) => [...cur, savedOwner]);
     }
@@ -778,10 +1141,11 @@ export function ConversationRoom(props: {
             recipient: singleMuseRef,
             action: "chat",
             params: {
-              prompt,
-              thread_id: conversation.id,
+              prompt: finalPrompt,
+              thread_id: convId,
               resource_type: "auto",
               output_format: "auto",
+              ...(uploadedRefs.length > 0 ? { reference_dropbox_paths: uploadedRefs } : {}),
             },
           });
           if (mErr) toast(t("convRoom.sendMuseErr", { err: mErr }));
@@ -792,7 +1156,7 @@ export function ConversationRoom(props: {
         } else {
           const { error: gErr } = await sendGroupMessage({
             groupId: conversation.group_id,
-            prompt,
+            prompt: finalPrompt,
             ownerName: OWNER_DISPLAY_NAME,
           });
           if (gErr) toast(t("convRoom.sendGroupErr", { err: gErr }));
@@ -802,9 +1166,58 @@ export function ConversationRoom(props: {
       void load();
     }
 
-    // Dispatch OpenAI side in background so UI stays responsive
-    void dispatchOpenAI(prompt, priorSnapshot);
-    return null;
+    // Dispatch OpenAI side in background
+    void dispatchOpenAI(finalPrompt, priorSnapshot);
+  }
+
+  function handleSend(action: ActionMode, params: MessageParams, files: File[]) {
+    const tempId = crypto.randomUUID();
+    const sentAt = Date.now();
+    const prompt = params.prompt ?? "";
+    const priorSnapshot = [...unifiedItems];
+    forceScrollRef.current = true;
+    setOptimisticSends((cur) => [
+      ...cur,
+      {
+        tempId,
+        action,
+        params,
+        prompt,
+        files,
+        sentAt,
+        status: "sending",
+        uploadingCount: files.length > 0 ? files.length : undefined,
+        priorSnapshot,
+      },
+    ]);
+    void dispatchConvSend(tempId, conversation.id, action, params, files, priorSnapshot);
+  }
+
+  function retrySend(tempId: string) {
+    const target = optimisticSends.find((o) => o.tempId === tempId);
+    if (!target || target.status !== "failed") return;
+    const retriedAt = Date.now();
+    setOptimisticSends((cur) =>
+      cur.map((item) =>
+        item.tempId === tempId
+          ? {
+              ...item,
+              sentAt: retriedAt,
+              status: "sending",
+              error: undefined,
+              uploadingCount: item.files.length > 0 ? item.files.length : undefined,
+            }
+          : item,
+      ),
+    );
+    void dispatchConvSend(
+      tempId,
+      conversation.id,
+      target.action,
+      target.params,
+      target.files,
+      target.priorSnapshot,
+    );
   }
 
   async function handleConfirmDelete() {
@@ -822,12 +1235,75 @@ export function ConversationRoom(props: {
     props.onConversationDeleted(project.id, conversation.id);
   }
 
+  function hasFilePayload(e: DragEvent<HTMLElement>): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  }
+
+  function handleDragEnter(e: DragEvent<HTMLElement>) {
+    if (!canAttach || !hasFilePayload(e)) return;
+    e.preventDefault();
+    dragDepthRef.current++;
+    setIsDragging(true);
+  }
+
+  function handleDragOver(e: DragEvent<HTMLElement>) {
+    if (!canAttach || !hasFilePayload(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+
+  function handleDragLeave(e: DragEvent<HTMLElement>) {
+    if (!canAttach) return;
+    if (dragDepthRef.current > 0) dragDepthRef.current--;
+    if (dragDepthRef.current === 0 || !e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      dragDepthRef.current = 0;
+      setIsDragging(false);
+    }
+  }
+
+  function handleDrop(e: DragEvent<HTMLElement>) {
+    if (!canAttach || !hasFilePayload(e)) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragging(false);
+    const dropped = Array.from(e.dataTransfer.files ?? []);
+    if (dropped.length === 0) return;
+    const { files, rejectedLarge, overflowCount } = mergeAttachmentFiles(
+      attachedFiles,
+      dropped,
+      MAX_ATTACH_FILES,
+    );
+    setAttachedFiles(files);
+    if (rejectedLarge.length > 0) {
+      toast(t("composer.fileSizeErr", { name: rejectedLarge[0].name }));
+    } else if (overflowCount > 0) {
+      toast(t("composer.maxFilesErr", { max: MAX_ATTACH_FILES }));
+    }
+  }
+
   const showSkeleton =
     loading && unifiedItems.length === 0 && inflightOai.length === 0 && !loadError;
   const hasContent = unifiedItems.length > 0 || inflightOai.length > 0;
 
   return (
-    <section className="room-pane fade" aria-label={t("convRoom.aria", { title: conversation.title })}>
+    <section
+      className="room-pane fade"
+      aria-label={t("convRoom.aria", { title: conversation.title })}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && canAttach && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-overlay-card">
+            <PaperclipIcon size={24} />
+            <strong>{t("dropbox.dropTitle")}</strong>
+            <span>{t("dropbox.dropSub")}</span>
+          </div>
+        </div>
+      )}
+
       <div className="pane-head">
         <div className="pane-title-group">
           <h2>{conversation.title}</h2>
@@ -885,18 +1361,27 @@ export function ConversationRoom(props: {
           const liveOai = p.kind === "openai" ? oaiByRef.get(p.ref) : undefined;
           const liveName = liveMuse?.name ?? liveOai?.name ?? p.name;
           const deleted = !liveMuse && !liveOai;
+          const subtitle =
+            p.kind === "muse"
+              ? museEmailOf(liveMuse)
+              : liveOai?.model?.trim() || null;
           return (
             <span
               key={`${p.kind}:${p.ref}`}
               className={`member-chip${deleted ? " deleted" : ""}`}
-              title={deleted ? t("convRoom.deletedFromAdmin") : undefined}
+              title={deleted ? t("convRoom.deletedFromAdmin") : subtitle ?? undefined}
             >
               <i style={{ background: memberDotColor(idx) }} />
-              <span>{liveName}</span>
-              <span className={`agent-kind-tag ${p.kind}`}>
-                {p.kind === "muse" ? "Muse" : "OpenAI"}
+              <span className="member-chip-main">
+                <span className="member-chip-top">
+                  <span className="member-chip-name">{liveName}</span>
+                  <span className={`agent-kind-tag ${p.kind}`}>
+                    {p.kind === "muse" ? "Muse" : "OpenAI"}
+                  </span>
+                  {deleted && <span className="deleted-note">{t("convRoom.deletedTag")}</span>}
+                </span>
+                {subtitle && <span className="member-chip-sub">{subtitle}</span>}
               </span>
-              {deleted && <span className="deleted-note">{t("convRoom.deletedTag")}</span>}
             </span>
           );
         })}
@@ -929,12 +1414,36 @@ export function ConversationRoom(props: {
               dotColor={it.dotColor}
               state={it.state}
               failed={it.failed}
-              timeLabel={it.timeLabel}
+              timeLabel={it.timeLabel || undefined}
               copyValue={it.copyValue}
               footer={it.footer}
               statusText={it.statusText}
+              after={
+                it.retryTempId ? (
+                  <div className="bubble-retry-row">
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm bubble-retry-btn"
+                      onClick={() => retrySend(it.retryTempId!)}
+                    >
+                      <RefreshIcon size={12} />
+                      <span>{t("common.retry")}</span>
+                    </button>
+                  </div>
+                ) : undefined
+              }
             >
-              {it.errorText ? (
+              {it.isTyping ? (
+                <div
+                  className="body typing-dots"
+                  role="status"
+                  aria-label={it.typingAria ?? t("convRoom.museTypingAria")}
+                >
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              ) : it.errorText ? (
                 <div className="body err">{it.errorText}</div>
               ) : it.text ? (
                 it.isMarkdown ? (
@@ -947,6 +1456,13 @@ export function ConversationRoom(props: {
                 )
               ) : null}
               {it.paths.length > 0 && <ResourceCards paths={it.paths} />}
+              {it.attachedFileNames && it.attachedFileNames.length > 0 && (
+                <div className="statusline">
+                  {t("dropbox.attachedFiles", { count: it.attachedFileNames.length })}:{" "}
+                  {it.attachedFileNames.join(", ")}
+                </div>
+              )}
+              {it.retryError && <div className="statusline err">{it.retryError}</div>}
               {it.notes && <div className="statusline">{it.notes}</div>}
               {it.extraLine && <div className="statusline">{it.extraLine}</div>}
             </MessageBubble>
@@ -962,7 +1478,11 @@ export function ConversationRoom(props: {
               timeLabel={fmtTime(inf.startedAt, lang)}
               statusText={t("convRoom.thinking", { name: inf.name })}
             >
-              <div className="body typing-dots" aria-label={t("convRoom.generatingAria")}>
+              <div
+                className="body typing-dots"
+                role="status"
+                aria-label={t("convRoom.generatingAria")}
+              >
                 <span />
                 <span />
                 <span />
@@ -989,6 +1509,9 @@ export function ConversationRoom(props: {
         onSend={handleSend}
         mediaModes={conversation.mode === "muse_single"}
         hideThreadInput={conversation.mode === "muse_single"}
+        allowAttachments={canAttach}
+        files={attachedFiles}
+        onFilesChange={setAttachedFiles}
       />
 
       {confirmDelete && (
