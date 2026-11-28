@@ -582,11 +582,14 @@ function batchState(
 // batch; each muse reply renders from the relay_results row recorded on the
 // message that muse claimed — so a reply stays visible even when it mentions
 // nobody (no fan-out rows are created for it).
+// v9: also returns the group regulation text (system prompt) for the
+// collapsed prepended block; null while the group has no rules yet.
 export async function fetchGroupThread(groupId: string): Promise<{
   bubbles: GroupBubble[];
+  rules: string | null;
   error: string | null;
 }> {
-  const [{ data: posts, error: pe }, { data: memberRows, error: gme }] =
+  const [{ data: posts, error: pe }, { data: memberRows, error: gme }, { data: groupRows, error: ge }] =
     await Promise.all([
       db
         .from("relay_group_posts")
@@ -598,15 +601,22 @@ export async function fetchGroupThread(groupId: string): Promise<{
         .from("relay_group_members")
         .select("muse_recipient,name")
         .eq("group_id", groupId),
+      db
+        .from("relay_groups")
+        .select("rules")
+        .eq("id", groupId)
+        .maybeSingle(),
     ]);
-  if (pe) return { bubbles: [], error: pe.message };
-  if (gme) return { bubbles: [], error: gme.message };
+  if (pe) return { bubbles: [], rules: null, error: pe.message };
+  if (gme) return { bubbles: [], rules: null, error: gme.message };
+  if (ge) return { bubbles: [], rules: null, error: ge.message };
+  const rules = typeof groupRows?.rules === "string" && groupRows.rules.length > 0 ? groupRows.rules : null;
   const postRows = (posts ?? []) as GroupPost[];
   const nameByRecipient = new Map<string, string>();
   for (const m of memberRows ?? []) {
     nameByRecipient.set(String(m.muse_recipient).toLowerCase(), String(m.name));
   }
-  if (postRows.length === 0) return { bubbles: [], error: null };
+  if (postRows.length === 0) return { bubbles: [], rules, error: null };
 
   const ids = [...new Set(postRows.map((p) => p.message_id))];
   const [
@@ -618,8 +628,8 @@ export async function fetchGroupThread(groupId: string): Promise<{
     db.from("relay_results").select("message_id,status,output,error,created_at").in("message_id", ids),
     db.from("relay_muses").select("recipient,name"),
   ]);
-  if (me) return { bubbles: [], error: me.message };
-  if (re) return { bubbles: [], error: re.message };
+  if (me) return { bubbles: [], rules, error: me.message };
+  if (re) return { bubbles: [], rules, error: re.message };
   // Registry names fill gaps for members removed after they replied.
   for (const m of museRows ?? []) {
     const key = String(m.recipient).toLowerCase();
@@ -685,7 +695,7 @@ export async function fetchGroupThread(groupId: string): Promise<{
   }
 
   bubbles.sort((a, b) => a.time.localeCompare(b.time));
-  return { bubbles, error: null };
+  return { bubbles, rules, error: null };
 }
 
 // ---- v7: OpenAI Compatible Agents ------------------------------------------

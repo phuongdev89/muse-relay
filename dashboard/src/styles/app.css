@@ -2530,6 +2530,135 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 .mention-chip:hover { background: var(--color-paper-3); color: var(--color-ink); }
 .mention-chip.is-all { border-style: dashed; }
 
+/* ---- v9 mention autocomplete + badge overlay (composer mirror) ---- */
+/* The mirror paints badge-tinted text OVER a transparent-text textarea so
+   mentions read as badges while typing. Layout rule: badges add NO padding /
+   border / margin here — the overlay must occupy exactly the space of the raw
+   text underneath or the caret drifts after the first mention on a line. */
+.composer-textarea-wrap { position: relative; }
+.composer-textarea-wrap textarea { overflow-wrap: break-word; }
+.composer-shell textarea.mention-aware {
+  color: transparent;
+  caret-color: var(--color-ink);
+  background: transparent;
+}
+.composer-shell textarea.mention-aware::placeholder { color: var(--color-ink-3); }
+.composer-shell textarea.mention-aware:disabled { color: transparent; }
+.composer-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font: 400 var(--text-md) var(--font-body);
+  padding: 0.72rem 0.9rem 0.45rem;
+  color: var(--color-ink);
+  z-index: 1;
+}
+.mention-badge {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-radius: 0.45em;
+  box-shadow: inset 0 0 0 1px var(--color-accent-soft);
+  font-weight: 600;
+  padding: 0;
+  margin: 0;
+}
+.mention-badge.is-all {
+  background: var(--color-paper-3);
+  color: var(--color-ink-2);
+  box-shadow: inset 0 0 0 1px var(--color-rule-strong);
+}
+/* Inside bubbles there is no overlay alignment constraint — go full chip. */
+.bubble .mention-badge,
+.group-sysprompt-body .mention-badge {
+  padding: 0.04em 0.42em;
+  margin: 0 0.08em;
+  white-space: nowrap;
+}
+.mention-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0.4rem;
+  z-index: 45;
+  min-width: 11rem;
+  max-width: 18rem;
+  max-height: 13rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.25rem;
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-menu);
+  animation: fadein var(--dur-fast) var(--ease-out);
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink-2);
+  font: 500 var(--text-sm) var(--font-body);
+  padding: 0.38rem 0.6rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.mention-item.is-active {
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+}
+.mention-item.is-all { color: var(--color-ink); font-weight: 600; }
+
+/* ---- v9 group system prompt (prepended rules, collapsed by default) ---- */
+.group-sysprompt {
+  align-self: center;
+  width: min(78%, 60rem);
+  border: 1px solid var(--color-rule);
+  border-radius: 12px;
+  background: var(--color-paper-2);
+  overflow: hidden;
+}
+.group-sysprompt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0.42rem 0.7rem;
+  cursor: pointer;
+  text-align: left;
+}
+.group-sysprompt-label {
+  font: 600 var(--text-xs) var(--font-display);
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.group-sysprompt-hint {
+  flex: 1;
+  min-width: 0;
+  font: 400 var(--text-xs) var(--font-body);
+  color: var(--color-ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-sysprompt-head:hover { background: var(--color-paper-3); }
+.group-sysprompt-body {
+  padding: 0.1rem 0.7rem 0.6rem;
+  font: 400 var(--text-sm)/1.55 var(--font-body);
+  color: var(--color-ink-2);
+  white-space: pre-wrap;
+}
+
 .token-panel {
   border: 1px solid var(--color-vault-border);
   background: var(--color-vault-bg);
@@ -2690,6 +2819,10 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   /* 16px controls: iOS Safari force-zooms focused inputs set below 16px */
   .dialog { max-height: 97dvh; }
   input, textarea, select, .rail-search input, .admin-search input, .composer-shell textarea, .composer-opts input, .composer-opts select { font-size: 1rem; }
+  /* v9 mirror + popup follow the composer's mobile font-size override */
+  .composer-mirror { font-size: 1rem; }
+  .mention-popup { left: 0; right: 0; max-width: none; }
+  .group-sysprompt { width: 88%; }
 
   .bubble { max-width: 88%; }
   .bubble-copy { opacity: 1; } /* always reachable on touch devices */

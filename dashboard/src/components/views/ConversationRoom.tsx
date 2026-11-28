@@ -26,6 +26,7 @@ import {
   paramsSummary,
 } from "../../lib/format";
 import { useLang, type I18nKey } from "../../lib/i18n";
+import { splitMentionSegments } from "../../lib/mentions";
 import type {
   ActionMode,
   Conversation,
@@ -41,6 +42,7 @@ import type {
 import { Composer } from "../chat/Composer";
 import {
   ArrowDownIcon,
+  ChevronDownIcon,
   PanelRightIcon,
   PaperclipIcon,
   RefreshIcon,
@@ -123,6 +125,8 @@ export function ConversationRoom(props: {
 
   const [museItems, setMuseItems] = useState<ThreadItem[]>([]);
   const [groupBubbles, setGroupBubbles] = useState<GroupBubble[]>([]);
+  const [groupRules, setGroupRules] = useState<string | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [openaiMsgs, setOpenaiMsgs] = useState<OpenAIMessage[]>([]);
   const [optimisticSends, setOptimisticSends] = useState<OptimisticConvSend[]>([]);
   const [inflightOai, setInflightOai] = useState<InflightOpenAI[]>([]);
@@ -157,6 +161,25 @@ export function ConversationRoom(props: {
 
   const museByRef = useMemo(() => new Map(muses.map((m) => [m.recipient, m])), [muses]);
   const oaiByRef = useMemo(() => new Map(openaiAgents.map((a) => [a.id, a])), [openaiAgents]);
+
+  // v9 mention badges render only in group rooms; direct/mixed rooms keep
+  // plain text (no roster context there).
+  const bubbleMentionNames = conversation.group_id
+    ? museParticipants.map((p) => p.name)
+    : undefined;
+  const renderBubbleText = (text: string) => {
+    const segments = splitMentionSegments(text, bubbleMentionNames);
+    if (segments.length === 1 && segments[0].type === "text") return text;
+    return segments.map((seg, i) =>
+      seg.type === "mention" ? (
+        <span key={i} className={`mention-badge${seg.all ? " is-all" : ""}`}>
+          {seg.text}
+        </span>
+      ) : (
+        <span key={i}>{seg.text}</span>
+      ),
+    );
+  };
 
   const participantColorMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -242,11 +265,12 @@ export function ConversationRoom(props: {
 
     if (usesGroupMuse && conversation.group_id) {
       tasks.push(
-        fetchGroupThread(conversation.group_id).then(({ bubbles, error }) => {
+        fetchGroupThread(conversation.group_id).then(({ bubbles, rules, error }) => {
           if (convIdRef.current !== targetConvId) return;
           if (error) errs.push(error);
           else {
             setGroupBubbles(bubbles);
+            setGroupRules(rules);
             if (conversation.mode === "muse_group") {
               setOptimisticSends((cur) =>
                 cur.filter((o) => {
@@ -295,6 +319,8 @@ export function ConversationRoom(props: {
   useEffect(() => {
     setMuseItems([]);
     setGroupBubbles([]);
+    setGroupRules(null);
+    setRulesOpen(false);
     setOpenaiMsgs([]);
     setOptimisticSends([]);
     setInflightOai([]);
@@ -1392,6 +1418,26 @@ export function ConversationRoom(props: {
             <div className="thread-empty">{t("convRoom.empty")}</div>
           )}
 
+          {conversation.group_id && groupRules && (
+            <div className="group-sysprompt">
+              <button
+                type="button"
+                className="group-sysprompt-head"
+                aria-expanded={rulesOpen}
+                aria-label={t("group.systemPromptAria")}
+                onClick={() => setRulesOpen((v) => !v)}
+              >
+                <span className="group-sysprompt-label">{t("group.systemPromptLabel")}</span>
+                <span className="group-sysprompt-hint">{t("group.systemPromptHint")}</span>
+                <ChevronDownIcon
+                  size={13}
+                  className={`opt-chevron${rulesOpen ? " open" : ""}`}
+                />
+              </button>
+              {rulesOpen && <div className="group-sysprompt-body">{groupRules}</div>}
+            </div>
+          )}
+
           {unifiedItems.map((it) => (
             <MessageBubble
               key={it.id}
@@ -1434,11 +1480,11 @@ export function ConversationRoom(props: {
               ) : it.text ? (
                 it.isMarkdown ? (
                   <>
-                    <MarkdownBody text={it.text} />
+                    <MarkdownBody text={it.text} mentionNames={bubbleMentionNames} />
                     <UrlPreviews text={it.text} />
                   </>
                 ) : (
-                  <div className="body">{it.text}</div>
+                  <div className="body">{renderBubbleText(it.text)}</div>
                 )
               ) : null}
               {it.paths.length > 0 && <ResourceCards paths={it.paths} />}

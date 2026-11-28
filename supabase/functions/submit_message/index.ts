@@ -1,6 +1,7 @@
 import {
   adminClient,
   allowedOwnerId,
+  buildGroupRules,
   corsHeaders,
   fanoutGroupMessage,
   jsonResponse,
@@ -57,7 +58,7 @@ Deno.serve(async (req: Request) => {
       }
       const { data: group, error: groupError } = await adminClient()
         .from("relay_groups")
-        .select("id")
+        .select("id, name, rules")
         .eq("id", body.group_id)
         .eq("owner_id", user.id)
         .maybeSingle();
@@ -82,6 +83,26 @@ Deno.serve(async (req: Request) => {
       if (membersError) throw membersError;
       if ((members ?? []).length < 1) {
         return jsonResponse({ error: "group_has_no_members" }, 400);
+      }
+
+      // v9 group regulation (system prompt): generated once at the group's
+      // first send and stored on relay_groups.rules. `rules is null` keeps the
+      // write idempotent under concurrent first messages; pre-existing groups
+      // get their rules on the first send after this deploy. Best-effort:
+      // claim-side context tolerates a missing rules text, so a storage
+      // failure must not block the utterance.
+      if (typeof group.rules !== "string" || group.rules.length < 1) {
+        try {
+          const rules = buildGroupRules(String(group.name), members ?? []);
+          const { error: rulesError } = await adminClient()
+            .from("relay_groups")
+            .update({ rules })
+            .eq("id", groupId)
+            .is("rules", null);
+          if (rulesError) throw rulesError;
+        } catch (rulesError) {
+          console.error("group rules generation failed:", rulesError);
+        }
       }
 
       const targets = parseMentionTargets(utterance, members ?? [], null);

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { MAX_ATTACH_FILES, mergeAttachmentFiles } from "../../lib/dropbox";
 import { fmtFileSize } from "../../lib/format";
 import { useLang } from "../../lib/i18n";
+import { splitMentionSegments } from "../../lib/mentions";
 import type { ActionMode, MessageParams } from "../../types";
 import {
   ChevronDownIcon,
@@ -62,6 +63,43 @@ export function Composer(props: {
   const [optsOpen, setOptsOpen] = useState(false);
   const [error, setError] = useState("");
 
+  // v9 mention autocomplete: `mention` derives purely from the prompt + caret
+  // (last unclosed `@token` before the caret); the popup lists @all + roster
+  // names filtered by prefix. caret = -1 means "no detection" (right after a
+  // programmatic insert) until the next real user interaction moves it.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  const [caret, setCaret] = useState(-1);
+  const [mentionFocus, setMentionFocus] = useState(false);
+  const [mentionIdx, setMentionIdx] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const mentionNames = props.mentionNames;
+  const mention = useMemo(() => {
+    if (!mentionNames || mentionNames.length === 0 || disabled || caret < 0) return null;
+    const upTo = prompt.slice(0, caret);
+    const at = upTo.lastIndexOf("@");
+    if (at === -1) return null;
+    const query = upTo.slice(at + 1);
+    if (query.includes("@") || query.includes("\n")) return null;
+    const ql = query.toLowerCase();
+    const matches: string[] = [];
+    if ("all".startsWith(ql)) matches.push("all");
+    for (const name of mentionNames) {
+      if (name.toLowerCase().startsWith(ql) && name.toLowerCase() !== "all") matches.push(name);
+    }
+    return { start: at, matches };
+  }, [prompt, caret, mentionNames, disabled]);
+  const mentionOpen =
+    mention !== null && mention.matches.length > 0 && mentionFocus && !mentionDismissed;
+  useEffect(() => {
+    setMentionDismissed(false);
+  }, [mention?.start]);
+  useEffect(() => {
+    if (mentionOpen) {
+      setMentionIdx((i) => Math.min(i, Math.max(mention.matches.length - 1, 0)));
+    }
+  }, [mentionOpen, mention?.matches.length]);
+
   // If the allowed set changes under an open composer (caps edited elsewhere),
   // fall back to the first allowed tab instead of sending a gated action.
   const allowedModes = props.allowedModes;
@@ -116,8 +154,44 @@ export function Composer(props: {
       const needsSpace = cur.length > 0 && !/\s$/.test(cur);
       return `${cur}${needsSpace ? " " : ""}${token}`;
     });
+    // Programmatic insert: suppress token detection until the user interacts.
+    setCaret(-1);
+    setMentionIdx(0);
     setError("");
   }
+
+  // Autocomplete pick: replace the whole `@partial` token (from the `@` up to
+  // the caret) with the canonical `@Name ` and put the caret after it.
+  function applyMention(name: string) {
+    if (!mention || disabled) return;
+    const insert = `@${name} `;
+    const next = prompt.slice(0, mention.start) + insert + prompt.slice(caret);
+    const nextCaret = mention.start + insert.length;
+    setPrompt(next);
+    setCaret(nextCaret);
+    setMentionIdx(0);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCaret, nextCaret);
+      }
+    });
+  }
+
+  // Mirror/highlight helpers: the mirror div must scroll in lockstep with the
+  // textarea so the badge overlay stays aligned.
+  function syncMirror() {
+    const ta = textareaRef.current;
+    const mir = mirrorRef.current;
+    if (ta && mir) {
+      mir.scrollTop = ta.scrollTop;
+      mir.scrollLeft = ta.scrollLeft;
+    }
+  }
+  useEffect(() => {
+    syncMirror();
+  }, [prompt]);
 
   function handlePickFiles(e: ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(e.target.files ?? []);
@@ -205,6 +279,8 @@ export function Composer(props: {
     // Clear composer synchronously so user can immediately type the next message
     setPrompt("");
     setAttachedFiles([]);
+    setCaret(-1);
+    setMentionIdx(0);
     setError("");
 
     void props.onSend(modeSnapshot, built, filesSnapshot);
@@ -225,26 +301,101 @@ export function Composer(props: {
 
   const activeThread = !hideThreadInput ? thread.trim() : "";
 
+  const mirrorSegments =
+    mentionNames && mentionNames.length > 0
+      ? splitMentionSegments(prompt, mentionNames)
+      : null;
+  const hasMentionText =
+    mirrorSegments !== null && mirrorSegments.some((s) => s.type === "mention");
+
   return (
     <div className="composer-block">
       {disabled && disabledBanner}
 
       <div className={`composer-shell${disabled ? " is-disabled" : ""}`}>
-        <textarea
-          rows={2}
-          value={prompt}
-          disabled={disabled}
-          placeholder={props.placeholder}
-          aria-label={props.placeholder}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => {
-            if (disabled) return;
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-        />
+        <div className="composer-textarea-wrap">
+          <textarea
+            ref={textareaRef}
+            rows={2}
+            value={prompt}
+            disabled={disabled}
+            placeholder={props.placeholder}
+            aria-label={props.placeholder}
+            className={hasMentionText ? "mention-aware" : undefined}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              setCaret(e.target.selectionEnd);
+            }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionEnd)}
+            onFocus={() => setMentionFocus(true)}
+            onBlur={() => setMentionFocus(false)}
+            onScroll={syncMirror}
+            onKeyDown={(e) => {
+              if (disabled) return;
+              if (mentionOpen && !e.nativeEvent.isComposing) {
+                const n = mention.matches.length;
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionIdx((i) => (i + 1) % n);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionIdx((i) => (i - 1 + n) % n);
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  applyMention(mention.matches[mentionIdx % n] ?? mention.matches[0]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionDismissed(true);
+                  return;
+                }
+              }
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          {hasMentionText && (
+            <div className="composer-mirror" aria-hidden="true" ref={mirrorRef}>
+              {mirrorSegments.map((seg, i) =>
+                seg.type === "mention" ? (
+                  <span key={i} className={`mention-badge${seg.all ? " is-all" : ""}`}>
+                    {seg.text}
+                  </span>
+                ) : (
+                  <span key={i}>{seg.text}</span>
+                ),
+              )}
+              {"\n"}
+            </div>
+          )}
+          {mentionOpen && (
+            <div className="mention-popup" role="listbox" aria-label={t("composer.mentionPopupAria")}>
+              {mention.matches.map((name, i) => (
+                <button
+                  key={`mention-${name}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentionIdx % mention.matches.length}
+                  className={`mention-item${i === mentionIdx % mention.matches.length ? " is-active" : ""}${name === "all" ? " is-all" : ""}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyMention(name);
+                  }}
+                  onMouseEnter={() => setMentionIdx(i)}
+                >
+                  @{name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {props.mentionNames && props.mentionNames.length > 0 && !disabled && (
           <div className="mention-chips" aria-label={t("composer.mentionAria")}>

@@ -33,13 +33,18 @@ npm run build
 npm start
 ```
 
-Deploy Supabase migrations & Edge Functions, then run the 53-assertion live acceptance suite:
+Deploy Supabase migrations & Edge Functions, then run the 65-assertion live acceptance suite:
 
 ```bash
-npx --yes supabase db push            # applies all 10 migrations (000000..000800)
+npx --yes supabase db push            # applies all 11 migrations (000000..01100); see note below
 bash scripts/deploy-functions.sh      # deploys submit_message, claim_message, submit_result
-bash scripts/acceptance-tests.sh      # expects RESULT: PASS=53 FAIL=0
+bash scripts/acceptance-tests.sh      # expects RESULT: PASS=65 FAIL=0
 ```
+
+> Note: the remote project tracks no CLI migration history (migrations were
+> applied via the Management API), so `db push` would replay every migration.
+> Apply new migrations individually (they are additive + idempotent); rollback
+> for the group-rules migration lives in `scripts/rollback-group-rules.sql`.
 
 ---
 
@@ -89,7 +94,7 @@ Browser (React 18 + Vite 6 + TypeScript SPA — dashboard/)
 
 ### Invariant Principles
 
-1. **Nyx is production-frozen** — Never alter `relay_messages` or `relay_results` in breaking ways; all schema changes must be strictly additive and verified with `bash scripts/acceptance-tests.sh` (`PASS=53 FAIL=0`).
+1. **Nyx is production-frozen** — Never alter `relay_messages` or `relay_results` in breaking ways; all schema changes must be strictly additive and verified with `bash scripts/acceptance-tests.sh` (`PASS=65 FAIL=0`).
 2. **No privileged Muse (fail-closed)** — All Muse auth resolves `sha256(x-relay-token)` against `relay_muses`. Any miss or lookup error returns `401` with no fallback. Every `submit_message` must target an explicit `recipient` UUID or `group_id`.
 3. **`RELAY_TOKEN` stays in the Muse's Secure Vault** — Never send tokens through chat, logs, or files; the dashboard displays them once during creation (`AddMuseWizard.tsx`) or rotation (`MuseManage.tsx`).
 4. **Minimal Edge Function secrets; runtime `.env` on `server/`** — Edge Functions use only `RELAY_SIGNING_SECRET` and `RELAY_OWNER_ID`. Dropbox and server settings live exclusively in the root `.env` read by `server/`.
@@ -153,7 +158,7 @@ supabase/
   │  ├─ submit_message/index.ts    Owner submission (direct recipient or group_id)
   │  ├─ claim_message/index.ts     Muse poll/claim (validates x-relay-token, stamps heartbeat)
   │  └─ submit_result/index.ts     Muse completion (validates lease + dropbox_root, group fan-out)
-  └─ migrations/                   10 strictly additive SQL migrations:
+  └─ migrations/                   11 strictly additive SQL migrations:
      ├─ 20261127000000_relay.sql
      ├─ 20261127000100_relay_chat.sql
      ├─ 20261127000200_recipient_hash.sql
@@ -163,10 +168,14 @@ supabase/
      ├─ 20261127000550_relay_projects.sql
      ├─ 20261127000600_cleanup_legacy_and_owner_delete.sql
      ├─ 20261127000700_muse_connection_state.sql
-     └─ 20261127000800_relay_muses_email_owner.sql
+     ├─ 20261127000800_relay_muses_email_owner.sql
+     ├─ 20261127000900_relay_muses_caps.sql
+     ├─ 20261128001000_backfill_group_thread_id.sql
+     └─ 20261128001100_group_rules.sql
 scripts/
   ├─ deploy-functions.sh           Deploys submit_message, claim_message, submit_result using .env
-  └─ acceptance-tests.sh           Live 53-assertion acceptance suite using isolated temp directory
+  ├─ rollback-group-rules.sql      Reverse of migration 20261128001100 (drop the 2 v9 columns)
+  └─ acceptance-tests.sh           Live 65-assertion acceptance suite using isolated temp directory
 ```
 
 ---

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useLang } from "../../lib/i18n";
+import { splitMentionSegments } from "../../lib/mentions";
 import { CheckIcon, CopyIcon } from "../common/Icons";
 import { copyText } from "../common/ui";
 
@@ -24,8 +25,34 @@ function isSafeHttpUrl(url: string): boolean {
 /**
  * Parses inline markdown tokens safely into React nodes (never uses dangerouslySetInnerHTML).
  * Supports `code`, **bold**, *italic* / _italic_, [label](url), and bare https:// links.
+ * When `mentionNames` is provided (group rooms), @all/@Name tokens render as
+ * mention badges — mention splitting runs BEFORE the token regex so roster
+ * names containing spaces match exactly (server parseMentionTargets semantics).
  */
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
+function renderInline(text: string, keyPrefix: string, mentionNames?: string[]): ReactNode[] {
+  if (mentionNames && mentionNames.length > 0) {
+    const segments = splitMentionSegments(text, mentionNames);
+    if (segments.length > 1 || segments[0].type === "mention") {
+      const nodes: ReactNode[] = [];
+      segments.forEach((seg, si) => {
+        const key = `${keyPrefix}-m${si}`;
+        if (seg.type === "mention") {
+          nodes.push(
+            <span key={key} className={`mention-badge${seg.all ? " is-all" : ""}`}>
+              {seg.text}
+            </span>,
+          );
+        } else {
+          nodes.push(...renderInlineTokens(seg.text, `${key}t`, mentionNames));
+        }
+      });
+      return nodes;
+    }
+  }
+  return renderInlineTokens(text, keyPrefix, mentionNames);
+}
+
+function renderInlineTokens(text: string, keyPrefix: string, mentionNames?: string[]): ReactNode[] {
   const nodes: ReactNode[] = [];
   // Order matters: inline code first, then markdown links, bold, italic, bare URLs
   const tokenRe =
@@ -62,13 +89,13 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       }
     } else if (match[5]) {
       // **bold**
-      nodes.push(<strong key={key}>{renderInline(match[6], `${key}b`)}</strong>);
+      nodes.push(<strong key={key}>{renderInline(match[6], `${key}b`, mentionNames)}</strong>);
     } else if (match[7]) {
       // *italic*
-      nodes.push(<em key={key}>{renderInline(match[8], `${key}i`)}</em>);
+      nodes.push(<em key={key}>{renderInline(match[8], `${key}i`, mentionNames)}</em>);
     } else if (match[9]) {
       // _italic_
-      nodes.push(<em key={key}>{renderInline(match[10], `${key}u`)}</em>);
+      nodes.push(<em key={key}>{renderInline(match[10], `${key}u`, mentionNames)}</em>);
     } else if (match[11]) {
       // bare http(s) URL
       const href = match[11];
@@ -225,16 +252,16 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-function renderLinesWithBreaks(lines: string[], keyPrefix: string): ReactNode[] {
+function renderLinesWithBreaks(lines: string[], keyPrefix: string, mentionNames?: string[]): ReactNode[] {
   const out: ReactNode[] = [];
   lines.forEach((line, idx) => {
     if (idx > 0) out.push(<br key={`${keyPrefix}-br-${idx}`} />);
-    out.push(...renderInline(line, `${keyPrefix}-l${idx}`));
+    out.push(...renderInline(line, `${keyPrefix}-l${idx}`, mentionNames));
   });
   return out;
 }
 
-export function MarkdownBody({ text, className }: { text: string; className?: string }) {
+export function MarkdownBody({ text, className, mentionNames }: { text: string; className?: string; mentionNames?: string[] }) {
   const blocks = parseBlocks(text);
 
   return (
@@ -250,14 +277,14 @@ export function MarkdownBody({ text, className }: { text: string; className?: st
             const Tag = b.level === 1 ? "h3" : b.level === 2 ? "h4" : "h5";
             return (
               <Tag key={k} className={`md-h md-h${b.level}`}>
-                {renderInline(b.text, k)}
+                {renderInline(b.text, k, mentionNames)}
               </Tag>
             );
           }
           case "quote":
             return (
               <blockquote key={k} className="md-quote">
-                {renderLinesWithBreaks(b.lines, k)}
+                {renderLinesWithBreaks(b.lines, k, mentionNames)}
               </blockquote>
             );
           case "ul":
@@ -279,7 +306,7 @@ export function MarkdownBody({ text, className }: { text: string; className?: st
           case "para":
             return (
               <p key={k} className="md-p">
-                {renderLinesWithBreaks(b.lines, k)}
+                {renderLinesWithBreaks(b.lines, k, mentionNames)}
               </p>
             );
         }

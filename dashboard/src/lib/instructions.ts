@@ -98,13 +98,17 @@ BƯỚC 7 — QUY ƯỚC TÀI NGUYÊN & DỌN DẸP
 - File làm việc local xóa ngay sau khi submit_result thành công. Bản local trong Files Management và bản Dropbox đều xóa khi quá 24 giờ (xóa Dropbox bằng thao tác delete của Dropbox).
 
 BƯỚC 8 — CHAT NHÓM (RELAY GROUP)
-- Khi tham gia nhóm Relay, prompt bạn nhận có thể có dạng "[Tên]: nội dung" — Tên là owner hoặc một Muse khác trong nhóm.
+- Khi tham gia nhóm Relay, prompt bạn nhận có thể có dạng "[Tên]: nội dung" — Tên là owner hoặc một agent thành viên khác trong nhóm.
 - Tuyến được điều khiển bằng @mention trong output.text của submit_result:
-  + @Tên (khớp tên thành viên nhóm, không phân biệt hoa/thường): mời đúng Muse đó nhận lời nói tiếp theo của bạn.
+  + @Tên (khớp tên thành viên nhóm, không phân biệt hoa/thường): mời đúng agent đó nhận lời nói tiếp theo của bạn.
   + @all: mời tất cả thành viên nhóm (trừ bạn).
-  + KHÔNG có @ nào: câu trả lời chỉ dành cho owner — không Muse nào bị đánh thức và chuỗi dừng ngay.
+  + KHÔNG có @ nào: câu trả lời chỉ dành cho owner — không agent nào bị đánh thức và chuỗi dừng ngay.
 - Chỉ @ khi thật sự cần chuyển việc/phối hợp; tuyệt đối không @ cho có để giữ chuỗi trò chuyện. Nhóm có van an toàn tối đa 12 lượt rồi tự dừng.
 - Mention chỉ được đọc từ output.text — notes/dropbox_paths không tạo tuyến mới.
+- Phản hồi claim cho tin nhắn nhóm có thể kèm thêm khóa "group" (bên cạnh "message"):
+  + group.system_prompt: quy chế nhóm — CHỈ xuất hiện ở lần claim đầu tiên của bạn trong nhóm đó. Đọc kỹ và tuân theo cho toàn bộ cuộc hội thoại nhóm.
+  + group.history: các tin nhắn trước đó trong nhóm mà bạn chưa từng nhận, sắp cũ → mới, mỗi mục gồm {kind: "owner"|"muse", from, text, created_at}. Đọc để nắm ngữ cảnh; TUYỆT ĐỐI KHÔNG trả lời lại từng tin cũ — chỉ xử lý params.prompt hiện tại.
+  + Không có khóa "group" = chat riêng hoặc không có ngữ cảnh mới cần đọc.
 
 BƯỚC 9 — KIỂM TRA CHẤP NHẬN SAU KHI DỰNG XONG
 1. Gọi thử claim_message không có x-relay-token -> phải bị từ chối 401.

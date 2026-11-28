@@ -372,6 +372,159 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$G_ID" -H "apikey: $SU
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($GA_REC,$GB_REC,$GC_REC,$GD_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-G =="
 
+echo "== T-SP/T-BF: v9 group rules + unread backfill =="
+SP_A_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+SP_B_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+SP_A_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+SP_B_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export SP_A_TOKEN SP_B_TOKEN
+SP_A_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['SP_A_TOKEN'].encode()).hexdigest())")
+SP_B_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['SP_B_TOKEN'].encode()).hexdigest())")
+SPM="$TMP_DIR/acceptance-sp-muses.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance SA","token_hash":"%s","dropbox_root":"/acceptance-sa/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance SB","token_hash":"%s","dropbox_root":"/acceptance-sb/"}\n' \
+  "$RELAY_OWNER_ID" "$SP_A_REC" "$SP_A_HASH" "$RELAY_OWNER_ID" "$SP_B_REC" "$SP_B_HASH" > "$SPM"
+ND_ROWS=0
+while IFS= read -r line; do
+  printf '%s' "$line" > "$SPM.one"
+  rc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_muses" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$SPM.one")
+  [ "$rc" = "201" ] && ND_ROWS=$((ND_ROWS+1))
+done < "$SPM"
+rm -f "$SPM" "$SPM.one"
+[ "$ND_ROWS" = "2" ] && ok "T-SP0 2 rules-test muses seeded -> 201 x2" || bad "T-SP0 seeded only $ND_ROWS/2"
+
+SPG="$TMP_DIR/acceptance-sp-group.json"
+G2_ID=$(python -I -c "import uuid; print(uuid.uuid4())")
+printf '{"id":"%s","owner_id":"%s","name":"Acceptance Rules Group"}' "$G2_ID" "$RELAY_OWNER_ID" > "$SPG"
+rc=$(curl -s -m 20 -o "$TMP_DIR/atspg" -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$SPG")
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance SA"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance SB"}\n' \
+  "$G2_ID" "$SP_A_REC" "$G2_ID" "$SP_B_REC" > "$SPG"
+ND_ROWS=0
+while IFS= read -r line; do
+  printf '%s' "$line" > "$SPG.one"
+  rc2=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_group_members" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$SPG.one")
+  [ "$rc2" = "201" ] && ND_ROWS=$((ND_ROWS+1))
+done < "$SPG"
+rm -f "$SPG" "$SPG.one"
+[ "$rc" = "201" ] && [ "$ND_ROWS" = "2" ] && ok "T-SP1 rules group + 2 members created" || bad "T-SP1 group=$rc members=$ND_ROWS"
+
+# T-SPa: the group's FIRST send (record-only, no mention) generates + stores
+# the regulation text on relay_groups.rules. ASCII anchors only (roster names,
+# output.text, @all) because the rules text itself is Vietnamese UTF-8.
+SPQ="$TMP_DIR/acceptance-sp-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] sp m1 hello"}}' "$G2_ID" > "$SPQ"
+SPSUB=$(curl -s -m 20 -o "$TMP_DIR/atspq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$SPQ")
+rm -f "$SPQ"
+SP_RULES=$(curl -s -m 20 "$BASE/rest/v1/relay_groups?select=rules&id=eq.$G2_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+SP_RULES_OK=$(echo "$SP_RULES" | jqpy "import json,sys; rows=json.load(sys.stdin); r=(rows[0].get('rules') or '') if rows else ''; print(len(rows)==1 and len(r)>200 and 'Acceptance Rules Group' in r and '@Acceptance SA' in r and '@Acceptance SB' in r and 'output.text' in r and '@all' in r and 'agent' in r)")
+[ "$SPSUB" = "201" ] && [ "$SP_RULES_OK" = "True" ] && ok "T-SPa first group send stores rules (name + roster + agent wording)" || bad "T-SPa got $SPSUB rules=$SP_RULES"
+
+# m2: owner @SA -> SA's first claim carries system_prompt + m1 in history,
+# while the legacy `message` shape stays intact.
+SPQ="$TMP_DIR/acceptance-sp-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] sp m2 @Acceptance SA start"}}' "$G2_ID" > "$SPQ"
+SPSUB=$(curl -s -m 20 -o "$TMP_DIR/atspq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$SPQ")
+rm -f "$SPQ"
+set -- $(cat "$TMP_DIR/atspq" | jqpy "import json,sys; print(' '.join(json.load(sys.stdin).get('message_ids',[])))")
+SP_M2=${1:-}
+SPCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $SP_A_TOKEN" -H 'content-type: application/json' -d '{}')
+SP_A_ID=$(echo "$SPCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+SP_A_CLAIM=$(echo "$SPCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+SP_A_SP=$(echo "$SPCLAIM" | jqpy "import json,sys; g=json.load(sys.stdin).get('group') or {}; print(g.get('system_prompt') or '')")
+SP_A_SHAPE=$(echo "$SPCLAIM" | jqpy "import json,sys; d=json.load(sys.stdin); m=(d.get('message') or {}); p=(m.get('params') or {}); print(m.get('id','')!='' and m.get('claim_id','')!='' and m.get('action')=='chat' and p.get('thread_id')=='$G2_ID' and isinstance(d.get('group'),dict))")
+[ "$SPSUB" = "201" ] && [ "$SP_A_ID" = "$SP_M2" ] && [ "$SP_A_SHAPE" = "True" ] && ok "T-SPb first claim: message shape intact + group key present" || bad "T-SPb got $SPSUB id=$SP_A_ID shape=$SP_A_SHAPE"
+SP_A_HIST=$(echo "$SPCLAIM" | jqpy "import json,sys; h=(json.load(sys.stdin).get('group') or {}).get('history') or []; print(';'.join(i['kind']+':'+i['text'] for i in h))")
+echo "$SP_A_SP" | grep -q 'Acceptance Rules Group' && [ "$SP_A_HIST" = "owner:[ACCEPTANCE] sp m1 hello" ] && ok "T-SPc first claim history = prior record-only utterance, oldest first" || bad "T-SPc sp=[$SP_A_SP] hist=[$SP_A_HIST]"
+
+# SA replies r1 (no mention -> owner-only), then owner @SB: SB's first claim
+# must see m1 + r1 + m2 in order.
+SPREP="$TMP_DIR/acceptance-sp-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"SA reply r1 no mention"},"error":null}' "$SP_A_ID" "$SP_A_CLAIM" > "$SPREP"
+SPRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $SP_A_TOKEN" -H 'content-type: application/json' -d @"$SPREP")
+rm -f "$SPREP"
+SPQ="$TMP_DIR/acceptance-sp-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] sp m3 @Acceptance SB join"}}' "$G2_ID" > "$SPQ"
+SPSUB=$(curl -s -m 20 -o "$TMP_DIR/atspq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$SPQ")
+rm -f "$SPQ"
+SP_B_M3=$(cat "$TMP_DIR/atspq" | jqpy "import json,sys; ids=json.load(sys.stdin).get('message_ids',[]); print(ids[0] if ids else '')")
+SPBCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $SP_B_TOKEN" -H 'content-type: application/json' -d '{}')
+SP_B_ID=$(echo "$SPBCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+SP_B_CLAIM=$(echo "$SPBCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+SP_B_SP=$(echo "$SPBCLAIM" | jqpy "import json,sys; g=json.load(sys.stdin).get('group') or {}; print(bool(g.get('system_prompt')))")
+SP_B_HIST=$(echo "$SPBCLAIM" | jqpy "import json,sys; h=(json.load(sys.stdin).get('group') or {}).get('history') or []; print(';'.join(i['kind'] for i in h))")
+# Chronological order: m1 (owner), m2 (owner @SA), r1 (SA's reply — result time
+# lands after m2's post), so the kinds are owner,owner,muse.
+[ "$SPSUB" = "201" ] && [ "$SP_B_ID" = "$SP_B_M3" ] && [ "$SP_B_SP" = "True" ] && [ "$SP_B_HIST" = "owner;owner;muse" ] && ok "T-SPd late muse first claim: rules + full history (m1,m2,r1)" || bad "T-SPd got $SPSUB id=$SP_B_ID sp=$SP_B_SP hist=[$SP_B_HIST]"
+
+# SB replies r2 @SA -> SA's delivery row; SA's SECOND claim: no system_prompt
+# again, and the current muse reply is NOT duplicated into history (only the
+# owner utterance SA missed comes back).
+SPREP="$TMP_DIR/acceptance-sp-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"SB passes back to @Acceptance SA"},"error":null}' "$SP_B_ID" "$SP_B_CLAIM" > "$SPREP"
+SPRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $SP_B_TOKEN" -H 'content-type: application/json' -d @"$SPREP")
+rm -f "$SPREP"
+SP_M4=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$SP_A_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; rows=json.load(sys.stdin); print(rows[0]['id'] if rows else '')")
+SPCLAIM2=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $SP_A_TOKEN" -H 'content-type: application/json' -d '{}')
+SP_A2_ID=$(echo "$SPCLAIM2" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+SP_A2_CLAIM=$(echo "$SPCLAIM2" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+SP_A2_SP=$(echo "$SPCLAIM2" | jqpy "import json,sys; d=json.load(sys.stdin); g=d.get('group') or {}; print(g.get('system_prompt') is None)")
+SP_A2_HIST=$(echo "$SPCLAIM2" | jqpy "import json,sys; h=(json.load(sys.stdin).get('group') or {}).get('history') or []; print(';'.join(i['kind']+':'+i['text'] for i in h))")
+[ "$SP_A2_ID" = "$SP_M4" ] && [ "$SP_A2_SP" = "True" ] && [ "$SP_A2_HIST" = "owner:[ACCEPTANCE] sp m3 @Acceptance SB join" ] && ok "T-BFa returning claim: no rules re-send, current reply deduped, missed owner utterance delivered" || bad "T-BFa id=$SP_A2_ID/$SP_M4 sp_null=$SP_A2_SP hist=[$SP_A2_HIST]"
+
+# SA speaks alone (no mention), owner speaks to SA again, then owner @SB:
+# SB's next claim backfills BOTH the muse reply it never received AND the
+# owner utterance addressed to SA.
+SPREP="$TMP_DIR/acceptance-sp-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"SA thinks alone r3"},"error":null}' "$SP_A2_ID" "$SP_A2_CLAIM" > "$SPREP"
+SPRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $SP_A_TOKEN" -H 'content-type: application/json' -d @"$SPREP")
+rm -f "$SPREP"
+SPQ="$TMP_DIR/acceptance-sp-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] sp m5 @Acceptance SA again"}}' "$G2_ID" > "$SPQ"
+SPSUB=$(curl -s -m 20 -o "$TMP_DIR/atspq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$SPQ")
+rm -f "$SPQ"
+curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $SP_A_TOKEN" -H 'content-type: application/json' -d '{}' > /dev/null
+SPQ="$TMP_DIR/acceptance-sp-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] sp m6 @Acceptance SB wrap"}}' "$G2_ID" > "$SPQ"
+SPSUB=$(curl -s -m 20 -o "$TMP_DIR/atspq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$SPQ")
+rm -f "$SPQ"
+SP_B_M6=$(cat "$TMP_DIR/atspq" | jqpy "import json,sys; ids=json.load(sys.stdin).get('message_ids',[]); print(ids[0] if ids else '')")
+SPBCLAIM2=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $SP_B_TOKEN" -H 'content-type: application/json' -d '{}')
+SP_B2_ID=$(echo "$SPBCLAIM2" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+SP_B2_SP=$(echo "$SPBCLAIM2" | jqpy "import json,sys; d=json.load(sys.stdin); g=d.get('group') or {}; print(g.get('system_prompt') is None)")
+SP_B2_HIST=$(echo "$SPBCLAIM2" | jqpy "import json,sys; h=(json.load(sys.stdin).get('group') or {}).get('history') or []; print(';'.join(i['kind']+':'+i['text'] for i in h))")
+[ "$SP_B2_ID" = "$SP_B_M6" ] && [ "$SP_B2_SP" = "True" ] && [ "$SP_B2_HIST" = "muse:SA thinks alone r3;owner:[ACCEPTANCE] sp m5 @Acceptance SA again" ] && ok "T-BFb backfill covers missed muse reply + missed owner utterance, ordered" || bad "T-BFb id=$SP_B2_ID/$SP_B_M6 sp_null=$SP_B2_SP hist=[$SP_B2_HIST]"
+
+SPCUR=$(curl -s -m 20 "$BASE/rest/v1/relay_group_members?select=last_seen_at&group_id=eq.$G2_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+SPCUR_N=$(echo "$SPCUR" | jqpy "import json,sys; rows=json.load(sys.stdin); print(len(rows)==2 and all(r.get('last_seen_at') for r in rows))")
+[ "$SPCUR_N" = "True" ] && ok "T-BFc per-member delivery cursor stamped (last_seen_at set x2)" || bad "T-BFc cursors=$SPCUR"
+
+# Direct-path regression: a non-group claim must NOT carry the group key.
+SPQ="$TMP_DIR/acceptance-sp-q.json"
+printf '{"recipient":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] bf direct"}}' "$SP_B_REC" > "$SPQ"
+SPSUB=$(curl -s -m 20 -o "$TMP_DIR/atspq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$SPQ")
+rm -f "$SPQ"
+SPDCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $SP_B_TOKEN" -H 'content-type: application/json' -d '{}')
+SP_D_OK=$(echo "$SPDCLAIM" | jqpy "import json,sys; d=json.load(sys.stdin); print((d.get('message') or {}).get('id','')!='' and 'group' not in d)")
+[ "$SPSUB" = "201" ] && [ "$SP_D_OK" = "True" ] && ok "T-BFd direct chat claim has NO group key (legacy shape)" || bad "T-BFd got $SPSUB resp=$(echo "$SPDCLAIM" | head -c 200)"
+
+echo "== cleanup T-SP/T-BF rows =="
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=in.($SP_A_REC,$SP_B_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=eq.$RELAY_OWNER_ID&params->>thread_id=eq.$G2_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$G2_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($SP_A_REC,$SP_B_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+echo "== end T-SP/T-BF =="
+
 echo "== T-LG prep: dedicated legacy muse (live Nyx daemon cannot race this queue) =="
 LG_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 LG_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")

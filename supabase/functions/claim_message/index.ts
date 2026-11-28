@@ -1,6 +1,7 @@
 import {
   adminClient,
   allowedOwnerId,
+  buildGroupContext,
   INPUT_BUCKET,
   jsonResponse,
   resolveMuse,
@@ -126,6 +127,33 @@ Deno.serve(async (req: Request) => {
           .map((item) => ({ path: item.path ?? "", signed_url: item.signedUrl }));
       }
 
+      // v9 group context (best-effort): the claimed lease above must never be
+      // lost to a context failure, so any error here just drops the `group`
+      // key. Group messages get { system_prompt (first claim only), history
+      // (utterances this muse has never received, oldest first) }; direct
+      // messages get no `group` key at all — the muse-side `message` shape is
+      // byte-for-byte unchanged.
+      let groupContext: {
+        system_prompt: string | null;
+        history: {
+          kind: "owner" | "muse";
+          from: string;
+          text: string;
+          created_at: string;
+        }[];
+      } | null = null;
+      try {
+        const ctx = await buildGroupContext(supabase, {
+          messageId: candidate.id,
+          museRecipient: muse.recipient,
+        });
+        if (ctx.isGroup) {
+          groupContext = { system_prompt: ctx.systemPrompt, history: ctx.history };
+        }
+      } catch (contextError) {
+        console.error("group context failed:", contextError);
+      }
+
       return jsonResponse({
         message: {
           id: candidate.id,
@@ -136,6 +164,7 @@ Deno.serve(async (req: Request) => {
           reference_signed_urls: referenceSignedUrls,
           claim_expires_at: claimExpiresAt,
         },
+        ...(groupContext ? { group: groupContext } : {}),
       });
     }
 
