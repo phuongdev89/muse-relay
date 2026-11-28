@@ -97,6 +97,10 @@ export interface GroupBubble {
   /** owner utterance (prefix stripped) or muse reply text */
   text: string;
   paths: string[];
+  /** Muse→Muse copy bridge: copies delivered into the recipient muse's root
+   * (fan-out row params.reference_dropbox_paths), visible/downloadable by the
+   * owner through the shared-folder hub. Empty for owner utterances. */
+  refPaths: string[];
   notes: string | null;
   error: string | null;
 }

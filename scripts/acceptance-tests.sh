@@ -553,6 +553,136 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$G2_ID" -H "apikey: $S
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($SP_A_REC,$SP_B_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-SP/T-BF =="
 
+echo "== T-HO: Muse->Muse Dropbox copy bridge (variant A) =="
+HO_TS=$(python -I -c "import time; print(int(time.time()))")
+HO_SRC_ROOT="/acceptance-ho-${HO_TS}/"
+HO_SRC_FILE="${HO_SRC_ROOT}handoff-test.txt"
+HO_DST_ROOT="/a@n.com/"
+DBX_TOK=$(python -I - <<'PYEOF'
+import json, os, urllib.parse, urllib.request
+form = urllib.parse.urlencode({
+    "grant_type": "refresh_token",
+    "refresh_token": os.environ["DROPBOX_REFRESH_TOKEN"],
+    "client_id": os.environ["DROPBOX_APP_KEY"],
+    "client_secret": os.environ["DROPBOX_APP_SECRET"],
+}).encode("utf-8")
+r = urllib.request.Request("https://api.dropboxapi.com/oauth2/token", data=form, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+with urllib.request.urlopen(r, timeout=20) as resp:
+    print(json.loads(resp.read().decode("utf-8")).get("access_token", ""))
+PYEOF
+)
+HO_UP_CODE=$(curl -s -m 20 -o "$TMP_DIR/athoup" -w '%{http_code}' -X POST "https://content.dropboxapi.com/2/files/upload" \
+  -H "Authorization: Bearer $DBX_TOK" \
+  -H "Content-Type: application/octet-stream" \
+  -H "Dropbox-API-Arg: {\"path\":\"$HO_SRC_FILE\",\"mode\":\"overwrite\",\"autorename\":false,\"mute\":true}" \
+  --data-binary "acceptance handoff $HO_TS")
+
+HO_A_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+HO_B_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+HO_C_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+HO_A_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+HO_B_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+HO_C_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export HO_A_TOKEN HO_B_TOKEN HO_C_TOKEN
+HO_A_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['HO_A_TOKEN'].encode()).hexdigest())")
+HO_B_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['HO_B_TOKEN'].encode()).hexdigest())")
+HO_C_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['HO_C_TOKEN'].encode()).hexdigest())")
+
+HOM="$TMP_DIR/acceptance-ho-muses.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance HOA","token_hash":"%s","dropbox_root":"%s"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance HOB","token_hash":"%s","dropbox_root":"%s"}\n' \
+  "$RELAY_OWNER_ID" "$HO_A_REC" "$HO_A_HASH" "$HO_SRC_ROOT" "$RELAY_OWNER_ID" "$HO_B_REC" "$HO_B_HASH" "$HO_DST_ROOT" > "$HOM"
+HO_SEED=0
+while IFS= read -r line; do
+  printf '%s' "$line" > "$HOM.one"
+  rc=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_muses" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$HOM.one")
+  [ "$rc" = "201" ] && HO_SEED=$((HO_SEED+1))
+done < "$HOM"
+rm -f "$HOM" "$HOM.one"
+
+HO_GID=$(python -I -c "import uuid; print(uuid.uuid4())")
+HOG="$TMP_DIR/acceptance-ho-group.json"
+printf '{"id":"%s","owner_id":"%s","name":"Acceptance HO Group"}' "$HO_GID" "$RELAY_OWNER_ID" > "$HOG"
+HO_GC=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$HOG")
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance HOA"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance HOB"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance HOC"}\n' \
+  "$HO_GID" "$HO_A_REC" "$HO_GID" "$HO_B_REC" "$HO_GID" "$HO_C_REC" > "$HOG"
+HO_MEM=0
+while IFS= read -r line; do
+  printf '%s' "$line" > "$HOG.one"
+  rc2=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_group_members" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$HOG.one")
+  [ "$rc2" = "201" ] && HO_MEM=$((HO_MEM+1))
+done < "$HOG"
+rm -f "$HOG" "$HOG.one"
+
+HOQ="$TMP_DIR/acceptance-ho-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] ho1 @Acceptance HOA pass asset"}}' "$HO_GID" > "$HOQ"
+HOSUB1=$(curl -s -m 20 -o "$TMP_DIR/athosub1" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$HOQ")
+rm -f "$HOQ"
+HO_ACLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $HO_A_TOKEN" -H 'content-type: application/json' -d '{}')
+HO_A_ID=$(echo "$HO_ACLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+HO_A_CID=$(echo "$HO_ACLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+HO_REP="$TMP_DIR/acceptance-ho-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":["%s"],"notes":null,"text":"HOA hands off to @Acceptance HOB"},"error":null}' "$HO_A_ID" "$HO_A_CID" "$HO_SRC_FILE" > "$HO_REP"
+HO_SR1=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $HO_A_TOKEN" -H 'content-type: application/json' -d @"$HO_REP")
+rm -f "$HO_REP"
+HO_SR1_OK=$(echo "$HO_SR1" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+
+HO_BCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $HO_B_TOKEN" -H 'content-type: application/json' -d '{}')
+HO_COPIED_PATH=$(echo "$HO_BCLAIM" | jqpy "import json,sys; p=((json.load(sys.stdin).get('message') or {}).get('params') or {}); refs=p.get('reference_dropbox_paths') or []; print(refs[0] if len(refs)==1 else '')")
+HO_B_OK=$(echo "$HO_BCLAIM" | jqpy "import json,sys; d=json.load(sys.stdin); m=(d.get('message') or {}); p=(m.get('params') or {}); refs=p.get('reference_dropbox_paths'); print(isinstance(refs,list) and len(refs)==1 and refs[0].startswith('${HO_DST_ROOT}${HO_GID}/') and p.get('prompt')=='[Acceptance HOA]: HOA hands off to @Acceptance HOB' and 'reference_dropbox_paths' in ((d.get('group') or {}).get('system_prompt') or ''))")
+HO_MD_CODE="000"
+if [ -n "$HO_COPIED_PATH" ]; then
+  HO_MD_CODE=$(curl -s -m 20 -o "$TMP_DIR/athomd" -w '%{http_code}' -X POST "https://api.dropboxapi.com/2/files/get_metadata" \
+    -H "Authorization: Bearer $DBX_TOK" -H "Content-Type: application/json" \
+    -d "{\"path\":\"$HO_COPIED_PATH\"}")
+fi
+[ "$HO_UP_CODE" = "200" ] && [ "$HO_SEED" = "2" ] && [ "$HO_GC" = "201" ] && [ "$HO_MEM" = "3" ] && [ "$HOSUB1" = "201" ] && [ "$HO_SR1_OK" = "True" ] && [ "$HO_B_OK" = "True" ] && [ "$HO_MD_CODE" = "200" ] \
+  && ok "T-HO-1 copy bridge: reference_dropbox_paths under target root + Dropbox copy verified ($HO_COPIED_PATH)" \
+  || bad "T-HO-1 up=$HO_UP_CODE seed=$HO_SEED gc=$HO_GC mem=$HO_MEM sub=$HOSUB1 sr=$HO_SR1_OK bok=$HO_B_OK md=$HO_MD_CODE path=$HO_COPIED_PATH"
+
+# T-HO-2: tagged recipient has NO dropbox_root (not in relay_muses at fanout time)
+# -> claim has NO reference_dropbox_paths key, text chain still fans out.
+HOQ="$TMP_DIR/acceptance-ho-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] ho2 @Acceptance HOA fail-closed"}}' "$HO_GID" > "$HOQ"
+HOSUB2=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$HOQ")
+rm -f "$HOQ"
+HO_ACLAIM2=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $HO_A_TOKEN" -H 'content-type: application/json' -d '{}')
+HO_A2_ID=$(echo "$HO_ACLAIM2" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+HO_A2_CID=$(echo "$HO_ACLAIM2" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+HO_REP="$TMP_DIR/acceptance-ho-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":["%s"],"notes":null,"text":"HOA hands off to @Acceptance HOC"},"error":null}' "$HO_A2_ID" "$HO_A2_CID" "$HO_SRC_FILE" > "$HO_REP"
+HO_SR2=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $HO_A_TOKEN" -H 'content-type: application/json' -d @"$HO_REP")
+rm -f "$HO_REP"
+HO_SR2_OK=$(echo "$HO_SR2" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+
+# Seed HOC into relay_muses AFTER fan-out so HOC can claim its fanned-out row.
+HOCB="$TMP_DIR/acceptance-ho-c.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance HOC","token_hash":"%s","dropbox_root":"/acceptance-hoc/"}' \
+  "$RELAY_OWNER_ID" "$HO_C_REC" "$HO_C_HASH" > "$HOCB"
+HO_CC=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/v1/relay_muses" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$HOCB")
+rm -f "$HOCB"
+HO_CCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $HO_C_TOKEN" -H 'content-type: application/json' -d '{}')
+HO_C_OK=$(echo "$HO_CCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); p=(m.get('params') or {}); print(m.get('id','')!='' and 'reference_dropbox_paths' not in p and p.get('prompt')=='[Acceptance HOA]: HOA hands off to @Acceptance HOC')")
+[ "$HOSUB2" = "201" ] && [ "$HO_SR2_OK" = "True" ] && [ "$HO_CC" = "201" ] && [ "$HO_C_OK" = "True" ] \
+  && ok "T-HO-2 target without dropbox_root -> no reference_dropbox_paths, text fan-out intact" \
+  || bad "T-HO-2 sub=$HOSUB2 sr=$HO_SR2_OK cc=$HO_CC cok=$HO_C_OK claim=$(echo "$HO_CCLAIM" | head -c 200)"
+
+echo "== cleanup T-HO rows + Dropbox test files =="
+curl -s -m 20 -X POST "https://api.dropboxapi.com/2/files/delete_v2" -H "Authorization: Bearer $DBX_TOK" -H "Content-Type: application/json" -d "{\"path\":\"/acceptance-ho-${HO_TS}\"}" > /dev/null
+curl -s -m 20 -X POST "https://api.dropboxapi.com/2/files/delete_v2" -H "Authorization: Bearer $DBX_TOK" -H "Content-Type: application/json" -d "{\"path\":\"${HO_DST_ROOT}${HO_GID}\"}" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=in.($HO_A_REC,$HO_B_REC,$HO_C_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=eq.$RELAY_OWNER_ID&params->>thread_id=eq.$HO_GID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$HO_GID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($HO_A_REC,$HO_B_REC,$HO_C_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+echo "== end T-HO =="
+
 echo "== T-LG prep: dedicated legacy muse (live Nyx daemon cannot race this queue) =="
 LG_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 LG_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")

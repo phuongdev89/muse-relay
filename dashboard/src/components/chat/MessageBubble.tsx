@@ -164,8 +164,10 @@ export function MessageBubble(p: BubbleProps) {
         <div className="bubble-foot">
           {p.side === "owner" && p.state ? <Ticks state={p.state} /> : null}
           {p.side === "muse" && p.state ? <ChipOf state={p.state} /> : null}
+          {/* owner messages: copy button sits left of the timestamp */}
+          {p.side === "owner" ? copyBtn : null}
           {p.timeLabel && <span className="when">{p.timeLabel}</span>}
-          {copyBtn}
+          {p.side !== "owner" ? copyBtn : null}
         </div>
       )}
 
@@ -636,7 +638,21 @@ function ResourceGallery({
       aria-modal="true"
       aria-labelledby="res-lightbox-title"
       onClick={(e) => {
-        if (e.target === e.currentTarget || e.target === stageRef.current) onClose();
+        // Backdrop click closes: the lightbox root itself, the decorative
+        // vignette, and the stage wrappers (letterbox area around the media).
+        // Clicks on the media or any control bubble from deeper children and
+        // never match these, so they keep the lightbox open.
+        const el = e.target as HTMLElement;
+        if (
+          e.target === e.currentTarget ||
+          el === stageRef.current ||
+          el.classList.contains("res-vignette") ||
+          el.classList.contains("res-stage-body") ||
+          el.classList.contains("res-stage-under") ||
+          el.classList.contains("res-stage-over")
+        ) {
+          onClose();
+        }
       }}
     >
       <div className="res-vignette" aria-hidden="true" />

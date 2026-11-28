@@ -75,7 +75,7 @@ bash scripts/deploy-functions.sh
 2. Wizard sinh `recipient` UUID + `RELAY_TOKEN` ngẫu nhiên, băm SHA-256 trên trình duyệt rồi lưu vào `relay_muses`.
 3. Bước cuối hiện **hai khung tách biệt**:
    - **Khung `RELAY_TOKEN`** — sao chép để dán vào **Secure Vault** của Muse (hiển thị **duy nhất một lần**, không bao giờ nằm trong khung hướng dẫn).
-   - **Khung Hướng dẫn chuẩn** — endpoint, schema `claim_message`/`submit_result`, `dropbox_root`, quy ước đặt tên `yyyy-mm-dd_hh-mm-ss_<slug>`, và quy tắc dọn local/Dropbox sau 24 giờ.
+   - **Khung Hướng dẫn chuẩn** — endpoint, schema `claim_message`/`submit_result`, `dropbox_root`, quy ước đặt tên `yyyy-mm-dd_hh-mm-ss_<slug>`, quy tắc dọn local/Dropbox sau 24 giờ (bao gồm sidecar metadata), và nghi thức an toàn inbox: bản đọc bị gắn cờ an toàn/prompt-injection → submit failed `safety_check_failed` từ sidecar, không xử lý prompt.
 4. **Khóa `setup_done` ban đầu**: Khi mới tạo, `setup_done = false`. Thanh soạn tin trong phòng chat 1:1 của Muse đó sẽ bị khóa cho tới khi Muse gọi `claim_message` xác thực thành công lần đầu (lúc đó `claim_message` và trigger `trg_relay_muses_connection_state` đặt `setup_done = true`, `first_connected_at`, và `last_claim_at`).
 
 ### Cột Telemetry trên `relay_muses` (v9)

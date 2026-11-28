@@ -88,6 +88,50 @@ function nonEmptyString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * Parses a chat-completions response body tolerantly. Some OpenAI-compatible
+ * backends append SSE terminators (`data: [DONE]`) or PHP notices AFTER an
+ * otherwise-valid JSON object, which breaks plain JSON.parse — so fall back to
+ * extracting the first balanced `{...}` object from the raw text.
+ */
+function parseCompletionPayload(
+  rawText: string,
+): { ok: true; value: unknown } | { ok: false } {
+  const cleaned = rawText.replace(/^\uFEFF/, "").trim();
+  try {
+    return { ok: true, value: JSON.parse(cleaned) };
+  } catch {
+    // fall through to first-object extraction
+  }
+  const start = cleaned.indexOf("{");
+  if (start === -1) return { ok: false };
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return { ok: true, value: JSON.parse(cleaned.slice(start, i + 1)) };
+        } catch {
+          return { ok: false };
+        }
+      }
+    }
+  }
+  return { ok: false };
+}
+
 async function fetchOpenAIAgentById(
   agentId: string,
   jwt: string,
@@ -169,7 +213,7 @@ export async function handleOpenAITest(
         max_tokens: 16,
         temperature: 0,
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(45_000),
     });
 
     const latencyMs = Math.round(performance.now() - started);
@@ -183,13 +227,19 @@ export async function handleOpenAITest(
       return;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      res.json({ ok: false, latencyMs, error: "invalid_json_response" });
+    const parsedResult = parseCompletionPayload(rawText);
+    if (!parsedResult.ok) {
+      const snippet = rawText.trim().slice(0, 120);
+      res.json({
+        ok: false,
+        latencyMs,
+        error: snippet
+          ? `invalid_json_response: ${snippet}`
+          : "invalid_json_response",
+      });
       return;
     }
+    const parsed = parsedResult.value;
 
     if (!hasValidChoices(parsed)) {
       res.json({ ok: false, latencyMs, error: "empty_choices" });
@@ -203,11 +253,16 @@ export async function handleOpenAITest(
     const isTimeout =
       err instanceof Error &&
       (err.name === "TimeoutError" || err.name === "AbortError");
+    if (isTimeout) {
+      console.error(
+        `openai test timeout after 45s: host=${new URL(targetUrl).host} model=${model}`,
+      );
+    }
     res.json({
       ok: false,
       latencyMs,
       error: isTimeout
-        ? "timeout_20s"
+        ? "timeout_45s"
         : err instanceof Error
           ? err.message
           : "upstream_request_failed",
@@ -301,7 +356,7 @@ export async function handleOpenAIChat(
         messages: finalMessages,
         stream: false,
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(180_000),
     });
 
     const rawText = await upstream.text();
@@ -313,13 +368,18 @@ export async function handleOpenAIChat(
       return;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      res.status(502).json({ content: null, error: "invalid_json_response" });
+    const parsedResult = parseCompletionPayload(rawText);
+    if (!parsedResult.ok) {
+      const snippet = rawText.trim().slice(0, 120);
+      res.status(502).json({
+        content: null,
+        error: snippet
+          ? `invalid_json_response: ${snippet}`
+          : "invalid_json_response",
+      });
       return;
     }
+    const parsed = parsedResult.value;
 
     const content = extractCompletionContent(parsed);
     if (!content.trim()) {
@@ -332,10 +392,15 @@ export async function handleOpenAIChat(
     const isTimeout =
       err instanceof Error &&
       (err.name === "TimeoutError" || err.name === "AbortError");
+    if (isTimeout) {
+      console.error(
+        `openai chat timeout after 180s: host=${new URL(targetUrl).host} model=${model}`,
+      );
+    }
     res.status(502).json({
       content: null,
       error: isTimeout
-        ? "timeout_60s"
+        ? "timeout_180s"
         : err instanceof Error
           ? err.message
           : "upstream_request_failed",

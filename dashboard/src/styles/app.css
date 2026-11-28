@@ -1361,7 +1361,7 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 .rail-scroll, .inspector-body { scrollbar-color: var(--color-rule-strong) transparent; }
 
 /* ---- Resource cards (vertical: media → name · size → actions) ---- */
-.res-list { max-width: 100%; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2xs); margin-top: 6px; }
+.res-list { max-width: 100%; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2xs); margin-top: 6px; margin-bottom: 5px; }
 .res-card {
   display: flex;
   flex-direction: column;

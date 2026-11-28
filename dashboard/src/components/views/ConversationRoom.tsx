@@ -103,6 +103,8 @@ interface UnifiedItem {
   text: string;
   isMarkdown: boolean;
   paths: string[];
+  /** Muse→Muse bridge hand-off copies (group muse bubbles only). */
+  refPaths?: string[];
   notes: string | null;
   errorText: string | null;
   extraLine?: string | null;
@@ -538,6 +540,7 @@ export function ConversationRoom(props: {
           text: b.text,
           isMarkdown: !isOwner && Boolean(b.text),
           paths: b.paths,
+          refPaths: b.refPaths,
           notes: b.notes,
           errorText: failed && !b.text ? b.error ?? t("api.failed") : null,
         });
@@ -814,6 +817,7 @@ export function ConversationRoom(props: {
             text: b.text,
             isMarkdown: !isOwner && Boolean(b.text),
             paths: b.paths,
+            refPaths: b.refPaths,
             notes: b.notes,
             errorText: failed && !b.text ? b.error ?? t("api.failed") : null,
           });
@@ -880,6 +884,9 @@ export function ConversationRoom(props: {
     const seen = new Set<string>();
     for (const item of unifiedItems) {
       for (const p of item.paths) {
+        if (p) seen.add(p);
+      }
+      for (const p of item.refPaths ?? []) {
         if (p) seen.add(p);
       }
     }
@@ -1492,6 +1499,13 @@ export function ConversationRoom(props: {
                 ) : undefined
               }
             >
+              {it.paths.length > 0 && <ResourceCards paths={it.paths} />}
+              {it.refPaths && it.refPaths.length > 0 && (
+                <>
+                  <div className="statusline">{t("convRoom.handoffAssets")}</div>
+                  <ResourceCards paths={it.refPaths} />
+                </>
+              )}
               {it.isTyping ? (
                 <div
                   className="body typing-dots"
@@ -1514,7 +1528,6 @@ export function ConversationRoom(props: {
                   <div className="body">{renderBubbleText(it.text)}</div>
                 )
               ) : null}
-              {it.paths.length > 0 && <ResourceCards paths={it.paths} />}
               {it.attachedFileNames && it.attachedFileNames.length > 0 && (
                 <div className="statusline">
                   {t("dropbox.attachedFiles", { count: it.attachedFileNames.length })}:{" "}

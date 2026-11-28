@@ -794,11 +794,24 @@ export async function fetchGroupThread(groupId: string): Promise<{
   }
 
   // Group bubbles only need a narrow slice of each message row.
-  type MsgRow = { id: string; recipient: string; status: string; params: { prompt?: string } };
+  type MsgRow = {
+    id: string;
+    recipient: string;
+    status: string;
+    params: { prompt?: string; reference_dropbox_paths?: unknown };
+  };
   const msgMap = new Map<string, MsgRow>((msgs ?? []).map((m) => [m.id, m as MsgRow]));
   const resMap = new Map<string, RelayResult>((results ?? []).map((r) => [r.message_id, r as RelayResult]));
 
   const bubbles: GroupBubble[] = [];
+
+  // Bridge hand-off refs ride in fan-out row params — keep string entries only
+  // (the edge already caps at 4 and validates prefix, this is just type guard).
+  const readRefPaths = (params: MsgRow["params"] | undefined): string[] => {
+    const raw = params?.reference_dropbox_paths;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((p): p is string => typeof p === "string" && p.length > 0);
+  };
 
   // Owner utterances: one bubble per fan-out batch (delivery rows share it).
   const seenBatch = new Set<string>();
@@ -820,6 +833,7 @@ export async function fetchGroupThread(groupId: string): Promise<{
       state: b.state,
       text: (first.params?.prompt ?? "").replace(/^\[[^\]]+\]:\s*/, ""),
       paths: [],
+      refPaths: [],
       notes: null,
       error: b.state === "failed" ? b.error : null,
     });
@@ -846,6 +860,7 @@ export async function fetchGroupThread(groupId: string): Promise<{
       state,
       text: result?.output?.text ?? "",
       paths: result?.output?.dropbox_paths ?? [],
+      refPaths: readRefPaths(msg.params),
       notes: result?.output?.notes ?? null,
       error: state === "failed" ? result?.error ?? tNow("api.failed") : null,
     });
@@ -946,10 +961,14 @@ function isAbortError(err: unknown): boolean {
 
 function mapOpenAIProxyError(codeOrMsg: string): string {
   switch (codeOrMsg) {
+    // timeout_20s / timeout_60s are legacy codes from the pre-45s/180s server
+    // builds; kept so an older server still renders a readable message.
+    case "timeout_45s":
     case "timeout_20s":
-      return tNow("api.timeout20");
+      return tNow("api.timeoutTest");
+    case "timeout_180s":
     case "timeout_60s":
-      return tNow("api.timeout60");
+      return tNow("api.timeoutChat");
     case "empty_choices":
       return tNow("api.noChoices");
     case "empty_reply":
@@ -970,7 +989,7 @@ export async function testOpenAIAgentConnection(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
+  const timeout = setTimeout(() => controller.abort(), 50000);
   const started = performance.now();
 
   try {
@@ -1014,7 +1033,7 @@ export async function testOpenAIAgentConnection(
   } catch (err) {
     const latencyMs = Math.round(performance.now() - started);
     if (isAbortError(err)) {
-      return { ok: false, latencyMs, error: tNow("api.timeout20") };
+      return { ok: false, latencyMs, error: tNow("api.timeoutTest") };
     }
     return {
       ok: false,
@@ -1044,7 +1063,7 @@ export async function callOpenAIChatCompletion(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 75000);
+  const timeout = setTimeout(() => controller.abort(), 190000);
   const onExternalAbort = () => controller.abort();
   signal?.addEventListener("abort", onExternalAbort);
 
@@ -1092,7 +1111,7 @@ export async function callOpenAIChatCompletion(
     return { content };
   } catch (err) {
     if (isAbortError(err)) {
-      return { error: tNow("api.timeout60") };
+      return { error: tNow("api.timeoutChat") };
     }
     return { error: err instanceof Error ? err.message : String(err) };
   } finally {

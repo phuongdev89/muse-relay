@@ -534,8 +534,8 @@ export function MuseRoom(props: {
                   footer={summary || null}
                   statusText={st === "failed" ? null : ownerStatusText(it)}
                 >
-                  <div className="body">{promptText}</div>
                   {refPaths.length > 0 && <ResourceCards paths={refPaths} />}
+                  <div className="body">{promptText}</div>
                   {st === "failed" && it.result?.error && (
                     <div className="statusline err">{it.result.error}</div>
                   )}
@@ -692,13 +692,13 @@ function MuseReply(props: { item: ThreadItem }) {
       copyValue={text || undefined}
       footer={paths.length > 0 ? t("museRoom.dropboxFiles", { count: paths.length }) : null}
     >
+      <ResourceCards paths={paths} />
       {text && (
         <>
           <MarkdownBody text={text} />
           <UrlPreviews text={text} />
         </>
       )}
-      <ResourceCards paths={paths} />
       {r.output?.notes && <div className="statusline">{r.output.notes}</div>}
       {message.attempts > 1 && (
         <div className="statusline">{t("museRoom.attemptNum", { n: message.attempts })}</div>

@@ -1,3 +1,4 @@
+import { copyV2 } from "../_shared/dropbox.ts";
 import {
   GROUP_TURN_LIMIT,
   adminClient,
@@ -5,6 +6,7 @@ import {
   jsonResponse,
   parseMentionTargets,
   resolveMuse,
+  resolveRecipientRoot,
   truncateUtterance,
   validateResultBody,
 } from "../_shared/relay.ts";
@@ -120,6 +122,63 @@ Deno.serve(async (req: Request) => {
               muse.recipient,
             );
             if (targets.length > 0) {
+              // Best-effort Muse->Muse resource bridge: when a muse replies
+              // with output.dropbox_paths (already validated under its own
+              // dropboxRoot) and tags one target muse, copy up to 4 files into
+              // `<targetRoot><group_id>/<basename>` and pass the copied paths
+              // as reference_dropbox_paths. Any copy/lookup failure drops refs
+              // silently so the text fan-out still succeeds.
+              const referenceDropboxPaths: string[] = [];
+              const rawPaths = result.output["dropbox_paths"];
+              if (
+                targets.length === 1 &&
+                Array.isArray(rawPaths) &&
+                rawPaths.length > 0
+              ) {
+                try {
+                  const targetRoot = await resolveRecipientRoot(
+                    supabase,
+                    targets[0].recipient,
+                  );
+                  if (
+                    targetRoot &&
+                    targetRoot.startsWith("/") &&
+                    !targetRoot.includes("..")
+                  ) {
+                    const normalizedTargetRoot = targetRoot.endsWith("/")
+                      ? targetRoot
+                      : `${targetRoot}/`;
+                    const candidates = rawPaths
+                      .filter((p): p is string => typeof p === "string")
+                      .slice(0, 4);
+                    for (const fromPath of candidates) {
+                      const lastSlash = fromPath.lastIndexOf("/");
+                      const base = lastSlash >= 0
+                        ? fromPath.slice(lastSlash + 1)
+                        : fromPath;
+                      if (!base || base === "." || base === ".." || base.includes("..")) {
+                        continue;
+                      }
+                      const toPath = `${normalizedTargetRoot}${post.group_id}/${base}`;
+                      if (!toPath.startsWith("/") || toPath.includes("..") || toPath.length > 512) {
+                        continue;
+                      }
+                      const copied = await copyV2(fromPath, toPath);
+                      if (
+                        copied &&
+                        copied.startsWith("/") &&
+                        !copied.includes("..") &&
+                        copied.length <= 512
+                      ) {
+                        referenceDropboxPaths.push(copied);
+                      }
+                    }
+                  }
+                } catch (bridgeError) {
+                  console.error("dropbox bridge failed:", bridgeError);
+                }
+              }
+
               await fanoutGroupMessage(supabase, {
                 groupId: post.group_id,
                 ownerId: message.owner_id,
@@ -128,6 +187,9 @@ Deno.serve(async (req: Request) => {
                 turn: post.turn + 1,
                 utterance: truncateUtterance(replyText.trim()),
                 targets,
+                ...(referenceDropboxPaths.length > 0
+                  ? { referenceDropboxPaths }
+                  : {}),
               });
             }
           }

@@ -110,9 +110,9 @@ const VI = {
   "api.failed": "thất bại",
   "api.invalidJson": "Endpoint trả về dữ liệu không phải JSON hợp lệ.",
   "api.noChoices": "Endpoint trả về JSON nhưng không có choices hợp lệ.",
-  "api.timeout20": "Quá thời gian chờ (20s)",
+  "api.timeoutTest": "Agent không phản hồi trong 45s (kiểm tra kết nối)",
   "api.emptyReply": "Endpoint trả về nội dung rỗng.",
-  "api.timeout60": "Quá thời gian chờ phản hồi từ model (60s).",
+  "api.timeoutChat": "Model không phản hồi trong 180s.",
   "api.createConvFailed": "không tạo được cuộc hội thoại",
 
   // Boot / runtime config fallback
@@ -345,6 +345,7 @@ const VI = {
   "convRoom.deleteTitle": "Xoá cuộc hội thoại",
   "convRoom.toggleDetailsTitle": "Đóng/mở chi tiết cuộc hội thoại",
   "convRoom.empty": "Cuộc hội thoại trống — gửi tin nhắn đầu tiên bên dưới.",
+  "convRoom.handoffAssets": "Tài nguyên chuyển giao qua cầu relay",
   "convRoom.composerPlaceholder": "Nhắn trong \"{title}\"… (Enter gửi, Shift+Enter xuống dòng)",
   "convRoom.deletedFromAdmin": "Agent đã bị xoá khỏi Quản trị Agent",
   "convRoom.deletedTag": "đã xoá",
@@ -748,9 +749,9 @@ const EN: Record<I18nKey, string> = {
   "api.failed": "failed",
   "api.invalidJson": "Endpoint returned invalid JSON.",
   "api.noChoices": "Endpoint returned JSON without valid choices.",
-  "api.timeout20": "Request timed out (20s)",
+  "api.timeoutTest": "Agent did not respond within 45s (connection test)",
   "api.emptyReply": "Endpoint returned empty content.",
-  "api.timeout60": "Model response timed out (60s).",
+  "api.timeoutChat": "Model response timed out (180s).",
   "api.createConvFailed": "failed to create conversation",
 
   // Boot / runtime config fallback
@@ -983,6 +984,7 @@ const EN: Record<I18nKey, string> = {
   "convRoom.deleteTitle": "Delete conversation",
   "convRoom.toggleDetailsTitle": "Toggle conversation details",
   "convRoom.empty": "Conversation is empty — send the first message below.",
+  "convRoom.handoffAssets": "Resources handed off via the relay bridge",
   "convRoom.composerPlaceholder": "Message in \"{title}\"… (Enter to send, Shift+Enter for newline)",
   "convRoom.deletedFromAdmin": "Agent removed from Agent Registry",
   "convRoom.deletedTag": "deleted",
