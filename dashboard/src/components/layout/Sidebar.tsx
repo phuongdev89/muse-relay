@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { type UsageReport } from "../../lib/api";
 import { museConnectionInfo, museEmailOf, type MuseFleetSummary } from "../../lib/format";
 import { useLang, type I18nKey } from "../../lib/i18n";
 import { useTheme } from "../../lib/theme";
@@ -26,6 +27,8 @@ import {
   SunIcon,
   XIcon,
 } from "../common/Icons";
+import { usageTone } from "../chat/UsageBar";
+import { MarqueeText } from "../common/MarqueeText";
 import { LangToggle } from "../common/ui";
 
 const CONV_MODE_SHORT_KEY: Record<ConversationMode, I18nKey> = {
@@ -35,12 +38,62 @@ const CONV_MODE_SHORT_KEY: Record<ConversationMode, I18nKey> = {
   mixed: "convModeShort.mixed",
 };
 
+/** Small SVG progress ring showing a muse's remaining AI quota (tone-colored
+ * like UsageBar). Replaces the dot-live / "Live" badge in direct channels. */
+function QuotaRing(props: { report: UsageReport; museName: string }) {
+  const { t } = useLang();
+  const remaining = Math.max(
+    0,
+    Math.min(100, Math.round(props.report.weeklyRemainingPercent)),
+  );
+  const tone = usageTone(props.report.weeklyUsedPercent);
+  const radius = 6.4;
+  const circ = 2 * Math.PI * radius;
+  const dash = Math.max(0.6, (remaining / 100) * circ);
+  const label = t("sidebar.quotaAria", { name: props.museName, remaining });
+  return (
+    <svg
+      className={`quota-ring tone-${tone}`}
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      role="img"
+      aria-label={label}
+    >
+      <title>{label}</title>
+      <circle
+        className="quota-ring-track"
+        cx="8"
+        cy="8"
+        r={radius}
+        fill="none"
+        strokeWidth="2.4"
+      />
+      {remaining > 0 && (
+        <circle
+          className="quota-ring-fill"
+          cx="8"
+          cy="8"
+          r={radius}
+          fill="none"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circ - dash}`}
+          transform="rotate(-90 8 8)"
+        />
+      )}
+    </svg>
+  );
+}
+
 export function Sidebar(props: {
   muses: Muse[];
   projects: Project[];
   projectAgents: ProjectAgent[];
   conversations: Conversation[];
   fleetSummary: Map<string, MuseFleetSummary>;
+  /** latest AI-quota report per lowercase recipient (UsageBar source data) */
+  usageReports: Map<string, UsageReport>;
   active: ActiveRoom;
   ownerEmail: string;
   mobileOpen: boolean;
@@ -57,6 +110,7 @@ export function Sidebar(props: {
     projectAgents,
     conversations,
     fleetSummary,
+    usageReports,
     active,
     ownerEmail,
     mobileOpen,
@@ -295,7 +349,9 @@ export function Sidebar(props: {
                         }}
                       >
                         <LayersIcon size={14} className="proj-icon" />
-                        <span className="nm">{project.name}</span>
+                        <span className="nm">
+                          <MarqueeText text={project.name} />
+                        </span>
                         <span
                           className="rail-badge"
                           title={t("sidebar.agentsInProj", { count: agentCount })}
@@ -355,7 +411,9 @@ export function Sidebar(props: {
                                 }
                               >
                                 <MessageIcon size={12} className="conv-nav-icon" />
-                                <span className="nm">{c.title}</span>
+                                <span className="nm">
+                                  <MarqueeText text={c.title} />
+                                </span>
                                 <span className="conv-nav-hint">
                                   {t(CONV_MODE_SHORT_KEY[c.mode])} · {c.participants.length}
                                 </span>
@@ -395,6 +453,7 @@ export function Sidebar(props: {
                 const summary = fleetSummary.get(m.recipient);
                 const activeJobs = summary?.activeCount ?? 0;
                 const email = museEmailOf(m);
+                const report = usageReports.get(m.recipient.toLowerCase()) ?? null;
 
                 return (
                   <button
@@ -404,10 +463,18 @@ export function Sidebar(props: {
                     onClick={() => selectRoom({ kind: "muse", recipient: m.recipient })}
                     title={`${m.name}${email ? ` (${email})` : ""} · ${conn.label} (${conn.detail})`}
                   >
-                    <span className={`dot ${conn.dotClass}`} aria-hidden="true" />
+                    {/* quota progress ring when a report exists; nothing
+                     * otherwise (no dot per owner — name aligns from left) */}
+                    {report ? <QuotaRing report={report} museName={m.name} /> : null}
                     <span className="room-meta">
-                      <span className="nm">{m.name}</span>
-                      {email && <span className="room-sub">{email}</span>}
+                      <span className="nm">
+                        <MarqueeText text={m.name} />
+                      </span>
+                      {email && (
+                        <span className="room-sub">
+                          <MarqueeText text={email} />
+                        </span>
+                      )}
                     </span>
                     {activeJobs > 0 ? (
                       <span
@@ -417,6 +484,8 @@ export function Sidebar(props: {
                         {activeJobs}
                       </span>
                     ) : (
+                      /* text status badge — visible in EVERY state (live
+                       * included), right of the muse name; no dot attached */
                       <span className={`rail-direct-badge state-${conn.state}`}>
                         {conn.shortLabel}
                       </span>
@@ -462,7 +531,9 @@ export function Sidebar(props: {
           </div>
 
           <div className="owner-chip">
-            <span className="em" title={ownerEmail}>{ownerEmail}</span>
+            <span className="em" title={ownerEmail}>
+              <MarqueeText text={ownerEmail} />
+            </span>
             <button
               type="button"
               className="btn-quiet btn-logout"

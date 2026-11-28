@@ -22,6 +22,12 @@ export interface Muse {
   created_at: string;
 }
 
+export interface ReplyToMeta {
+  message_id?: string;
+  sender: string;
+  excerpt: string;
+}
+
 export interface MessageParams {
   prompt?: string;
   /** v9 control commands ride in params (e.g. "usage" → /usage quota check). */
@@ -34,6 +40,7 @@ export interface MessageParams {
   output_format?: string;
   reference_storage_paths?: string[];
   reference_dropbox_paths?: string[];
+  reply_to?: ReplyToMeta;
 }
 
 export interface RelayMessage {
@@ -71,6 +78,9 @@ export interface ThreadItem {
 /** Fleet-wide activity entry used by Overview & Sidebar live statuses. */
 export interface FleetActivityItem {
   recipient: string;
+  /** params->>thread_id — group fan-out rows carry the group_id, conversation
+   * sends carry the conversation id, plain direct-channel rows are null. */
+  threadId: string | null;
   message: RelayMessage;
   result: RelayResult | null;
 }
@@ -103,6 +113,7 @@ export interface GroupBubble {
   refPaths: string[];
   notes: string | null;
   error: string | null;
+  replyTo?: ReplyToMeta | null;
 }
 
 // ---- v7: OpenAI Compatible Agents, Projects & Conversations ----------------
@@ -154,6 +165,7 @@ export interface Conversation {
   mode: ConversationMode;
   group_id: string | null;
   participants: ConversationParticipant[];
+  system_prompt?: string | null;
   created_at: string;
 }
 
@@ -165,6 +177,8 @@ export interface OpenAIMessage {
   agent_ref: string | null;
   agent_name: string;
   content: string;
+  dropbox_paths?: string[];
+  reply_to?: ReplyToMeta | null;
   status: "done" | "failed";
   error: string | null;
   created_at: string;

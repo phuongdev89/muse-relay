@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fetchFleetActivity, FLEET_ACTIVITY_PAGE_SIZE } from "../../lib/api";
 import {
   fmtClock,
   fmtRelativeAge,
@@ -10,7 +11,7 @@ import {
   type MuseFleetStatus,
 } from "../../lib/format";
 import { useLang, type I18nKey } from "../../lib/i18n";
-import type { FleetActivityItem, Muse } from "../../types";
+import type { Conversation, FleetActivityItem, Muse } from "../../types";
 import {
   ActivityIcon,
   ChevronRightIcon,
@@ -59,6 +60,9 @@ export function OverviewView(props: {
   projectsCount: number;
   openaiCount: number;
   fleetItems: FleetActivityItem[];
+  /** all project conversations — used to resolve an activity's thread_id back
+   * to the exact conversation room (group posts carry group_id in thread_id). */
+  conversations: Conversation[];
   loading: boolean;
   error: string;
   updatedAt: Date | null;
@@ -66,11 +70,73 @@ export function OverviewView(props: {
   onToggleInspector: () => void;
   onRefresh: () => void;
   onOpenMuse: (recipient: string) => void;
+  onOpenConversation: (projectId: string, conversationId: string) => void;
   onAddMuse: () => void;
 }) {
-  const { muses, projectsCount, openaiCount, fleetItems, loading, error, updatedAt } = props;
+  const {
+    muses,
+    projectsCount,
+    openaiCount,
+    fleetItems,
+    conversations,
+    loading,
+    error,
+    updatedAt,
+  } = props;
   const { lang, t } = useLang();
   const [filter, setFilter] = useState<ActivityFilter>("all");
+
+  // ---- infinite scroll accumulation ----------------------------------------
+  // props.fleetItems is the live-polled first page (App refreshes it every
+  // 10s); extraItems holds pages fetched beyond it via the sentinel observer.
+  const [extraItems, setExtraItems] = useState<FleetActivityItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const accumulatedItems = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: FleetActivityItem[] = [];
+    for (const it of [...fleetItems, ...extraItems]) {
+      if (seen.has(it.message.id)) continue;
+      seen.add(it.message.id);
+      merged.push(it);
+    }
+    merged.sort((a, b) => b.message.created_at.localeCompare(a.message.created_at));
+    return merged;
+  }, [fleetItems, extraItems]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore || loading) return;
+    setLoadingMore(true);
+    try {
+      const { items } = await fetchFleetActivity(
+        FLEET_ACTIVITY_PAGE_SIZE,
+        accumulatedItems.length,
+      );
+      if (items.length === 0) {
+        setHasMore(false);
+        return;
+      }
+      setExtraItems((cur) => [...cur, ...items]);
+      if (items.length < FLEET_ACTIVITY_PAGE_SIZE) setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, loading, accumulatedItems.length]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "240px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMore, hasMore]);
 
   const museByRecipient = useMemo(
     () => new Map(muses.map((m) => [m.recipient, m])),
@@ -78,8 +144,8 @@ export function OverviewView(props: {
   );
 
   const fleetSummary = useMemo(
-    () => summarizeMuseFleet(muses, fleetItems),
-    [muses, fleetItems],
+    () => summarizeMuseFleet(muses, accumulatedItems),
+    [muses, accumulatedItems],
   );
 
   const kpis = useMemo(() => {
@@ -88,7 +154,7 @@ export function OverviewView(props: {
     let errorOrExpired = 0;
     let done = 0;
 
-    for (const item of fleetItems) {
+    for (const item of accumulatedItems) {
       const st = ownerState(
         item.message.status,
         item.message.expires_at,
@@ -101,11 +167,11 @@ export function OverviewView(props: {
     }
 
     return { processing, pending, errorOrExpired, done };
-  }, [fleetItems]);
+  }, [accumulatedItems]);
 
   const filteredActivity = useMemo(() => {
-    if (filter === "all") return fleetItems;
-    return fleetItems.filter((item) => {
+    if (filter === "all") return accumulatedItems;
+    return accumulatedItems.filter((item) => {
       const st = ownerState(
         item.message.status,
         item.message.expires_at,
@@ -114,7 +180,22 @@ export function OverviewView(props: {
       if (filter === "error") return st === "failed" || st === "expired";
       return st === filter;
     });
-  }, [fleetItems, filter]);
+  }, [accumulatedItems, filter]);
+
+  /** Group/conversation posts carry thread_id — route them to the exact room;
+   * plain direct-channel activity falls back to the muse's direct channel. */
+  function openActivity(item: FleetActivityItem) {
+    if (item.threadId) {
+      const conv =
+        conversations.find((c) => c.id === item.threadId) ??
+        conversations.find((c) => c.group_id === item.threadId);
+      if (conv) {
+        props.onOpenConversation(conv.project_id, conv.id);
+        return;
+      }
+    }
+    props.onOpenMuse(item.recipient);
+  }
 
   const showSkeleton = loading && fleetItems.length === 0 && !error;
 
@@ -308,7 +389,7 @@ export function OverviewView(props: {
             </div>
           ) : filteredActivity.length === 0 ? (
             <div className="ov-empty-feed">
-              {fleetItems.length === 0 ? t("ov.emptyFeed") : t("ov.emptyFeedFiltered")}
+              {accumulatedItems.length === 0 ? t("ov.emptyFeed") : t("ov.emptyFeedFiltered")}
             </div>
           ) : (
             <div className="activity-list">
@@ -334,7 +415,7 @@ export function OverviewView(props: {
                     key={item.message.id}
                     type="button"
                     className="activity-row"
-                    onClick={() => props.onOpenMuse(item.recipient)}
+                    onClick={() => openActivity(item)}
                   >
                     <span className={`activity-action-icon action-${item.message.action}`}>
                       <ActionIcon action={item.message.action} />
@@ -359,6 +440,17 @@ export function OverviewView(props: {
                   </button>
                 );
               })}
+
+              {/* infinite-scroll sentinel: fetch the next page when it scrolls
+               * into view; hidden once the feed is exhausted */}
+              {hasMore && (
+                <div className="activity-sentinel" ref={sentinelRef}>
+                  {loadingMore ? t("ov.loadingMore") : ""}
+                </div>
+              )}
+              {!hasMore && accumulatedItems.length > 0 && (
+                <div className="activity-sentinel is-end">{t("ov.feedEnd")}</div>
+              )}
             </div>
           )}
         </section>

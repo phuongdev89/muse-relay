@@ -6,14 +6,17 @@ import {
   uploadFileToMuseDropbox,
   type UsageReport,
 } from "../../lib/api";
+import { getConfig } from "../../lib/config";
 import {
+  buildReplyToMeta,
   MAX_ATTACH_FILES,
   mergeAttachmentFiles,
   stripDropboxInputNote,
+  stripReplyPrefix,
 } from "../../lib/dropbox";
 import { fmtClock, fmtTime, museConnectionInfo, ownerState, paramsSummary } from "../../lib/format";
 import { useLang } from "../../lib/i18n";
-import type { ActionMode, MessageParams, Muse, ThreadItem } from "../../types";
+import type { ActionMode, MessageParams, Muse, ReplyToMeta, ThreadItem } from "../../types";
 import { Composer } from "../chat/Composer";
 import {
   ArrowDownIcon,
@@ -22,8 +25,9 @@ import {
   PanelRightIcon,
   PaperclipIcon,
   RefreshIcon,
-  TrashIcon,
+  EraserIcon,
 } from "../common/Icons";
+import { MarqueeText } from "../common/MarqueeText";
 import { MarkdownBody } from "../chat/MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "../chat/MessageBubble";
 import { UsageBar } from "../chat/UsageBar";
@@ -37,6 +41,7 @@ interface OptimisticSend {
   params: MessageParams;
   prompt: string;
   finalPrompt?: string;
+  replyTo?: ReplyToMeta | null;
   files: File[];
   sentAt: number;
   status: "sending" | "pending" | "failed";
@@ -58,6 +63,7 @@ export function MuseRoom(props: {
 }) {
   const { muse, onPathsChange } = props;
   const { lang, t } = useLang();
+  const ownerDisplayName = getConfig().ownerDisplayName;
 
   // Direct-channel routing gates: only the action tabs the muse's caps allow.
   const museAllowedModes = useMemo(
@@ -71,6 +77,8 @@ export function MuseRoom(props: {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [pending, setPending] = useState<OptimisticSend[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [replyTo, setReplyTo] = useState<ReplyToMeta | null>(null);
+  const [replyFocusTick, setReplyFocusTick] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   // v9 AI usage quota reports (keyed by lowercase recipient) for the header bar.
@@ -130,6 +138,7 @@ export function MuseRoom(props: {
     setItems([]);
     setPending([]);
     setAttachedFiles([]);
+    setReplyTo(null);
     setIsDragging(false);
     dragDepthRef.current = 0;
     setUpdatedAt(null);
@@ -309,6 +318,13 @@ export function MuseRoom(props: {
     props.onMessageSent?.();
   }
 
+  function startReply(sender: string, rawText: string, messageId?: string, fileCount = 0) {
+    const fallbackText =
+      fileCount > 0 ? t("dropbox.attachedFiles", { count: fileCount }) : undefined;
+    setReplyTo(buildReplyToMeta(sender, rawText, { messageId, fallbackText }));
+    setReplyFocusTick((n) => n + 1);
+  }
+
   function handleSend(action: ActionMode, params: MessageParams, files: File[]) {
     const tempId = crypto.randomUUID();
     const sentAt = Date.now();
@@ -321,6 +337,7 @@ export function MuseRoom(props: {
         action,
         params,
         prompt: promptText,
+        replyTo: params.reply_to ?? null,
         files,
         sentAt,
         status: "sending",
@@ -440,7 +457,9 @@ export function MuseRoom(props: {
       <div className="pane-head">
         <div className="pane-title-group">
           <div className="pane-title-row">
-            <h2>{muse.name}</h2>
+            <h2 title={muse.name}>
+              <MarqueeText text={muse.name} />
+            </h2>
             <Chip state={conn.chipClass} label={conn.label} />
             <UsageBar
               compact
@@ -459,13 +478,12 @@ export function MuseRoom(props: {
         <div className="pane-actions">
           <button
             type="button"
-            className="btn-ghost"
+            className="btn-ghost btn-icon-only"
             onClick={() => props.onOpenAction("clear")}
             title={t("museRoom.clearHistoryTitle")}
             aria-label={t("museRoom.clearHistoryAria")}
           >
-            <TrashIcon size={14} />
-            <span className="hide-xs">{t("museRoom.clearHistory")}</span>
+            <EraserIcon size={14} />
           </button>
           <MuseManageMenu
             onEdit={() => props.onOpenAction("edit")}
@@ -474,24 +492,22 @@ export function MuseRoom(props: {
           />
           <button
             type="button"
-            className="btn-ghost"
+            className="btn-ghost btn-icon-only"
             onClick={load}
             title={t("common.refresh")}
             aria-label={t("common.refresh")}
           >
             <RefreshIcon size={14} />
-            <span className="hide-xs">{t("common.refresh")}</span>
           </button>
           <button
             type="button"
-            className={`btn-ghost btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
+            className={`btn-ghost btn-icon-only btn-inspector-toggle${props.inspectorOpen ? " active" : ""}`}
             onClick={props.onToggleInspector}
             aria-pressed={props.inspectorOpen}
             title={t("museRoom.toggleProfileTitle")}
             aria-label={t("museRoom.toggleProfileTitle")}
           >
             <PanelRightIcon size={15} />
-            <span className="hide-xs">{t("common.details")}</span>
           </button>
         </div>
       </div>
@@ -521,8 +537,9 @@ export function MuseRoom(props: {
           {items.map((it) => {
             const st = ownerState(it.message.status, it.message.expires_at, it.message.claim_expires_at);
             const summary = paramsSummary(it.message.action, it.message.params, lang);
-            const promptText = stripDropboxInputNote(it.message.params.prompt ?? "");
+            const promptText = stripReplyPrefix(stripDropboxInputNote(it.message.params.prompt ?? ""));
             const refPaths = it.message.params.reference_dropbox_paths ?? [];
+            const ownerReplyTo = it.message.params.reply_to ?? null;
             return (
               <div key={it.message.id} className="exchange">
                 <MessageBubble
@@ -531,6 +548,8 @@ export function MuseRoom(props: {
                   failed={st === "failed"}
                   timeLabel={fmtTime(it.message.created_at, lang)}
                   copyValue={promptText}
+                  replyTo={ownerReplyTo}
+                  onReply={() => startReply(ownerDisplayName, promptText, it.message.id, refPaths.length)}
                   footer={summary || null}
                   statusText={st === "failed" ? null : ownerStatusText(it)}
                 >
@@ -558,7 +577,15 @@ export function MuseRoom(props: {
                     </div>
                   </MessageBubble>
                 )}
-                {it.result && <MuseReply item={it} />}
+                {it.result && (
+                  <MuseReply
+                    item={it}
+                    museName={muse.name}
+                    onReply={(rawText, fileCount) =>
+                      startReply(muse.name, rawText, it.message.id, fileCount)
+                    }
+                  />
+                )}
               </div>
             );
           })}
@@ -581,6 +608,7 @@ export function MuseRoom(props: {
                   failed={o.status === "failed"}
                   timeLabel={fmtTime(new Date(o.sentAt).toISOString(), lang)}
                   copyValue={o.prompt}
+                  replyTo={o.replyTo}
                   footer={summary || null}
                   statusText={optStatusText}
                   after={
@@ -638,6 +666,9 @@ export function MuseRoom(props: {
         allowAttachments={!isLocked}
         files={attachedFiles}
         onFilesChange={setAttachedFiles}
+        replyTo={replyTo}
+        onCancelReply={() => setReplyTo(null)}
+        focusSignal={replyFocusTick}
         disabled={isLocked}
         disabledBanner={
           isLocked ? (
@@ -662,7 +693,11 @@ export function MuseRoom(props: {
   );
 }
 
-function MuseReply(props: { item: ThreadItem }) {
+function MuseReply(props: {
+  item: ThreadItem;
+  museName: string;
+  onReply: (rawText: string, fileCount: number) => void;
+}) {
   const { lang, t } = useLang();
   const { result, message } = props.item;
   const r = result;
@@ -676,9 +711,10 @@ function MuseReply(props: { item: ThreadItem }) {
         failed
         timeLabel={fmtTime(r.created_at, lang)}
         copyValue={errText}
+        notes={r.output?.notes ?? null}
+        onReply={() => props.onReply(errText, 0)}
       >
         <div className="body err">{errText}</div>
-        {r.output?.notes && <div className="statusline">{r.output.notes}</div>}
       </MessageBubble>
     );
   }
@@ -690,6 +726,8 @@ function MuseReply(props: { item: ThreadItem }) {
       state="done"
       timeLabel={t("museRoom.replyAt", { time: fmtTime(r.created_at, lang) })}
       copyValue={text || undefined}
+      notes={r.output?.notes ?? null}
+      onReply={() => props.onReply(text, paths.length)}
       footer={paths.length > 0 ? t("museRoom.dropboxFiles", { count: paths.length }) : null}
     >
       <ResourceCards paths={paths} />
@@ -699,7 +737,6 @@ function MuseReply(props: { item: ThreadItem }) {
           <UrlPreviews text={text} />
         </>
       )}
-      {r.output?.notes && <div className="statusline">{r.output.notes}</div>}
       {message.attempts > 1 && (
         <div className="statusline">{t("museRoom.attemptNum", { n: message.attempts })}</div>
       )}

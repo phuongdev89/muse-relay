@@ -101,11 +101,20 @@ function AudioIcon({ size = 16, className, style }: IconProps) {
   );
 }
 
-function FileTextIcon({ size = 16, className, style }: IconProps) {
+export function FileTextIcon({ size = 16, className, style }: IconProps) {
   return (
     <svg {...baseProps(size, className, style)}>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+    </svg>
+  );
+}
+
+export function ReplyIcon({ size = 14, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <polyline points="9 17 4 12 9 7" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
     </svg>
   );
 }
@@ -166,6 +175,16 @@ export function TrashIcon({ size = 15, className, style }: IconProps) {
   return (
     <svg {...baseProps(size, className, style)}>
       <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
+export function EraserIcon({ size = 15, className, style }: IconProps) {
+  return (
+    <svg {...baseProps(size, className, style)}>
+      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" />
+      <path d="M22 21H7" />
+      <path d="m5 11 9 9" />
     </svg>
   );
 }

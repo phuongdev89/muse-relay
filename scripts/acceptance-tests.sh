@@ -683,6 +683,208 @@ curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$HO_GID" -H "apikey: $
 curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($HO_A_REC,$HO_B_REC,$HO_C_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
 echo "== end T-HO =="
 
+echo "== T-ATT / T-SP-CUST / T-MIX-GPT / T-REP-ISO =="
+ATT_A_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+ATT_B_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
+ATT_A_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+ATT_B_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")
+export ATT_A_TOKEN ATT_B_TOKEN
+ATT_A_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['ATT_A_TOKEN'].encode()).hexdigest())")
+ATT_B_HASH=$(python -I -c "import hashlib,os; print(hashlib.sha256(os.environ['ATT_B_TOKEN'].encode()).hexdigest())")
+ATTM="$TMP_DIR/acceptance-att-muses.json"
+printf '{"owner_id":"%s","recipient":"%s","name":"Acceptance ATTA","token_hash":"%s","dropbox_root":"/acceptance-att-a/"}\n{"owner_id":"%s","recipient":"%s","name":"Acceptance ATTB","token_hash":"%s","dropbox_root":"/acceptance-att-b/"}\n' \
+  "$RELAY_OWNER_ID" "$ATT_A_REC" "$ATT_A_HASH" "$RELAY_OWNER_ID" "$ATT_B_REC" "$ATT_B_HASH" > "$ATTM"
+while IFS= read -r line; do
+  printf '%s' "$line" > "$ATTM.one"
+  curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_muses" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$ATTM.one"
+done < "$ATTM"
+rm -f "$ATTM" "$ATTM.one"
+
+ATT_GID=$(python -I -c "import uuid; print(uuid.uuid4())")
+ATTG="$TMP_DIR/acceptance-att-group.json"
+printf '{"id":"%s","owner_id":"%s","name":"Acceptance ATT Group"}' "$ATT_GID" "$RELAY_OWNER_ID" > "$ATTG"
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$ATTG"
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance ATTA"}\n{"group_id":"%s","muse_recipient":"%s","name":"Acceptance ATTB"}\n' \
+  "$ATT_GID" "$ATT_A_REC" "$ATT_GID" "$ATT_B_REC" > "$ATTG"
+while IFS= read -r line; do
+  printf '%s' "$line" > "$ATTG.one"
+  curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_group_members" \
+    -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$ATTG.one"
+done < "$ATTG"
+rm -f "$ATTG" "$ATTG.one"
+
+# T-ATT-1: per-recipient reference_dropbox_paths_by_recipient + cross-root 400
+ATTQ="$TMP_DIR/acceptance-att-q1.json"
+python -I - "$ATT_GID" "$ATT_A_REC" "$ATT_B_REC" > "$ATTQ" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "group_id": sys.argv[1],
+    "action": "chat",
+    "params": {"prompt": "[ACCEPTANCE] att1 @all check files"},
+    "reference_dropbox_paths_by_recipient": {
+        sys.argv[2]: ["/acceptance-att-a/a.png"],
+        sys.argv[3]: ["/acceptance-att-b/b.png"],
+    },
+}))
+PYEOF
+ATT1_SUB=$(curl -s -m 20 -o "$TMP_DIR/atatt1" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$ATTQ")
+rm -f "$ATTQ"
+ATT1_AC=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $ATT_A_TOKEN" -H 'content-type: application/json' -d '{}')
+ATT1_BC=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $ATT_B_TOKEN" -H 'content-type: application/json' -d '{}')
+ATT1_AOK=$(echo "$ATT1_AC" | jqpy "import json,sys; p=((json.load(sys.stdin).get('message') or {}).get('params') or {}); print(p.get('reference_dropbox_paths')==['/acceptance-att-a/a.png'])")
+ATT1_BOK=$(echo "$ATT1_BC" | jqpy "import json,sys; p=((json.load(sys.stdin).get('message') or {}).get('params') or {}); print(p.get('reference_dropbox_paths')==['/acceptance-att-b/b.png'])")
+ATTQ_NEG="$TMP_DIR/acceptance-att-q1neg.json"
+python -I - "$ATT_GID" "$ATT_A_REC" > "$ATTQ_NEG" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "group_id": sys.argv[1],
+    "action": "chat",
+    "params": {"prompt": "[ACCEPTANCE] att1 @Acceptance ATTA bad root"},
+    "reference_dropbox_paths_by_recipient": {
+        sys.argv[2]: ["/acceptance-att-b/evil.png"],
+    },
+}))
+PYEOF
+ATT1_NEG=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$ATTQ_NEG")
+rm -f "$ATTQ_NEG"
+[ "$ATT1_SUB" = "201" ] && [ "$ATT1_AOK" = "True" ] && [ "$ATT1_BOK" = "True" ] && [ "$ATT1_NEG" = "400" ] \
+  && ok "T-ATT-1 group per-recipient dropbox paths delivered & cross-root rejected (400)" \
+  || bad "T-ATT-1 sub=$ATT1_SUB a=$ATT1_AOK b=$ATT1_BOK neg=$ATT1_NEG"
+
+# T-ATT-2: single-recipient reference_dropbox_paths + reply_to
+ATTQ2="$TMP_DIR/acceptance-att-q2.json"
+python -I - "$ATT_A_REC" > "$ATTQ2" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "recipient": sys.argv[1],
+    "action": "chat",
+    "params": {
+        "prompt": "[ACCEPTANCE] att2 direct reply",
+        "reference_dropbox_paths": ["/acceptance-att-a/ref.txt"],
+        "reply_to": {"message_id": "m-1", "sender": "Owner", "excerpt": "Check this"},
+    },
+}))
+PYEOF
+ATT2_SUB=$(curl -s -m 20 -o "$TMP_DIR/atatt2" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$ATTQ2")
+rm -f "$ATTQ2"
+ATT2_AC=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $ATT_A_TOKEN" -H 'content-type: application/json' -d '{}')
+ATT2_OK=$(echo "$ATT2_AC" | jqpy "import json,sys; p=((json.load(sys.stdin).get('message') or {}).get('params') or {}); r=p.get('reply_to') or {}; print(p.get('reference_dropbox_paths')==['/acceptance-att-a/ref.txt'] and r.get('sender')=='Owner' and p.get('prompt','').startswith('[Replying to Owner: \"Check this\"]\n'))")
+ATT2_NEG=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"recipient\":\"$ATT_A_REC\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] att2 neg\",\"reply_to\":{\"sender\":\"\",\"excerpt\":\"x\"}}}")
+[ "$ATT2_SUB" = "201" ] && [ "$ATT2_OK" = "True" ] && [ "$ATT2_NEG" = "400" ] \
+  && ok "T-ATT-2 single-recipient dropbox paths + reply_to quote & validation (400)" \
+  || bad "T-ATT-2 sub=$ATT2_SUB ok=$ATT2_OK neg=$ATT2_NEG"
+
+# T-REP-ISO: @OtherMuse inside reply_to excerpt does NOT wake OtherMuse
+ATTQ_REP="$TMP_DIR/acceptance-rep-iso.json"
+python -I - "$ATT_GID" > "$ATTQ_REP" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "group_id": sys.argv[1],
+    "action": "chat",
+    "params": {
+        "prompt": "[ACCEPTANCE] rep iso @Acceptance ATTA check",
+        "reply_to": {"sender": "Acceptance ATTB", "excerpt": "Earlier @Acceptance ATTB note"},
+    },
+}))
+PYEOF
+REP_SUB=$(curl -s -m 20 -o "$TMP_DIR/atrep" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$ATTQ_REP")
+rm -f "$ATTQ_REP"
+REP_IDS_N=$(cat "$TMP_DIR/atrep" | jqpy "import json,sys; print(len(json.load(sys.stdin).get('message_ids',[])))")
+REP_B=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $ATT_B_TOKEN" -H 'content-type: application/json' -d '{}')
+REP_BN=$(echo "$REP_B" | jqpy "import json,sys; print(json.load(sys.stdin).get('message') is None)")
+REP_A=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $ATT_A_TOKEN" -H 'content-type: application/json' -d '{}')
+REP_AOK=$(echo "$REP_A" | jqpy "import json,sys; p=((json.load(sys.stdin).get('message') or {}).get('params') or {}); print('Replying to Acceptance ATTB' in p.get('prompt','') and (p.get('reply_to') or {}).get('sender')=='Acceptance ATTB')")
+[ "$REP_SUB" = "201" ] && [ "$REP_IDS_N" = "1" ] && [ "$REP_BN" = "True" ] && [ "$REP_AOK" = "True" ] \
+  && ok "T-REP-ISO @Mention inside reply_to excerpt does not route to mentioned agent" \
+  || bad "T-REP-ISO sub=$REP_SUB ids=$REP_IDS_N b_null=$REP_BN a_ok=$REP_AOK"
+
+# T-SP-CUST: custom relay_groups.rules is preserved on submit_message
+CUST_GID=$(python -I -c "import uuid; print(uuid.uuid4())")
+CUSTG="$TMP_DIR/acceptance-cust-group.json"
+printf '{"id":"%s","owner_id":"%s","name":"Acceptance Custom Rules","rules":"CUSTOM_RULES_DO_NOT_OVERWRITE"}' "$CUST_GID" "$RELAY_OWNER_ID" > "$CUSTG"
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$CUSTG"
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance ATTA"}' "$CUST_GID" "$ATT_A_REC" > "$CUSTG"
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_group_members" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$CUSTG"
+rm -f "$CUSTG"
+CUST_SUB=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"group_id\":\"$CUST_GID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] sp cust hello\"}}")
+CUST_RULES=$(curl -s -m 20 "$BASE/rest/v1/relay_groups?select=rules&id=eq.$CUST_GID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; rows=json.load(sys.stdin); print((rows[0].get('rules') or '') if rows else '')")
+[ "$CUST_SUB" = "201" ] && [ "$CUST_RULES" = "CUSTOM_RULES_DO_NOT_OVERWRITE" ] \
+  && ok "T-SP-CUST custom group rules preserved without overwrite" \
+  || bad "T-SP-CUST sub=$CUST_SUB rules=[$CUST_RULES]"
+
+# T-MIX-GPT: mixed conversation rules mention OpenAI collaborator without @ + OpenAI replies merge into group.history
+MIX_PID=$(python -I -c "import uuid; print(uuid.uuid4())")
+MIX_GID=$(python -I -c "import uuid; print(uuid.uuid4())")
+MIX_CID=$(python -I -c "import uuid; print(uuid.uuid4())")
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_projects" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
+  -d "{\"id\":\"$MIX_PID\",\"owner_id\":\"$RELAY_OWNER_ID\",\"name\":\"Acceptance Mix Project\"}"
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
+  -d "{\"id\":\"$MIX_GID\",\"owner_id\":\"$RELAY_OWNER_ID\",\"name\":\"Acceptance Mix Group\"}"
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_group_members" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
+  -d "{\"group_id\":\"$MIX_GID\",\"muse_recipient\":\"$ATT_A_REC\",\"name\":\"Acceptance ATTA\"}"
+MIXC="$TMP_DIR/acceptance-mix-conv.json"
+python -I - "$MIX_CID" "$MIX_PID" "$RELAY_OWNER_ID" "$MIX_GID" "$ATT_A_REC" > "$MIXC" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "id": sys.argv[1],
+    "project_id": sys.argv[2],
+    "owner_id": sys.argv[3],
+    "title": "Acceptance Mix Conv",
+    "mode": "mixed",
+    "group_id": sys.argv[4],
+    "system_prompt": "Shared mix prompt",
+    "participants": [
+        {"kind": "muse", "ref": sys.argv[5], "name": "Acceptance ATTA"},
+        {"kind": "openai", "ref": "11111111-1111-4111-8111-111111111111", "name": "HelperGPT"},
+    ],
+}))
+PYEOF
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_conversations" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$MIXC"
+rm -f "$MIXC"
+
+MIX_SUB1=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"group_id\":\"$MIX_GID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] mix m1 untagged\"}}")
+MIX_RULES=$(curl -s -m 20 "$BASE/rest/v1/relay_groups?select=rules&id=eq.$MIX_GID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+MIX_RULES_OK=$(echo "$MIX_RULES" | jqpy "import json,sys; rows=json.load(sys.stdin); r=(rows[0].get('rules') or '') if rows else ''; print('HelperGPT' in r and '@HelperGPT' not in r)")
+
+curl -s -m 20 -o /dev/null -X POST "$BASE/rest/v1/relay_openai_messages" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' \
+  -d "{\"conversation_id\":\"$MIX_CID\",\"owner_id\":\"$RELAY_OWNER_ID\",\"role\":\"agent\",\"agent_name\":\"HelperGPT\",\"content\":\"GPT analysis ready\",\"status\":\"done\"}"
+
+MIX_SUB2=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"group_id\":\"$MIX_GID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] mix m2 @Acceptance ATTA review\"}}")
+MIX_CLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $ATT_A_TOKEN" -H 'content-type: application/json' -d '{}')
+MIX_HIST_OK=$(echo "$MIX_CLAIM" | jqpy "import json,sys; h=(json.load(sys.stdin).get('group') or {}).get('history') or []; print(any(i.get('kind')=='muse' and i.get('from')=='HelperGPT' and i.get('text')=='GPT analysis ready' for i in h))")
+[ "$MIX_SUB1" = "201" ] && [ "$MIX_SUB2" = "201" ] && [ "$MIX_RULES_OK" = "True" ] && [ "$MIX_HIST_OK" = "True" ] \
+  && ok "T-MIX-GPT mixed rules name OpenAI agent without @ + OpenAI reply merged into group.history" \
+  || bad "T-MIX-GPT sub1=$MIX_SUB1 sub2=$MIX_SUB2 rules_ok=$MIX_RULES_OK hist_ok=$MIX_HIST_OK"
+
+echo "== cleanup T-ATT / T-SP-CUST / T-MIX-GPT / T-REP-ISO =="
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_projects?id=eq.$MIX_PID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=in.($ATT_A_REC,$ATT_B_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=eq.$RELAY_OWNER_ID&params->>thread_id=in.($ATT_GID,$CUST_GID,$MIX_GID)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=in.($ATT_GID,$CUST_GID,$MIX_GID)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_muses?recipient=in.($ATT_A_REC,$ATT_B_REC)" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+echo "== end T-ATT / T-SP-CUST / T-MIX-GPT / T-REP-ISO =="
+
 echo "== T-LG prep: dedicated legacy muse (live Nyx daemon cannot race this queue) =="
 LG_REC=$(python -I -c "import uuid; print(uuid.uuid4())")
 LG_TOKEN=$(python -I -c "import secrets; print(secrets.token_hex(32))")

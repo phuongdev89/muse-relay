@@ -487,6 +487,14 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
   background: var(--color-busy);
 }
 
+/* Direct-channel quota progress ring (replaces dot-live / "Live" badge).
+ * Tone classes reuse the UsageBar quota thresholds. */
+.quota-ring { flex: none; }
+.quota-ring .quota-ring-track { stroke: var(--color-rule-strong); }
+.quota-ring.tone-ok .quota-ring-fill { stroke: var(--color-ok); }
+.quota-ring.tone-warn .quota-ring-fill { stroke: var(--color-wait); }
+.quota-ring.tone-bad .quota-ring-fill { stroke: var(--color-bad); }
+
 .rail-direct-badge {
   flex: none;
   padding: 0.1rem 0.44rem;
@@ -659,8 +667,41 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
   margin-bottom: var(--space-sm);
   border-bottom: 1px solid var(--color-rule);
 }
+
+/* Compact chat-room header (ConversationRoom): ONE slim row — title +
+ * member chips + usage + actions share a single line so the header stays as
+ * short as possible (owner goal). Subtitle info lives in the title tooltip;
+ * chips scroll horizontally on overflow instead of wrapping into new rows. */
+.pane-head.conv-pane-head {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  padding-bottom: var(--space-2xs);
+  margin-bottom: var(--space-xs);
+}
+.pane-head.conv-pane-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 4rem;
+}
 .pane-title-group { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 100%; }
 .pane-title-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.pane-title-row h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+}
 .pane-head h2 { margin: 0; font-size: var(--text-xl); letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
 .pane-head .sub { color: var(--color-ink-3); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .pane-head .grow { flex: 1; }
@@ -990,7 +1031,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
 }
 
 /* Skeletons */
-.activity-skeletons, .thread-skeleton { display: flex; flex-direction: column; gap: 0.75rem; }
+.activity-skeletons, .thread-skeleton { display: flex; flex-direction: column; gap: 0.75rem; flex: none; }
 .skeleton-row {
   padding: 0.9rem 1rem;
   border-radius: 12px;
@@ -1017,6 +1058,32 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
 
 /* ---- Chat Thread ---- */
 .members-chips { display: flex; gap: var(--space-2xs); flex-wrap: wrap; align-items: stretch; margin-bottom: var(--space-sm); }
+/* Inline variant riding inside the compact room header (ConversationRoom):
+ * slimmer chips, no bottom margin; the strip NEVER wraps — it scrolls
+ * horizontally instead so the header stays a single low line. */
+.members-chips.members-chips-inline {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.members-chips-inline::-webkit-scrollbar { display: none; }
+.members-chips-inline .member-chip {
+  padding: 0.16rem 0.5rem;
+  border-radius: 9px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.members-chips-inline .member-chip-name {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .member-chip {
   display: inline-flex;
   align-items: center;
@@ -1079,6 +1146,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
   width: 100%;
 }
 .thread-empty {
+  flex: none;
   color: var(--color-ink-3);
   text-align: center;
   padding: var(--space-xl) var(--space-md);
@@ -1105,8 +1173,22 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
 }
 .scroll-bottom-btn:hover { background: var(--color-paper-3); border-color: var(--color-accent-border); }
 
-.exchange { display: flex; flex-direction: column; gap: var(--space-2xs); }
+/* Overview activity feed — infinite scroll sentinel / end marker */
+.activity-sentinel {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 1.6rem;
+  padding: 0.5rem 0 0.2rem;
+  color: var(--color-ink-3);
+  font-size: var(--text-xs);
+}
+.activity-sentinel.is-end { min-height: 1.1rem; }
+
+.exchange { display: flex; flex-direction: column; gap: var(--space-2xs); flex: none; }
 .bubble {
+  flex: none;
   max-width: min(78%, 60rem);
   display: flex;
   flex-direction: column;
@@ -1153,8 +1235,31 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
   color: var(--color-ink-3);
   padding: 4px var(--space-3xs) 0;
 }
-.bubble.owner .bubble-foot { justify-content: flex-end; }
-.bubble.muse .bubble-foot { justify-content: flex-start; }
+/* Two-sided footer (both bubble sides): action buttons (copy · reply ·
+ * verbose) cluster on the left, timestamp + status (ticks / chip) cluster on
+ * the right. The auto margin pushes the status cluster to the far edge; each
+ * cluster wraps internally when the bubble is too narrow. */
+.bubble-foot-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-inline-end: auto;
+}
+.bubble-foot-status {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+/* Muse-side footer flows in ONE line: status chip → time → actions. */
+.bubble-foot.muse-flow .bubble-foot-actions {
+  margin-inline-end: 0;
+}
+.bubble-foot.muse-flow .bubble-foot-status {
+  justify-content: flex-start;
+}
 .bubble-foot .when { white-space: nowrap; }
 
 .bubble-retry-row {
@@ -1175,23 +1280,78 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
   border-color: var(--color-bad);
 }
 
-.bubble-copy {
+.bubble-foot-btn {
   flex: none;
   display: inline-flex;
   align-items: center;
   gap: 3px;
   padding: 0.14rem 0.42rem;
   border-radius: 6px;
+  border: 1px solid transparent;
   font-size: 0.6875rem;
   color: var(--color-ink-3);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
+.bubble-foot-btn:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.bubble-copy,
+.bubble-reply-btn { opacity: 0; }
 .bubble:hover .bubble-copy,
 .bubble:focus-within .bubble-copy,
-.bubble-copy.copied { opacity: 1; }
-.bubble-copy:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.bubble-copy.copied,
+.bubble:hover .bubble-reply-btn,
+.bubble:focus-within .bubble-reply-btn { opacity: 1; }
 .bubble-copy.copied { color: var(--color-ok); }
+.bubble-verbose-btn { opacity: 0.85; }
+.bubble-verbose-btn:hover { opacity: 1; }
+.bubble-verbose-btn.active {
+  opacity: 1;
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+  border-color: var(--color-accent-border);
+}
+
+.bubble-verbose-notes {
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  background: var(--color-paper-3);
+  border: 1px solid var(--color-rule);
+  color: var(--color-ink-2);
+  font: 400 var(--text-xs)/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  animation: fadein var(--dur-fast) var(--ease-out);
+}
+
+.bubble-reply-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+  margin-bottom: 0.32rem;
+  padding: 0.35rem 0.6rem;
+  border-left: 3px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-paper-3);
+  font-size: var(--text-xs);
+}
+.bubble.owner .bubble-reply-quote {
+  background: var(--color-paper-2);
+}
+.bubble-reply-sender {
+  font-weight: 600;
+  color: var(--color-accent-strong);
+}
+.bubble-reply-excerpt {
+  color: var(--color-ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
 
 .bubble .body {
   max-width: 100%;
@@ -1200,7 +1360,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--color-accent); }
   padding: 0.65rem 0.95rem;
   background: var(--color-paper-2);
   border: 1px solid var(--color-rule);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -2123,6 +2283,51 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 }
 .composer-shell textarea:focus { outline: none; border-color: transparent; }
 
+.composer-reply-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-paper-3);
+  font-size: var(--text-xs);
+}
+.composer-reply-icon {
+  flex: none;
+  color: var(--color-accent);
+}
+.composer-reply-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.composer-reply-who {
+  font-weight: 600;
+  color: var(--color-accent-strong);
+}
+.composer-reply-excerpt {
+  color: var(--color-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-reply-cancel {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--color-ink-3);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.composer-reply-cancel:hover {
+  background: var(--color-paper-elevated);
+  color: var(--color-ink);
+}
+
 .composer-attachments {
   display: flex;
   flex-wrap: wrap;
@@ -2213,7 +2418,6 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   flex-wrap: wrap;
   gap: var(--space-2xs);
   padding: 0.45rem 0.65rem 0.5rem 0.75rem;
-  border-top: 1px solid var(--color-rule);
   background: var(--color-paper-2);
 }
 .composer-bar .grow { flex: 1; }
@@ -2517,6 +2721,16 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   flex-wrap: wrap;
   padding: 0.1rem 0.65rem 0.35rem;
 }
+/* Inline variant: roster chips live in the composer's bottom control bar,
+ * immediately right of the Attach button. The cluster shrinks (min-width: 0)
+ * and wraps internally when the bar is tight, so counter + Send keep their
+ * places and the bar never breaks. */
+.mention-chips.composer-mention-inline {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.1rem 0.3rem;
+}
 .mention-chip {
   border: 1px solid var(--color-paper-4, var(--color-paper-3));
   background: var(--color-paper-2, var(--color-paper));
@@ -2527,7 +2741,7 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.mention-chip:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.mention-chip:hover { background: var(--color-paper-elevated); color: var(--color-ink); }
 .mention-chip.is-all { border-style: dashed; }
 
 /* ---- v9 mention autocomplete + badge overlay (composer mirror) ---- */
@@ -2616,6 +2830,7 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 
 /* ---- v9 group system prompt (prepended rules, collapsed by default) ---- */
 .group-sysprompt {
+  flex: none;
   align-self: center;
   width: min(78%, 60rem);
   border: 1px solid var(--color-rule);
@@ -2626,13 +2841,36 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 .group-sysprompt-head {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
   width: 100%;
+}
+.group-sysprompt-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   border: 0;
   background: transparent;
   padding: 0.42rem 0.7rem;
   cursor: pointer;
   text-align: left;
+}
+.group-sysprompt-toggle:hover { background: var(--color-paper-3); }
+.group-sysprompt-head-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.45rem 0.25rem 0.2rem;
+}
+.group-sysprompt-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  color: var(--color-ink-2);
+}
+.group-sysprompt-edit-btn:hover {
+  color: var(--color-ink);
 }
 .group-sysprompt-label {
   font: 600 var(--text-xs) var(--font-display);
@@ -2650,12 +2888,70 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.group-sysprompt-head:hover { background: var(--color-paper-3); }
 .group-sysprompt-body {
   padding: 0.1rem 0.7rem 0.6rem;
   font: 400 var(--text-sm)/1.55 var(--font-body);
   color: var(--color-ink-2);
   white-space: pre-wrap;
+}
+.group-sysprompt-body.is-empty {
+  color: var(--color-ink-3);
+  font-style: italic;
+}
+.group-sysprompt-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem 0.7rem;
+  border-top: 1px solid var(--color-rule);
+}
+.group-sysprompt-editor textarea {
+  width: 100%;
+  min-height: 6rem;
+  max-height: 16rem;
+  resize: vertical;
+  background: var(--color-input);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-input);
+  padding: 0.55rem 0.7rem;
+  color: var(--color-ink);
+  font: 400 var(--text-sm)/1.5 var(--font-body);
+}
+.group-sysprompt-editor textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+.group-sysprompt-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* New-conversation modal — prefilled group rules (system prompt) */
+.new-conv-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: var(--space-sm);
+}
+.new-conv-rules textarea {
+  width: 100%;
+  min-height: 8rem;
+  max-height: 18rem;
+  resize: vertical;
+  background: var(--color-input);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-input);
+  padding: 0.55rem 0.7rem;
+  color: var(--color-ink);
+  font: 400 var(--text-sm)/1.5 var(--font-body);
+}
+.new-conv-rules textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 .token-panel {
@@ -2823,23 +3119,29 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   .group-sysprompt { width: 88%; }
 
   .bubble { max-width: 88%; }
-  .bubble-copy { opacity: 1; } /* always reachable on touch devices */
+  .bubble-copy,
+  .bubble-reply-btn { opacity: 1; } /* always reachable on touch devices */
+  .composer-reply-cancel { width: 2rem; height: 2rem; }
 
   .composer-block { margin-top: var(--space-xs); }
   .composer-opts { grid-template-columns: 1fr; }
 
-  /* composer: ONE control row — attach · thread-pill · mode-tabs · options (left),
-   * counter · send pinned right; flex-wrap degrades gracefully on very narrow screens
-   * (counter+send wrap to a right-aligned second line, primary action stays last). */
+  /* composer: ONE control row — attach · mention-chips · thread-pill · mode-tabs ·
+   * options (left), counter · send pinned right; flex-wrap degrades gracefully on
+   * very narrow screens (mention chips wrap internally next to attach, counter+send
+   * wrap to a right-aligned second line, primary action stays last). */
   .composer-bar { justify-content: flex-start; row-gap: var(--space-2xs); }
   .composer-bar .grow { display: none; }
   .composer-attach-btn { order: 1; min-height: 2.75rem; }
-  .composer-thread-pill { order: 2; max-width: 8rem; }
-  .composer-bar .mode-tabs { order: 3; }
+  .composer-bar .mention-chips.composer-mention-inline { order: 2; flex: 1 1 auto; padding: 0.1rem 0.2rem; }
+  /* 44px-class touch targets for the inline mention chips as well */
+  .composer-bar .mention-chip { min-height: 2.75rem; padding: 0.3rem 0.7rem; }
+  .composer-thread-pill { order: 3; max-width: 8rem; }
+  .composer-bar .mode-tabs { order: 4; }
   .mode-tab { padding: 0.4rem 0.6rem; min-height: 2.5rem; }
-  .composer-opt-btn { order: 4; padding: 0.4rem 0.6rem; min-height: 2.5rem; }
-  .composer-bar .char-counter { order: 5; margin-left: auto; }
-  .btn-send { order: 6; min-height: 2.75rem; }
+  .composer-opt-btn { order: 5; padding: 0.4rem 0.6rem; min-height: 2.5rem; }
+  .composer-bar .char-counter { order: 6; margin-left: auto; }
+  .btn-send { order: 7; min-height: 2.75rem; }
 
   /* 44px-class touch targets */
   .mobile-icon-btn { width: 2.75rem; height: 2.75rem; }
@@ -2851,6 +3153,12 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 
   .members-chips { flex-wrap: nowrap; overflow-x: auto; }
   .member-chip { flex: none; }
+  /* Room header on phones: single row holds — chips strip scrolls inside the
+   * row, title ellipsizes; nothing wraps into extra header rows. */
+  .pane-head.conv-pane-head { gap: 0.35rem; }
+  .pane-head.conv-pane-head h2 { flex: 0 1 auto; max-width: 40vw; }
+  /* Roster cards on touch: keep the remove affordance comfortably tappable. */
+  .project-agent-remove { min-width: 2rem; min-height: 2rem; justify-content: center; }
 
   .res-card { max-width: 100%; }
   .url-img img { max-width: 11.5rem; max-height: 7.5rem; }
@@ -2883,13 +3191,14 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 
   /* Icon-only buttons on phones: labels hide, icon + aria-label carry meaning. */
   .bubble-copy span,
+  .bubble-reply-btn span,
   .scroll-bottom-btn span,
   .btn-send span,
   .mode-tab span,
   .composer-opt-btn span,
   .res-chrome-actions .btn span,
   .res-chrome-actions .btn-ghost span { display: none; }
-  .bubble-copy { padding: 0.5rem; min-width: 2rem; min-height: 2rem; }
+  .bubble-foot-btn { padding: 0.45rem 0.55rem; min-height: 2rem; }
   .scroll-bottom-btn { padding: 0.55rem; min-width: 2.75rem; min-height: 2.75rem; }
   .btn-send { padding: 0.7rem; min-width: 2.75rem; min-height: 2.75rem; }
   .res-chrome-actions .btn,
@@ -2899,6 +3208,8 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 /* Touch primaries: keep nav arrows reachable without hover, let the OS pinch-zoom
  * the zoomed image (JS pan keeps drag support; no custom gesture handlers). */
 @media (hover: none) {
+  .bubble-copy,
+  .bubble-reply-btn { opacity: 1; }
   .res-lightbox:not(.chrome-hidden) .res-lightbox-nav { opacity: 1; }
   .res-img-frame { touch-action: pinch-zoom; }
 }
@@ -2906,7 +3217,7 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 @media (max-width: 480px) {
   .check-item-sub { max-width: 6.2rem; }
   .model-pill { max-width: 7.5rem; }
-  .bubble-copy { padding: 0.4rem 0.5rem; }
+  .bubble-foot-btn { padding: 0.4rem 0.5rem; }
   .attach-chip { max-width: 100%; }
   .member-chip-name { max-width: 9.5rem; }
   .member-chip-sub { max-width: 11.5rem; }
@@ -3792,39 +4103,59 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
 
 .project-agents-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(14.5rem, 1fr));
   gap: var(--space-xs);
 }
 
+/* Project member card — compact variant of the round-5 agent-card language:
+   status-tone left edge, status-tinted avatar monogram, kind tag + mono sub
+   on one head row. No meta grid / usage rows here — roster density stays high. */
 .project-agent-card {
-  padding: 0.75rem 0.85rem;
-  border-radius: 12px;
+  position: relative;
+  container-type: inline-size;
+  padding: 0.7rem 0.75rem 0.7rem 0.85rem;
+  border-radius: var(--radius-card);
   background: var(--color-paper-2);
   border: 1px solid var(--color-rule);
+  border-left: 3px solid var(--color-rule-strong);
   min-width: 0;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
-.project-agent-top {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-width: 0;
+.project-agent-card:hover {
+  border-top-color: var(--color-rule-strong);
+  border-right-color: var(--color-rule-strong);
+  border-bottom-color: var(--color-rule-strong);
 }
 
-.project-agent-sub {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin-top: 2px;
-  min-width: 0;
+.project-agent-card.edge-ok { border-left-color: var(--color-ok); }
+.project-agent-card.edge-busy { border-left-color: var(--color-busy); }
+.project-agent-card.edge-wait { border-left-color: var(--color-wait); }
+.project-agent-card.edge-bad { border-left-color: var(--color-bad); }
+
+.project-agent-remove {
+  flex: none;
+  padding: 0.34rem 0.44rem;
+  border-radius: 7px;
 }
 
 .agent-sub-code {
-  font: 400 0.7rem var(--font-mono);
+  min-width: 0;
+  max-width: 100%;
+  font: 400 0.68rem var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--color-ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Narrow roster columns: model/root degrades to its own full-width mono line
+   under the kind tag so it never squeezes the name. */
+@container (max-width: 280px) {
+  .project-agent-card .agent-card-head { gap: var(--space-2xs); }
+  .project-agent-card .agent-sub-code { flex: 1 1 100%; }
 }
 
 .conv-list {
@@ -4180,4 +4511,27 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   .usage-bar.compact {
     width: 5.5rem;
   }
+}
+
+/* ---- Marquee (owner: long names sway instead of dying in an ellipsis) ---- */
+.marquee {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.marquee-inner {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+}
+.marquee.on .marquee-inner {
+  animation: marquee-sway var(--marquee-dur, 9s) ease-in-out infinite alternate;
+}
+@keyframes marquee-sway {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--marquee-shift, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee.on .marquee-inner { animation: none; }
 }

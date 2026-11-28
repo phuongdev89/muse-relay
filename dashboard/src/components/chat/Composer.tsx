@@ -4,12 +4,13 @@ import { MAX_ATTACH_FILES, mergeAttachmentFiles } from "../../lib/dropbox";
 import { fmtFileSize } from "../../lib/format";
 import { useLang } from "../../lib/i18n";
 import { splitMentionSegments } from "../../lib/mentions";
-import type { ActionMode, MessageParams } from "../../types";
+import type { ActionMode, MessageParams, ReplyToMeta } from "../../types";
 import {
   ChevronDownIcon,
   ImageIcon,
   MessageIcon,
   PaperclipIcon,
+  ReplyIcon,
   SendIcon,
   SlidersIcon,
   VideoIcon,
@@ -42,6 +43,11 @@ export function Composer(props: {
   disabledBanner?: ReactNode;
   /** relay-group member names offered as @mention chips (@all always included) */
   mentionNames?: string[];
+  /** active parent message being replied to */
+  replyTo?: ReplyToMeta | null;
+  onCancelReply?: () => void;
+  /** incrementing signal to focus the textarea (e.g. when Reply is clicked) */
+  focusSignal?: number;
 }) {
   const {
     mediaModes = true,
@@ -216,9 +222,49 @@ export function Composer(props: {
       mir.scrollLeft = ta.scrollLeft;
     }
   }
-  useEffect(() => {
+
+  // Auto-grow: height follows the content (standard scrollHeight pattern), so
+  // it re-runs on every prompt change — typing, paste AND delete all resize
+  // correctly. Growth stops at 5 computed lines (overflow-y switches on past
+  // that); the floor is 1 line so the field can never collapse. Uses computed
+  // line-height + vertical padding (no hardcoded CSS values) and re-syncs the
+  // mention badge mirror afterwards so the overlay tracks the new height.
+  const COMPOSER_MAX_ROWS = 5;
+  function resizeTextarea() {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const cs = window.getComputedStyle(ta);
+    const lh = parseFloat(cs.lineHeight);
+    const fs = parseFloat(cs.fontSize);
+    const lineHeight =
+      Number.isFinite(lh) && lh > 0 ? lh : Number.isFinite(fs) ? fs * 1.45 : 20;
+    const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const maxH = lineHeight * COMPOSER_MAX_ROWS + padY;
+    const minH = lineHeight + padY;
+    const contentH = ta.scrollHeight;
+    ta.style.height = `${Math.min(Math.max(contentH, minH), maxH)}px`;
+    ta.style.overflowY = contentH > maxH + 1 ? "auto" : "hidden";
     syncMirror();
+  }
+  useLayoutEffect(() => {
+    resizeTextarea();
   }, [prompt]);
+  // Re-measure when the viewport changes (rotate, on-screen keyboard) — the
+  // computed font-size / line-height may differ per breakpoint.
+  useEffect(() => {
+    window.addEventListener("resize", resizeTextarea);
+    return () => window.removeEventListener("resize", resizeTextarea);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if ((props.replyTo || props.focusSignal) && !disabled) {
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    }
+  }, [props.replyTo, props.focusSignal, disabled]);
 
   function handlePickFiles(e: ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(e.target.files ?? []);
@@ -275,6 +321,7 @@ export function Composer(props: {
     }
     const params: MessageParams = { prompt: effectivePrompt };
     if (th) params.thread_id = th;
+    if (props.replyTo) params.reply_to = props.replyTo;
     if (mode === "chat") {
       params.resource_type = resType;
       params.output_format = outFmt;
@@ -309,6 +356,7 @@ export function Composer(props: {
     setCaret(-1);
     setMentionIdx(0);
     setError("");
+    props.onCancelReply?.();
 
     void props.onSend(modeSnapshot, built, filesSnapshot);
   }
@@ -340,6 +388,31 @@ export function Composer(props: {
       {disabled && disabledBanner}
 
       <div className={`composer-shell${disabled ? " is-disabled" : ""}`}>
+        {props.replyTo && !disabled && (
+          <div className="composer-reply-bar" role="status">
+            <ReplyIcon size={13} className="composer-reply-icon" />
+            <div className="composer-reply-meta">
+              <span className="composer-reply-who">
+                {t("msg.replyingTo", { name: props.replyTo.sender })}
+              </span>
+              {props.replyTo.excerpt && (
+                <span className="composer-reply-excerpt">{props.replyTo.excerpt}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="composer-reply-cancel"
+              onClick={() => props.onCancelReply?.()}
+              aria-label={t("msg.cancelReply")}
+              title={t("msg.cancelReply")}
+            >
+              <XIcon size={12} />
+            </button>
+          </div>
+        )}
+        {/* Static mention roster chips — moved to the bottom control bar
+         * (immediately right of the Attach button), tag-input style
+         * (autocomplete popup stays portaled to document.body). */}
         <div className="composer-textarea-wrap">
           <textarea
             ref={textareaRef}
@@ -381,6 +454,11 @@ export function Composer(props: {
                   setMentionDismissed(true);
                   return;
                 }
+              }
+              if (e.key === "Escape" && props.replyTo && !mentionOpen && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                props.onCancelReply?.();
+                return;
               }
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -429,30 +507,6 @@ export function Composer(props: {
             ))}
           </div>,
           document.body,
-        )}
-
-        {props.mentionNames && props.mentionNames.length > 0 && !disabled && (
-          <div className="mention-chips" aria-label={t("composer.mentionAria")}>
-            <button
-              type="button"
-              className="mention-chip is-all"
-              onClick={() => insertMention("@all ")}
-              title={t("composer.mentionAllTitle")}
-            >
-              @all
-            </button>
-            {props.mentionNames.map((name) => (
-              <button
-                key={name}
-                type="button"
-                className="mention-chip"
-                onClick={() => insertMention(`@${name} `)}
-                title={t("composer.mentionTitle", { name })}
-              >
-                @{name}
-              </button>
-            ))}
-          </div>
         )}
 
         {allowAttachments && !disabled && attachedFiles.length > 0 && (
@@ -595,6 +649,36 @@ export function Composer(props: {
                 <span className="hide-xs">{t("composer.attach")}</span>
               </button>
             </>
+          )}
+
+          {/* Static mention roster chips — inline in the bottom control bar,
+           * immediately right of the Attach button; the row shrinks/wraps
+           * when the bar is tight so counter + Send keep their places. */}
+          {props.mentionNames && props.mentionNames.length > 0 && !disabled && (
+            <div
+              className="mention-chips composer-mention-inline"
+              aria-label={t("composer.mentionAria")}
+            >
+              <button
+                type="button"
+                className="mention-chip is-all"
+                onClick={() => insertMention("@all ")}
+                title={t("composer.mentionAllTitle")}
+              >
+                @all
+              </button>
+              {props.mentionNames.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className="mention-chip"
+                  onClick={() => insertMention(`@${name} `)}
+                  title={t("composer.mentionTitle", { name })}
+                >
+                  @{name}
+                </button>
+              ))}
+            </div>
           )}
 
           {mediaModes && activeThread && (

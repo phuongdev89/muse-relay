@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchFleetActivity,
+  fetchUsageReports,
+  FLEET_ACTIVITY_PAGE_SIZE,
   listConversations,
   listMuses,
   listOpenAIAgents,
   listProjectAgents,
   listProjects,
+  type UsageReport,
 } from "./lib/api";
 import { summarizeMuseFleet } from "./lib/format";
 import { tNow, useLang } from "./lib/i18n";
@@ -41,6 +44,7 @@ import { ToastHost, toast } from "./components/common/ui";
 
 const INSPECTOR_KEY = "muse_relay_inspector";
 const FLEET_POLL_MS = 10000;
+const USAGE_REPORTS_POLL_MS = 60000;
 
 function readDesktopInspectorPref(): boolean {
   try {
@@ -101,6 +105,12 @@ export default function App() {
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState("");
   const [fleetUpdatedAt, setFleetUpdatedAt] = useState<Date | null>(null);
+
+  // Latest AI-quota report per lowercase recipient — feeds the Sidebar direct
+  // channel progress rings (best-effort display, errors ignored silently).
+  const [usageReports, setUsageReports] = useState<Map<string, UsageReport>>(
+    new Map(),
+  );
 
   const [showMuseWizard, setShowMuseWizard] = useState(false);
   const [projectWizard, setProjectWizard] = useState<{
@@ -177,7 +187,7 @@ export default function App() {
   }, []);
 
   const loadFleet = useCallback(async () => {
-    const { items, error } = await fetchFleetActivity(80);
+    const { items, error } = await fetchFleetActivity(FLEET_ACTIVITY_PAGE_SIZE);
     setFleetLoading(false);
     if (error) {
       setFleetError(error);
@@ -186,6 +196,11 @@ export default function App() {
     setFleetError("");
     setFleetItems(items);
     setFleetUpdatedAt(new Date());
+  }, []);
+
+  const loadUsageReports = useCallback(async () => {
+    const { reports } = await fetchUsageReports();
+    setUsageReports(reports);
   }, []);
 
   const enterApp = useCallback(
@@ -199,6 +214,7 @@ export default function App() {
         loadProjectAgents(),
         loadConversations(),
         loadFleet(),
+        loadUsageReports(),
       ]);
       // Restore the room encoded in the URL hash (F5 / pasted link). Invalid
       // ids fall back to the overview via App's render guards.
@@ -211,6 +227,7 @@ export default function App() {
       loadProjectAgents,
       loadConversations,
       loadFleet,
+      loadUsageReports,
     ],
   );
 
@@ -246,6 +263,13 @@ export default function App() {
     return () => clearInterval(t);
   }, [ownerEmail, loadFleet, loadMuses]);
 
+  // Quota reports change slowly — refresh on a slower cadence for the sidebar rings
+  useEffect(() => {
+    if (!ownerEmail) return;
+    const t = setInterval(() => void loadUsageReports(), USAGE_REPORTS_POLL_MS);
+    return () => clearInterval(t);
+  }, [ownerEmail, loadUsageReports]);
+
   async function logout() {
     await db.auth.signOut();
     setOwnerEmail("");
@@ -257,6 +281,7 @@ export default function App() {
     setFleetItems([]);
     setFleetError("");
     setFleetUpdatedAt(null);
+    setUsageReports(new Map());
     setActive(null);
     setMobileNavOpen(false);
     setMobileInspectorOpen(false);
@@ -438,6 +463,7 @@ export default function App() {
         projectAgents={projectAgents}
         conversations={conversations}
         fleetSummary={fleetSummary}
+        usageReports={usageReports}
         active={active}
         ownerEmail={ownerEmail}
         mobileOpen={mobileNavOpen}
@@ -507,6 +533,7 @@ export default function App() {
                 onToggleInspector={toggleInspector}
                 onPathsChange={setThreadPaths}
                 onConversationDeleted={onConversationDeleted}
+                onConversationUpdated={() => void loadConversations()}
                 onMessageSent={() => void loadFleet()}
               />
             ) : active?.kind === "project" && activeProject ? (
@@ -564,6 +591,10 @@ export default function App() {
                   void loadFleet();
                 }}
                 onOpenMuse={(recipient) => switchRoom({ kind: "muse", recipient })}
+                onOpenConversation={(projectId, conversationId) =>
+                  switchRoom({ kind: "conversation", projectId, conversationId })
+                }
+                conversations={conversations}
                 onAddMuse={() => setShowMuseWizard(true)}
               />
             )}

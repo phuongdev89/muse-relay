@@ -3,6 +3,7 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { requireOwnerAuth } from "./auth.js";
 import {
+  handleDropboxDistribute,
   handleDropboxTempLink,
   handleDropboxThumb,
   handleDropboxUpload,
@@ -50,6 +51,13 @@ app.post(
   requireOwnerAuth,
   jsonParser,
   handleDropboxThumb,
+);
+
+app.post(
+  "/api/dropbox/distribute",
+  requireOwnerAuth,
+  jsonParser,
+  handleDropboxDistribute,
 );
 
 app.post("/api/openai/test", requireOwnerAuth, jsonParser, handleOpenAITest);

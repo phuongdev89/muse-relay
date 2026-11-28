@@ -6,6 +6,7 @@ import {
   fanoutGroupMessage,
   jsonResponse,
   parseMentionTargets,
+  type ReplyToMeta,
   resolveRecipientRoot,
   signMessage,
   truncateUtterance,
@@ -14,6 +15,53 @@ import {
 } from "../_shared/relay.ts";
 
 const CLAIM_WINDOW_SECONDS = 30 * 60;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidDropboxPath(raw: unknown): raw is string {
+  return (
+    typeof raw === "string" &&
+    raw.length >= 2 &&
+    raw.length <= 512 &&
+    raw.startsWith("/") &&
+    !raw.includes("..") &&
+    !raw.includes("\\") &&
+    !raw.includes("\0") &&
+    !raw.includes("\r") &&
+    !raw.includes("\n")
+  );
+}
+
+function parseReferenceDropboxPathsByRecipient(
+  raw: unknown,
+): Record<string, string[]> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("reference_dropbox_paths_by_recipient must be an object");
+  }
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!UUID_RE.test(key)) {
+      throw new Error("reference_dropbox_paths_by_recipient keys must be UUIDs");
+    }
+    if (!Array.isArray(value) || value.length > 4) {
+      throw new Error("reference_dropbox_paths_by_recipient values must be arrays of at most 4 paths");
+    }
+    const paths: string[] = [];
+    for (const item of value) {
+      if (!isValidDropboxPath(item)) {
+        throw new Error("reference_dropbox_paths_by_recipient items must be valid Dropbox paths");
+      }
+      paths.push(item);
+    }
+    out[key.toLowerCase()] = paths;
+  }
+  return out;
+}
+
+function prependReplyQuote(prompt: string, replyTo: ReplyToMeta | undefined): string {
+  if (!replyTo) return prompt;
+  return `[Replying to ${replyTo.sender}: "${replyTo.excerpt}"]\n${prompt}`;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -38,7 +86,14 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json().catch(() => null) as
-      | { recipient?: unknown; action?: unknown; params?: unknown; group_id?: unknown; owner_name?: unknown }
+      | {
+        recipient?: unknown;
+        action?: unknown;
+        params?: unknown;
+        group_id?: unknown;
+        owner_name?: unknown;
+        reference_dropbox_paths_by_recipient?: unknown;
+      }
       | null;
     if (!body) return jsonResponse({ error: "invalid_json" }, 400);
 
@@ -50,7 +105,7 @@ Deno.serve(async (req: Request) => {
     // matching a muse recipient). When group_id is absent, the legacy
     // single-recipient path below runs unchanged.
     if (body.group_id !== undefined) {
-      if (typeof body.group_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.group_id)) {
+      if (typeof body.group_id !== "string" || !UUID_RE.test(body.group_id)) {
         return jsonResponse({ error: "group_id must be a UUID" }, 400);
       }
       if (body.action !== "chat") {
@@ -75,7 +130,10 @@ Deno.serve(async (req: Request) => {
       }
 
       const validated = validateParams("chat", body.params, user.id);
-      const utterance = String(validated.params.prompt);
+      const byRecipientMap = parseReferenceDropboxPathsByRecipient(
+        body.reference_dropbox_paths_by_recipient,
+      );
+      const rawUtterance = String(validated.params.prompt);
       const { data: members, error: membersError } = await adminClient()
         .from("relay_group_members")
         .select("muse_recipient, name")
@@ -93,31 +151,86 @@ Deno.serve(async (req: Request) => {
       // failure must not block the utterance.
       if (typeof group.rules !== "string" || group.rules.length < 1) {
         try {
-          const rules = buildGroupRules(String(group.name), members ?? []);
-          const { error: rulesError } = await adminClient()
+          const { data: convRow } = await adminClient()
+            .from("relay_conversations")
+            .select("participants")
+            .eq("group_id", groupId)
+            .maybeSingle();
+          const rawParticipants = Array.isArray(convRow?.participants)
+            ? convRow.participants
+            : [];
+          const externalAgents = rawParticipants
+            .filter(
+              (p): p is { kind?: unknown; name?: unknown } =>
+                typeof p === "object" && p !== null &&
+                (p as { kind?: unknown }).kind === "openai" &&
+                typeof (p as { name?: unknown }).name === "string" &&
+                (p as { name: string }).name.trim().length > 0,
+            )
+            .map((p) => ({ name: String(p.name).trim() }));
+          const rules = buildGroupRules(
+            String(group.name),
+            members ?? [],
+            externalAgents,
+          );
+          const updateQuery = adminClient()
             .from("relay_groups")
             .update({ rules })
-            .eq("id", groupId)
-            .is("rules", null);
+            .eq("id", groupId);
+          const { error: rulesError } = group.rules == null
+            ? await updateQuery.is("rules", null)
+            : await updateQuery.eq("rules", "");
           if (rulesError) throw rulesError;
         } catch (rulesError) {
           console.error("group rules generation failed:", rulesError);
         }
       }
 
-      const targets = parseMentionTargets(utterance, members ?? [], null);
+      // Mention routing runs ONLY on rawUtterance so a @Name inside reply_to
+      // excerpt or sender never wakes an unintended agent.
+      const targets = parseMentionTargets(rawUtterance, members ?? [], null);
+      const replyTo = validated.params.reply_to as ReplyToMeta | undefined;
+      const formattedUtterance = prependReplyQuote(rawUtterance, replyTo);
+
       if (targets.length > 0) {
+        const globalRefs = Array.isArray(validated.params.reference_dropbox_paths)
+          ? (validated.params.reference_dropbox_paths as string[])
+          : undefined;
+        const resolvedByRecipient: Record<string, string[]> = {};
+        for (const target of targets) {
+          const recLower = target.recipient.toLowerCase();
+          const pathsForTarget = byRecipientMap?.[recLower] ??
+            (byRecipientMap === undefined && targets.length === 1 ? globalRefs : undefined);
+          if (pathsForTarget && pathsForTarget.length > 0) {
+            const targetRoot = await resolveRecipientRoot(adminClient(), recLower);
+            if (!targetRoot) {
+              throw new Error(`reference_dropbox_paths must stay under a valid recipient root for ${recLower}`);
+            }
+            const normalizedRoot = targetRoot.endsWith("/") ? targetRoot : `${targetRoot}/`;
+            for (const p of pathsForTarget) {
+              if (!p.startsWith(normalizedRoot)) {
+                throw new Error(`reference_dropbox_paths must stay under ${normalizedRoot}`);
+              }
+            }
+            resolvedByRecipient[recLower] = pathsForTarget;
+          }
+        }
+
         const fanout = await fanoutGroupMessage(adminClient(), {
           groupId,
           ownerId: user.id,
           fromKind: "owner",
           fromName: ownerName,
           turn: 1,
-          utterance,
+          utterance: truncateUtterance(formattedUtterance),
           targets,
           command: typeof validated.params.command === "string"
             ? validated.params.command
             : undefined,
+          ...(Object.keys(resolvedByRecipient).length > 0
+            ? { referenceDropboxPathsByRecipient: resolvedByRecipient }
+            : {}),
+          ...(replyTo ? { replyTo } : {}),
         });
         return new Response(
           JSON.stringify({
@@ -138,9 +251,14 @@ Deno.serve(async (req: Request) => {
       const nonce = crypto.randomUUID();
       const expiresAtUnix = Math.floor(Date.now() / 1000) + CLAIM_WINDOW_SECONDS;
       const expiresAt = new Date(expiresAtUnix * 1000).toISOString();
-      const params = {
-        prompt: `[${ownerName}]: ${truncateUtterance(utterance)}`,
+      const recordRefs = Array.isArray(validated.params.reference_dropbox_paths)
+        ? (validated.params.reference_dropbox_paths as string[])
+        : [];
+      const params: Record<string, unknown> = {
+        prompt: `[${ownerName}]: ${truncateUtterance(formattedUtterance)}`,
         thread_id: groupId,
+        ...(recordRefs.length > 0 ? { reference_dropbox_paths: recordRefs } : {}),
+        ...(replyTo ? { reply_to: replyTo } : {}),
       };
       const signature = await signMessage({
         id,
@@ -206,11 +324,17 @@ Deno.serve(async (req: Request) => {
     const validated = validateParams(body.action, body.params, user.id);
     const refDropboxPaths = validated.params["reference_dropbox_paths"];
     if (Array.isArray(refDropboxPaths)) {
+      const normalizedRoot = dropboxRoot.endsWith("/") ? dropboxRoot : `${dropboxRoot}/`;
       for (const p of refDropboxPaths) {
-        if (typeof p !== "string" || !p.startsWith(dropboxRoot)) {
+        if (typeof p !== "string" || !p.startsWith(normalizedRoot)) {
           throw new Error(`reference_dropbox_paths must stay under ${dropboxRoot}`);
         }
       }
+    }
+    const singleReplyTo = validated.params["reply_to"] as ReplyToMeta | undefined;
+    if (singleReplyTo) {
+      const quoted = prependReplyQuote(String(validated.params["prompt"]), singleReplyTo);
+      validated.params["prompt"] = quoted.length > 4000 ? `${quoted.slice(0, 3999)}…` : quoted;
     }
     const id = crypto.randomUUID();
     const nonce = crypto.randomUUID();

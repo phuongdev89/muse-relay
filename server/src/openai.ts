@@ -1,10 +1,48 @@
 import type { Request, Response } from "express";
 import { getOwnerAuth } from "./auth.js";
+import {
+  downloadDropboxBuffer,
+  fetchDropboxTempLink,
+  isDropboxConfigured,
+  validateDropboxPath,
+} from "./dropbox.js";
+import { env } from "./env.js";
 import { supabaseRestSelectSingle } from "./supabase.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ALLOWED_ROLES = new Set(["system", "user", "assistant"]);
+
+const MAX_ATTACHMENTS = 4;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+const MAX_TEXT_CHARS_PER_FILE = 24_000;
+const MAX_TEXT_CHARS_TOTAL = 60_000;
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+const TEXT_EXTS = new Set([
+  ".txt",
+  ".md",
+  ".csv",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".html",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".py",
+  ".sql",
+  ".log",
+]);
 
 interface OpenAIAgentRow {
   base_url?: unknown;
@@ -13,9 +51,27 @@ interface OpenAIAgentRow {
   system_prompt?: unknown;
 }
 
+interface ConversationRow {
+  id?: unknown;
+  title?: unknown;
+  mode?: unknown;
+  group_id?: unknown;
+  participants?: unknown;
+  system_prompt?: unknown;
+}
+
+interface GroupRow {
+  name?: unknown;
+  rules?: unknown;
+}
+
+type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ChatContentPart[];
 }
 
 function normalizeChatCompletionsUrl(baseUrl: string): string | null {
@@ -287,10 +343,190 @@ function parseChatMessages(raw: unknown): ChatMessage[] | null {
   return out;
 }
 
+function parseAttachmentDropboxPaths(raw: unknown): string[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_ATTACHMENTS) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    const valid = validateDropboxPath(item);
+    if (!valid) return null;
+    out.push(valid);
+  }
+  return out;
+}
+
+function getLowerExtension(filePath: string): string {
+  const base = filePath.split("/").pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot).toLowerCase() : "";
+}
+
+function decodeUtf8TextIfNonBinary(buffer: Buffer): string | null {
+  if (buffer.includes(0)) return null;
+  try {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    return decoder.decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
+async function formatTempLinkNote(
+  dbxPath: string,
+  fallbackName: string,
+): Promise<string> {
+  try {
+    const meta = await fetchDropboxTempLink(dbxPath);
+    const sizeLabel = meta.size !== null ? ` (${meta.size} bytes)` : "";
+    return `[Attachment: ${meta.name}${sizeLabel} — download link: ${meta.link}]`;
+  } catch {
+    return `[Attachment: ${fallbackName} (Dropbox path: ${dbxPath}; temporary link unavailable)]`;
+  }
+}
+
+async function hydrateAttachmentsIntoLastUserMessage(
+  messages: ChatMessage[],
+  attachmentPaths: string[],
+): Promise<ChatMessage[]> {
+  if (attachmentPaths.length === 0 || !isDropboxConfigured()) {
+    return messages;
+  }
+
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  if (lastUserIdx === -1) return messages;
+
+  const textNotes: string[] = [];
+  const imageParts: ChatContentPart[] = [];
+  let remainingTextBudget = MAX_TEXT_CHARS_TOTAL;
+
+  for (const dbxPath of attachmentPaths) {
+    const ext = getLowerExtension(dbxPath);
+    const fallbackName = dbxPath.split("/").pop() ?? dbxPath;
+    const imageMime = IMAGE_MIME_BY_EXT[ext];
+
+    if (imageMime) {
+      try {
+        const dl = await downloadDropboxBuffer(dbxPath, MAX_IMAGE_BYTES);
+        const dataUri = `data:${imageMime};base64,${dl.buffer.toString("base64")}`;
+        imageParts.push({ type: "image_url", image_url: { url: dataUri } });
+      } catch {
+        textNotes.push(await formatTempLinkNote(dbxPath, fallbackName));
+      }
+      continue;
+    }
+
+    if (TEXT_EXTS.has(ext)) {
+      let handledAsText = false;
+      try {
+        const dl = await downloadDropboxBuffer(dbxPath, MAX_TEXT_BYTES);
+        const decoded = decodeUtf8TextIfNonBinary(dl.buffer);
+        if (decoded !== null && remainingTextBudget > 0) {
+          const maxForFile = Math.min(MAX_TEXT_CHARS_PER_FILE, remainingTextBudget);
+          const snippet =
+            decoded.length > maxForFile
+              ? `${decoded.slice(0, maxForFile)}\n... [truncated, ${decoded.length} total chars]`
+              : decoded;
+          remainingTextBudget -= Math.min(decoded.length, maxForFile);
+          textNotes.push(
+            `[File: ${dl.name} (${dl.size} bytes)]\n\`\`\`\n${snippet}\n\`\`\``,
+          );
+          handledAsText = true;
+        }
+      } catch {
+        // Fall through to temp link fallback when oversized or download fails.
+      }
+      if (!handledAsText) {
+        textNotes.push(await formatTempLinkNote(dbxPath, fallbackName));
+      }
+      continue;
+    }
+
+    textNotes.push(await formatTempLinkNote(dbxPath, fallbackName));
+  }
+
+  if (textNotes.length === 0 && imageParts.length === 0) {
+    return messages;
+  }
+
+  const nextMessages = [...messages];
+  const target = nextMessages[lastUserIdx];
+  if (!target) return messages;
+  const origText = typeof target.content === "string" ? target.content : "";
+  const combinedText =
+    textNotes.length > 0
+      ? origText
+        ? `${origText}\n\n${textNotes.join("\n\n")}`
+        : textNotes.join("\n\n")
+      : origText;
+
+  nextMessages[lastUserIdx] =
+    imageParts.length > 0
+      ? {
+          role: "user",
+          content: [{ type: "text", text: combinedText }, ...imageParts],
+        }
+      : { role: "user", content: combinedText };
+
+  return nextMessages;
+}
+
+function buildRosterNote(
+  conv: ConversationRow,
+  group: GroupRow | null,
+): string | undefined {
+  const parts: string[] = [];
+  const label = nonEmptyString(group?.name) ?? nonEmptyString(conv.title);
+  const mode = nonEmptyString(conv.mode);
+  if (label) {
+    parts.push(`Conversation "${label}"${mode ? ` (mode: ${mode})` : ""}.`);
+  }
+
+  const rawParticipants = Array.isArray(conv.participants)
+    ? conv.participants
+    : [];
+  const participantLabels = rawParticipants
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const p = entry as { kind?: unknown; name?: unknown };
+      const name = nonEmptyString(p.name);
+      if (!name) return null;
+      const kind =
+        p.kind === "muse"
+          ? "Muse"
+          : p.kind === "openai"
+            ? "Direct API"
+            : "Agent";
+      return `${name} (${kind})`;
+    })
+    .filter((item): item is string => item !== null);
+
+  if (participantLabels.length > 0) {
+    parts.push(
+      `Participants alongside ${env.ownerDisplayName}: ${participantLabels.join(", ")}.`,
+    );
+  }
+
+  const groupRules = nonEmptyString(group?.rules);
+  if (groupRules) {
+    parts.push(
+      `Group system prompt:\n${groupRules}\nNote: You are a Direct API collaborator in this conversation; do not prepend "[Name]:" or rely on "@Name" tags to trigger Muse agents.`,
+    );
+  }
+
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
 /**
  * `POST /api/openai/chat`
  * Proxies a non-streaming chat completion for a registered `relay_agents_openai`
- * agent, prepending its configured `system_prompt` server-side.
+ * agent, combining its `system_prompt` with optional conversation context and
+ * hydrated Dropbox attachments.
  */
 export async function handleOpenAIChat(
   req: Request,
@@ -299,6 +535,8 @@ export async function handleOpenAIChat(
   const body = (req.body ?? {}) as {
     agent_id?: unknown;
     messages?: unknown;
+    conversation_id?: unknown;
+    attachment_dropbox_paths?: unknown;
   };
 
   const agentId = nonEmptyString(body.agent_id);
@@ -310,6 +548,24 @@ export async function handleOpenAIChat(
   const messages = parseChatMessages(body.messages);
   if (!messages) {
     res.status(400).json({ error: "invalid_messages" });
+    return;
+  }
+
+  let conversationId: string | undefined;
+  if (body.conversation_id !== undefined && body.conversation_id !== null) {
+    const rawConvId = nonEmptyString(body.conversation_id);
+    if (!rawConvId || !UUID_RE.test(rawConvId)) {
+      res.status(400).json({ error: "invalid_conversation_id" });
+      return;
+    }
+    conversationId = rawConvId;
+  }
+
+  const attachmentPaths = parseAttachmentDropboxPaths(
+    body.attachment_dropbox_paths,
+  );
+  if (attachmentPaths === null) {
+    res.status(400).json({ error: "invalid_attachment_dropbox_paths" });
     return;
   }
 
@@ -327,7 +583,7 @@ export async function handleOpenAIChat(
   const baseUrl = nonEmptyString(lookup.row.base_url);
   const model = nonEmptyString(lookup.row.model);
   const apiKey = nonEmptyString(lookup.row.api_key);
-  const systemPrompt = nonEmptyString(lookup.row.system_prompt);
+  const agentSystemPrompt = nonEmptyString(lookup.row.system_prompt);
 
   if (!baseUrl || !model || !apiKey) {
     res.status(400).json({ error: "incomplete_agent_config" });
@@ -340,9 +596,67 @@ export async function handleOpenAIChat(
     return;
   }
 
-  const finalMessages: ChatMessage[] = systemPrompt
-    ? [{ role: "system", content: systemPrompt }, ...messages]
-    : messages;
+  let sharedConvPrompt: string | undefined;
+  let rosterNote: string | undefined;
+  if (conversationId) {
+    const convQuery =
+      `relay_conversations?select=id,title,mode,group_id,participants,system_prompt` +
+      `&id=eq.${encodeURIComponent(conversationId)}`;
+    let convRes = await supabaseRestSelectSingle<ConversationRow>(
+      convQuery,
+      auth.jwt,
+    );
+    if (convRes.error && convRes.status === 400) {
+      const legacyQuery =
+        `relay_conversations?select=id,title,mode,group_id,participants` +
+        `&id=eq.${encodeURIComponent(conversationId)}`;
+      convRes = await supabaseRestSelectSingle<ConversationRow>(
+        legacyQuery,
+        auth.jwt,
+      );
+    }
+    if (convRes.error) {
+      res.status(502).json({ error: "supabase_lookup_failed" });
+      return;
+    }
+    if (!convRes.data) {
+      res.status(404).json({ error: "conversation_not_found" });
+      return;
+    }
+    sharedConvPrompt = nonEmptyString(convRes.data.system_prompt);
+
+    let groupRow: GroupRow | null = null;
+    const groupId = nonEmptyString(convRes.data.group_id);
+    if (groupId && UUID_RE.test(groupId)) {
+      const groupQuery =
+        `relay_groups?select=name,rules&id=eq.${encodeURIComponent(groupId)}`;
+      const groupRes = await supabaseRestSelectSingle<GroupRow>(
+        groupQuery,
+        auth.jwt,
+      );
+      if (!groupRes.error && groupRes.data) {
+        groupRow = groupRes.data;
+      }
+    }
+    rosterNote = buildRosterNote(convRes.data, groupRow);
+  }
+
+  const combinedSystemPrompt = [
+    agentSystemPrompt,
+    sharedConvPrompt,
+    rosterNote,
+  ]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+
+  const hydratedMessages = await hydrateAttachmentsIntoLastUserMessage(
+    messages,
+    attachmentPaths,
+  );
+
+  const finalMessages: ChatMessage[] = combinedSystemPrompt
+    ? [{ role: "system", content: combinedSystemPrompt }, ...hydratedMessages]
+    : hydratedMessages;
 
   try {
     const upstream = await fetch(targetUrl, {

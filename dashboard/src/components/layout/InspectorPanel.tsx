@@ -413,12 +413,10 @@ function ConversationInspector(props: {
         </div>
       </div>
 
-      {conversation.mode !== "openai" && (
-        <div className="insp-section">
-          <span className="insp-label">{t("insp.dropboxFiles", { count: paths.length })}</span>
-          <InspectorFileList paths={paths} emptyText={t("insp.noFilesConv")} />
-        </div>
-      )}
+      <div className="insp-section">
+        <span className="insp-label">{t("insp.dropboxFiles", { count: paths.length })}</span>
+        <InspectorFileList paths={paths} emptyText={t("insp.noFilesConv")} />
+      </div>
     </>
   );
 }

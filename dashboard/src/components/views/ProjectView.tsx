@@ -184,30 +184,51 @@ export function ProjectView(props: {
                 const displayName = liveMuse?.name ?? liveOai?.name ?? pa.agent_name;
                 const summary = isMuse ? fleetSummary.get(pa.agent_ref) : undefined;
                 const status = summary?.status ?? "idle";
+                // Round-5 agent-card language: tone-colored edge + avatar follow
+                // the same status semantics (idle=ok, processing=busy,
+                // pending=wait, error=bad); OpenAI members ride the busy tone.
+                const edgeTone = !isMuse
+                  ? "busy"
+                  : status === "error"
+                    ? "bad"
+                    : status === "pending"
+                      ? "wait"
+                      : status === "processing"
+                        ? "busy"
+                        : "ok";
+                const subCode = isMuse
+                  ? liveMuse?.dropbox_root ?? null
+                  : liveOai?.model ?? null;
 
                 return (
-                  <div key={pa.id} className="project-agent-card">
-                    <div className="project-agent-top">
-                      <span
-                        className={`avatar-monogram ${isMuse ? `status-${status}` : "openai"}`}
-                      >
-                        {isMuse ? initialsOf(displayName) : <BotIcon size={15} />}
-                      </span>
-                      <div className="fleet-name-wrap">
-                        <strong className="fleet-name">{displayName}</strong>
-                        <span className="project-agent-sub">
-                          <span className={`agent-kind-tag ${pa.agent_kind}`}>
-                            {isMuse ? "Muse Relay" : "OpenAI"}
-                          </span>
-                          {liveOai?.model && <span className="agent-sub-code">{liveOai.model}</span>}
-                          {liveMuse?.dropbox_root && (
-                            <span className="agent-sub-code">{liveMuse.dropbox_root}</span>
-                          )}
+                  <article key={pa.id} className={`project-agent-card edge-${edgeTone}`}>
+                    <div className="agent-card-head">
+                      <div className="fleet-identity">
+                        <span
+                          className={`avatar-monogram ${isMuse ? `status-${status}` : "openai"}`}
+                          aria-hidden="true"
+                        >
+                          {isMuse ? initialsOf(displayName) : <BotIcon size={15} />}
                         </span>
+                        <div className="fleet-name-wrap">
+                          <strong className="fleet-name" title={displayName}>
+                            {displayName}
+                          </strong>
+                          <span className="agent-sub-tags">
+                            <span className={`agent-kind-tag ${pa.agent_kind}`}>
+                              {isMuse ? "Muse Relay" : "OpenAI"}
+                            </span>
+                            {subCode && (
+                              <span className="agent-sub-code" title={subCode}>
+                                {subCode}
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       </div>
                       <button
                         type="button"
-                        className="btn-quiet danger-text"
+                        className="btn-quiet danger-text project-agent-remove"
                         title={t("proj.removeAgentAria", { name: displayName })}
                         aria-label={t("proj.removeAgentAria", { name: displayName })}
                         onClick={() => void handleRemoveAgent(pa)}
@@ -215,7 +236,7 @@ export function ProjectView(props: {
                         <TrashIcon size={13} />
                       </button>
                     </div>
-                  </div>
+                  </article>
                 );
               })}
             </div>

@@ -22,7 +22,7 @@ function normalizeTokensRemaining(raw: string): string {
 }
 
 /** <70 ok, 70–90 warn, >90 bad (thresholds from the v9 quota spec). */
-function usageTone(usedPercent: number): "ok" | "warn" | "bad" {
+export function usageTone(usedPercent: number): "ok" | "warn" | "bad" {
   if (usedPercent > 90) return "bad";
   if (usedPercent >= 70) return "warn";
   return "ok";

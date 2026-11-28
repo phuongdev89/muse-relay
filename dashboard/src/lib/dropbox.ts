@@ -140,3 +140,25 @@ const DROPBOX_INPUT_NOTE_RE = /\s*\[Dropbox input: [^\]]*\]/g;
 export function stripDropboxInputNote(text: string): string {
   return text.replace(DROPBOX_INPUT_NOTE_RE, "").trimEnd();
 }
+
+const REPLY_PREFIX_RE = /^\[Replying to [^\n]+\](?::\s*(?:"[^\n]*")?)?[ \t]*\r?\n+/;
+
+/** Strips a leading `[Replying to ...]: "..."\n` or `[Replying to ...]\n`
+ * header prepended when forwarding reply context to models/muses. */
+export function stripReplyPrefix(text: string): string {
+  return text.replace(REPLY_PREFIX_RE, "");
+}
+
+/** Builds a compact single-line ReplyToMeta payload from a message. */
+export function buildReplyToMeta(
+  sender: string,
+  rawText: string,
+  opts?: { messageId?: string; fallbackText?: string },
+): { message_id?: string; sender: string; excerpt: string } {
+  const cleanText = rawText.replace(/\s+/g, " ").trim();
+  const base = cleanText || opts?.fallbackText || "";
+  const excerpt = base.length > 140 ? `${base.slice(0, 137)}…` : base;
+  return opts?.messageId
+    ? { message_id: opts.messageId, sender, excerpt }
+    : { sender, excerpt };
+}

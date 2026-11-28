@@ -24,6 +24,7 @@ import {
 } from "../../lib/dropbox";
 import { fmtFileSize } from "../../lib/format";
 import { useLang } from "../../lib/i18n";
+import type { ReplyToMeta } from "../../types";
 import {
   CheckIcon,
   ChevronLeftIcon,
@@ -31,9 +32,11 @@ import {
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
+  FileTextIcon,
   LinkIcon,
   PlayIcon,
   PrinterIcon,
+  ReplyIcon,
   ResourceKindIcon,
   XIcon,
 } from "../common/Icons";
@@ -109,6 +112,12 @@ export interface BubbleProps {
   failed?: boolean;
   /** text copied when user clicks the hover/focus-within copy action */
   copyValue?: string;
+  /** verbose notes hidden behind a toggle button in the footer */
+  notes?: string | null;
+  /** quoted parent message rendered above the bubble body */
+  replyTo?: ReplyToMeta | null;
+  /** click handler for the Reply button in the footer */
+  onReply?: () => void;
   children?: ReactNode;
   /** muted params line under owner bubbles */
   footer?: ReactNode;
@@ -118,6 +127,7 @@ export interface BubbleProps {
 
 export function MessageBubble(p: BubbleProps) {
   const [copied, setCopied] = useState(false);
+  const [verboseOpen, setVerboseOpen] = useState(false);
   const { t } = useLang();
 
   async function handleCopy() {
@@ -129,10 +139,12 @@ export function MessageBubble(p: BubbleProps) {
     }
   }
 
+  const hasNotes = Boolean(p.notes && p.notes.trim().length > 0);
+
   const copyBtn = p.copyValue ? (
     <button
       type="button"
-      className={`bubble-copy${copied ? " copied" : ""}`}
+      className={`bubble-foot-btn bubble-copy${copied ? " copied" : ""}`}
       onClick={handleCopy}
       title={t("msg.copyAria")}
       aria-label={t("msg.copyAria")}
@@ -142,7 +154,34 @@ export function MessageBubble(p: BubbleProps) {
     </button>
   ) : null;
 
-  const hasFoot = Boolean(p.state || p.timeLabel);
+  const replyBtn = p.onReply ? (
+    <button
+      type="button"
+      className="bubble-foot-btn bubble-reply-btn"
+      onClick={p.onReply}
+      title={t("msg.replyAria")}
+      aria-label={t("msg.replyAria")}
+    >
+      <ReplyIcon size={12} />
+      <span>{t("msg.reply")}</span>
+    </button>
+  ) : null;
+
+  const verboseBtn = hasNotes ? (
+    <button
+      type="button"
+      className={`bubble-foot-btn bubble-verbose-btn${verboseOpen ? " active" : ""}`}
+      onClick={() => setVerboseOpen((v) => !v)}
+      aria-expanded={verboseOpen}
+      title={t("msg.verboseAria")}
+      aria-label={t("msg.verboseAria")}
+    >
+      <FileTextIcon size={12} />
+      <span>{t("msg.verbose")}</span>
+    </button>
+  ) : null;
+
+  const hasFoot = Boolean(p.state || p.timeLabel || copyBtn || replyBtn || verboseBtn);
 
   return (
     <div className={`bubble ${p.side}${p.failed ? " failed" : ""}`}>
@@ -157,18 +196,56 @@ export function MessageBubble(p: BubbleProps) {
       )}
 
       <div className="bubble-body-row">
-        <div className="bubble-content">{p.children}</div>
+        <div className="bubble-content">
+          {p.replyTo && (
+            <div className="bubble-reply-quote">
+              <span className="bubble-reply-sender">{p.replyTo.sender}</span>
+              {p.replyTo.excerpt && (
+                <span className="bubble-reply-excerpt">{p.replyTo.excerpt}</span>
+              )}
+            </div>
+          )}
+          {p.children}
+        </div>
       </div>
 
-      {(hasFoot || copyBtn) && (
-        <div className="bubble-foot">
-          {p.side === "owner" && p.state ? <Ticks state={p.state} /> : null}
-          {p.side === "muse" && p.state ? <ChipOf state={p.state} /> : null}
-          {/* owner messages: copy button sits left of the timestamp */}
-          {p.side === "owner" ? copyBtn : null}
-          {p.timeLabel && <span className="when">{p.timeLabel}</span>}
-          {p.side !== "owner" ? copyBtn : null}
+      {hasFoot && (
+        <div className={`bubble-foot${p.side === "muse" ? " muse-flow" : ""}`}>
+          {/* Owner bubbles (right side): actions (copy · reply · verbose)
+           * cluster on the LEFT, timestamp + ticks pushed to the RIGHT.
+           * Muse bubbles (left side): single flow — status chip → timestamp
+           * → actions, per owner layout rule. Clusters wrap internally when
+           * the bubble gets too narrow. */}
+          {p.side === "muse" ? (
+            <>
+              <div className="bubble-foot-status">
+                {p.state ? <ChipOf state={p.state} /> : null}
+                {p.timeLabel && <span className="when">{p.timeLabel}</span>}
+              </div>
+              <div className="bubble-foot-actions">
+                {verboseBtn}
+                {copyBtn}
+                {replyBtn}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="bubble-foot-actions">
+                {copyBtn}
+                {replyBtn}
+                {verboseBtn}
+              </div>
+              <div className="bubble-foot-status">
+                {p.timeLabel && <span className="when">{p.timeLabel}</span>}
+                {p.state ? <Ticks state={p.state} /> : null}
+              </div>
+            </>
+          )}
         </div>
+      )}
+
+      {verboseOpen && hasNotes && (
+        <div className="bubble-verbose-notes">{p.notes}</div>
       )}
 
       {p.footer && <div className="paramsline">{p.footer}</div>}

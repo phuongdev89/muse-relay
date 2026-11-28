@@ -1,0 +1,16 @@
+.git
+.gitignore
+.idea
+.env
+.env.*
+node_modules
+server/node_modules
+dashboard/node_modules
+server/dist
+dashboard/dist
+docs
+scripts
+supabase
+README.md
+README.vi.md
+LICENSE

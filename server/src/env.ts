@@ -50,6 +50,30 @@ function normalizeHttpUrl(raw: string, varName: string): string {
   return raw.replace(/\/+$/, "");
 }
 
+function normalizeDropboxRoot(
+  raw: string | undefined,
+  fallback: string,
+  varName: string,
+): string {
+  const value = (raw ?? fallback).trim();
+  if (
+    !value ||
+    value.includes("..") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    value.includes("\r") ||
+    value.includes("\n")
+  ) {
+    throw new Error(`Invalid Dropbox root in environment variable: ${varName}`);
+  }
+  const withLeading = value.startsWith("/") ? value : `/${value}`;
+  const normalized = withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
+  if (normalized.length > 256) {
+    throw new Error(`Dropbox root too long in environment variable: ${varName}`);
+  }
+  return normalized;
+}
+
 export interface EnvConfig {
   readonly port: number;
   readonly supabaseUrl: string;
@@ -57,6 +81,7 @@ export interface EnvConfig {
   readonly supabaseSecretKey: string | undefined;
   readonly relayOwnerId: string | undefined;
   readonly ownerDisplayName: string;
+  readonly ownerDropboxRoot: string;
   readonly dropboxAppKey: string | undefined;
   readonly dropboxAppSecret: string | undefined;
   readonly dropboxRefreshToken: string | undefined;
@@ -70,6 +95,11 @@ export const env: EnvConfig = {
   supabaseSecretKey: optionalEnv("SUPABASE_SECRET_KEY"),
   relayOwnerId: optionalEnv("RELAY_OWNER_ID"),
   ownerDisplayName: optionalEnv("OWNER_DISPLAY_NAME") ?? "Owner",
+  ownerDropboxRoot: normalizeDropboxRoot(
+    optionalEnv("OWNER_DROPBOX_ROOT"),
+    "/owner/",
+    "OWNER_DROPBOX_ROOT",
+  ),
   dropboxAppKey: optionalEnv("DROPBOX_APP_KEY"),
   dropboxAppSecret: optionalEnv("DROPBOX_APP_SECRET"),
   dropboxRefreshToken: optionalEnv("DROPBOX_REFRESH_TOKEN"),

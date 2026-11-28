@@ -15,9 +15,10 @@ import type {
   ProjectAgent,
   RelayMessage,
   RelayResult,
+  ReplyToMeta,
   ThreadItem,
 } from "../types";
-import { MAX_UPLOAD_BYTES } from "./dropbox";
+import { MAX_UPLOAD_BYTES, stripReplyPrefix } from "./dropbox";
 import { tNow } from "./i18n";
 import { db } from "./supabase";
 
@@ -158,13 +159,19 @@ export async function deleteMuse(recipient: string): Promise<string | null> {
 export async function createGroup(
   name: string,
   members: { muse_recipient: string; name: string }[],
+  rules?: string,
 ): Promise<{ id?: string; error: string | null }> {
   const auth = await requireUserId();
   if (!auth.userId) return { error: auth.error };
+  const trimmedRules = rules?.trim() ?? "";
   // RLS requires owner_id = auth.uid() on the row itself.
   const { data: g, error: ge } = await db
     .from("relay_groups")
-    .insert({ name, owner_id: auth.userId })
+    .insert({
+      name,
+      owner_id: auth.userId,
+      rules: trimmedRules.length > 0 ? trimmedRules : null,
+    })
     .select("id")
     .single();
   if (ge) return { error: ge.message };
@@ -180,6 +187,18 @@ export async function createGroup(
 
 export async function deleteGroup(id: string): Promise<string | null> {
   const { error } = await db.from("relay_groups").delete().eq("id", id);
+  return error?.message ?? null;
+}
+
+export async function updateGroupRules(
+  groupId: string,
+  rules: string | null,
+): Promise<string | null> {
+  const trimmed = rules?.trim() ?? "";
+  const { error } = await db
+    .from("relay_groups")
+    .update({ rules: trimmed.length > 0 ? trimmed : null })
+    .eq("id", groupId);
   return error?.message ?? null;
 }
 
@@ -272,15 +291,30 @@ export async function sendGroupMessage(input: {
   groupId: string;
   prompt: string;
   ownerName: string;
+  referenceDropboxPaths?: string[];
+  referenceDropboxPathsByRecipient?: Record<string, string[]>;
+  replyTo?: ReplyToMeta;
 }): Promise<{ error: string | null }> {
-  const { error } = await db.functions.invoke("submit_message", {
-    body: {
-      group_id: input.groupId,
-      action: "chat",
-      params: { prompt: input.prompt },
-      owner_name: input.ownerName,
-    },
-  });
+  const params: Record<string, unknown> = { prompt: input.prompt };
+  if (input.referenceDropboxPaths && input.referenceDropboxPaths.length > 0) {
+    params.reference_dropbox_paths = input.referenceDropboxPaths;
+  }
+  if (input.replyTo) {
+    params.reply_to = input.replyTo;
+  }
+  const body: Record<string, unknown> = {
+    group_id: input.groupId,
+    action: "chat",
+    params,
+    owner_name: input.ownerName,
+  };
+  if (
+    input.referenceDropboxPathsByRecipient &&
+    Object.keys(input.referenceDropboxPathsByRecipient).length > 0
+  ) {
+    body.reference_dropbox_paths_by_recipient = input.referenceDropboxPathsByRecipient;
+  }
+  const { error } = await db.functions.invoke("submit_message", { body });
   if (error) {
     const parsed = await extractFunctionError(error);
     return { error: parsed.message };
@@ -480,6 +514,61 @@ export async function uploadFileToMuseDropbox(input: {
   }
 }
 
+export const uploadFileToDropbox = uploadFileToMuseDropbox;
+
+export async function distributeDropboxFiles(input: {
+  threadId?: string | null;
+  sourcePaths: string[];
+  targetRecipients: string[];
+}): Promise<{ paths_by_recipient: Record<string, string[]>; error: string | null }> {
+  try {
+    const jwt = await getOwnerJwt();
+    if (!jwt) {
+      return { paths_by_recipient: {}, error: tNow("api.sessionExpired") };
+    }
+    const trimmedThread = input.threadId?.trim();
+    const response = await fetch("/api/dropbox/distribute", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...(trimmedThread ? { thread_id: trimmedThread } : {}),
+        source_paths: input.sourcePaths,
+        target_recipients: input.targetRecipients,
+      }),
+    });
+    const payload = await readJsonPayload(response);
+    const errCode = typeof payload?.error === "string" ? payload.error : "";
+
+    if (response.status === 503 || errCode === "dropbox_not_configured") {
+      return { paths_by_recipient: {}, error: tNow("dropbox.notConfiguredErr") };
+    }
+    if (!response.ok) {
+      return { paths_by_recipient: {}, error: errCode || `HTTP ${response.status}` };
+    }
+
+    const rawMap = payload?.paths_by_recipient;
+    const pathsByRecipient: Record<string, string[]> = {};
+    if (rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)) {
+      for (const [recipient, rawList] of Object.entries(rawMap as Record<string, unknown>)) {
+        if (Array.isArray(rawList)) {
+          pathsByRecipient[recipient] = rawList.filter(
+            (p): p is string => typeof p === "string" && p.length > 0,
+          );
+        }
+      }
+    }
+    return { paths_by_recipient: pathsByRecipient, error: null };
+  } catch (err) {
+    return {
+      paths_by_recipient: {},
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 // ---- muse thread (1:1 chat) ------------------------------------------------
 
 export async function fetchMuseThread(
@@ -523,7 +612,13 @@ export async function fetchMuseThread(
   return { items, error: null };
 }
 
-export async function fetchFleetActivity(limit = 80): Promise<{
+/** Page size for the Overview "Recent activity" infinite scroll feed. */
+export const FLEET_ACTIVITY_PAGE_SIZE = 30;
+
+export async function fetchFleetActivity(
+  limit: number = FLEET_ACTIVITY_PAGE_SIZE,
+  offset = 0,
+): Promise<{
   items: FleetActivityItem[];
   error: string | null;
 }> {
@@ -531,7 +626,7 @@ export async function fetchFleetActivity(limit = 80): Promise<{
     .from("relay_messages")
     .select("id,recipient,action,params,status,attempts,created_at,expires_at,claim_expires_at")
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .range(offset, offset + limit - 1);
   if (msgs.error) return { items: [], error: msgs.error.message };
   const rows = (msgs.data ?? []) as (RelayMessage & { recipient: string })[];
   if (rows.length === 0) return { items: [], error: null };
@@ -549,11 +644,20 @@ export async function fetchFleetActivity(limit = 80): Promise<{
   return {
     items: rows.map((m) => ({
       recipient: m.recipient,
+      // params->>thread_id: group fan-out rows are stamped with the group_id,
+      // conversation sends carry the conversation id, direct channel is null.
+      threadId: readThreadParam(m.params),
       message: m,
       result: byMessage.get(m.id) ?? null,
     })),
     error: null,
   };
+}
+
+/** Extracts params.thread_id as string | null from the params JSON column. */
+function readThreadParam(params: unknown): string | null {
+  const tid = (params as { thread_id?: unknown } | null)?.thread_id;
+  return typeof tid === "string" && tid.length > 0 ? tid : null;
 }
 
 // ---- v9: AI usage quota reports ---------------------------------------------
@@ -713,6 +817,19 @@ export async function sendUsageRequest(recipient: string) {
   });
 }
 
+function parseReplyTo(raw: unknown): ReplyToMeta | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as { message_id?: unknown; sender?: unknown; excerpt?: unknown };
+  const sender = typeof obj.sender === "string" ? obj.sender.trim() : "";
+  if (!sender) return null;
+  const excerpt = typeof obj.excerpt === "string" ? obj.excerpt : "";
+  const message_id =
+    typeof obj.message_id === "string" && obj.message_id.length > 0
+      ? obj.message_id
+      : undefined;
+  return message_id ? { message_id, sender, excerpt } : { sender, excerpt };
+}
+
 // ---- group thread ----------------------------------------------------------
 
 function batchState(
@@ -798,7 +915,7 @@ export async function fetchGroupThread(groupId: string): Promise<{
     id: string;
     recipient: string;
     status: string;
-    params: { prompt?: string; reference_dropbox_paths?: unknown };
+    params: { prompt?: string; reference_dropbox_paths?: unknown; reply_to?: unknown };
   };
   const msgMap = new Map<string, MsgRow>((msgs ?? []).map((m) => [m.id, m as MsgRow]));
   const resMap = new Map<string, RelayResult>((results ?? []).map((r) => [r.message_id, r as RelayResult]));
@@ -825,17 +942,27 @@ export async function fetchGroupThread(groupId: string): Promise<{
     const first = rows[0];
     if (!first) continue;
     const b = batchState(rows, resMap);
+    let ownerPaths: string[] = [];
+    for (const r of rows) {
+      const refs = readRefPaths(r.params);
+      if (refs.length > 0) {
+        ownerPaths = refs;
+        break;
+      }
+    }
+    const replyTo = parseReplyTo(first.params?.reply_to);
     bubbles.push({
       batchId: p.batch_id,
       kind: "owner",
       name: p.from_name,
       time: p.created_at,
       state: b.state,
-      text: (first.params?.prompt ?? "").replace(/^\[[^\]]+\]:\s*/, ""),
-      paths: [],
+      text: stripReplyPrefix((first.params?.prompt ?? "").replace(/^\[[^\]]+\]:\s*/, "")),
+      paths: ownerPaths,
       refPaths: [],
       notes: null,
       error: b.state === "failed" ? b.error : null,
+      replyTo,
     });
   }
 
@@ -1051,12 +1178,22 @@ export interface OpenAIChatHistoryTurn {
   status?: "done" | "failed";
 }
 
+export interface OpenAIChatOptions {
+  signal?: AbortSignal;
+  conversationId?: string;
+  attachmentDropboxPaths?: string[];
+}
+
 export async function callOpenAIChatCompletion(
   agent: Pick<OpenAIAgent, "id">,
   history: OpenAIChatHistoryTurn[],
   prompt: string,
-  signal?: AbortSignal,
+  options?: AbortSignal | OpenAIChatOptions,
 ): Promise<{ content?: string; error?: string }> {
+  const opts: OpenAIChatOptions =
+    options && options instanceof AbortSignal ? { signal: options } : (options ?? {});
+  const signal = opts.signal;
+
   const jwt = await getOwnerJwt();
   if (!jwt) {
     return { error: tNow("api.sessionExpired") };
@@ -1090,6 +1227,10 @@ export async function callOpenAIChatCompletion(
       body: JSON.stringify({
         agent_id: agent.id,
         messages,
+        ...(opts.conversationId ? { conversation_id: opts.conversationId } : {}),
+        ...(opts.attachmentDropboxPaths && opts.attachmentDropboxPaths.length > 0
+          ? { attachment_dropbox_paths: opts.attachmentDropboxPaths }
+          : {}),
       }),
       signal: controller.signal,
     });
@@ -1303,18 +1444,42 @@ function normalizeConversation(row: Record<string, unknown>): Conversation {
     mode: row.mode as ConversationMode,
     group_id: row.group_id ? String(row.group_id) : null,
     participants,
+    system_prompt:
+      typeof row.system_prompt === "string" && row.system_prompt.length > 0
+        ? row.system_prompt
+        : null,
     created_at: String(row.created_at),
   };
+}
+
+function isMissingSchemaColumnError(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  const code = err.code ?? "";
+  const msg = (err.message ?? "").toLowerCase();
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    msg.includes("does not exist") ||
+    msg.includes("schema cache")
+  );
 }
 
 export async function listConversations(): Promise<{
   data: Conversation[];
   error: string | null;
 }> {
-  const { data, error } = await db
+  let { data, error } = await db
     .from("relay_conversations")
-    .select("id,project_id,title,mode,group_id,participants,created_at")
+    .select("id,project_id,title,mode,group_id,participants,system_prompt,created_at")
     .order("created_at", { ascending: true });
+  if (isMissingSchemaColumnError(error)) {
+    const legacy = await db
+      .from("relay_conversations")
+      .select("id,project_id,title,mode,group_id,participants,created_at")
+      .order("created_at", { ascending: true });
+    data = legacy.data as typeof data;
+    error = legacy.error;
+  }
   return {
     data: (data ?? []).map((r) => normalizeConversation(r as Record<string, unknown>)),
     error: error?.message ?? null,
@@ -1331,20 +1496,42 @@ export async function createConversation(input: {
   const auth = await requireUserId();
   if (!auth.userId) return { error: auth.error };
 
-  const { data, error } = await db
+  const payload = {
+    project_id: input.project_id,
+    owner_id: auth.userId,
+    title: input.title,
+    mode: input.mode,
+    group_id: input.group_id,
+    participants: input.participants,
+  };
+  let { data, error } = await db
     .from("relay_conversations")
-    .insert({
-      project_id: input.project_id,
-      owner_id: auth.userId,
-      title: input.title,
-      mode: input.mode,
-      group_id: input.group_id,
-      participants: input.participants,
-    })
-    .select("id,project_id,title,mode,group_id,participants,created_at")
+    .insert(payload)
+    .select("id,project_id,title,mode,group_id,participants,system_prompt,created_at")
     .single();
+  if (isMissingSchemaColumnError(error)) {
+    const legacy = await db
+      .from("relay_conversations")
+      .insert(payload)
+      .select("id,project_id,title,mode,group_id,participants,created_at")
+      .single();
+    data = legacy.data as typeof data;
+    error = legacy.error;
+  }
   if (error || !data) return { error: error?.message ?? tNow("api.createConvFailed") };
   return { data: normalizeConversation(data as Record<string, unknown>), error: null };
+}
+
+export async function updateConversationSystemPrompt(
+  conversationId: string,
+  systemPrompt: string | null,
+): Promise<string | null> {
+  const trimmed = systemPrompt?.trim() ?? "";
+  const { error } = await db
+    .from("relay_conversations")
+    .update({ system_prompt: trimmed.length > 0 ? trimmed : null })
+    .eq("id", conversationId);
+  return error?.message ?? null;
 }
 
 export async function deleteConversation(
@@ -1360,17 +1547,52 @@ export async function deleteConversation(
   return null;
 }
 
+function normalizeOpenAIMessage(row: Record<string, unknown>): OpenAIMessage {
+  const rawPaths = row.dropbox_paths;
+  const dropbox_paths = Array.isArray(rawPaths)
+    ? rawPaths.filter((p): p is string => typeof p === "string" && p.length > 0)
+    : [];
+  return {
+    id: String(row.id),
+    conversation_id: String(row.conversation_id),
+    role: row.role === "owner" ? "owner" : "agent",
+    agent_ref: row.agent_ref ? String(row.agent_ref) : null,
+    agent_name: String(row.agent_name ?? ""),
+    content: String(row.content ?? ""),
+    dropbox_paths,
+    reply_to: parseReplyTo(row.reply_to),
+    status: row.status === "failed" ? "failed" : "done",
+    error: typeof row.error === "string" ? row.error : null,
+    created_at: String(row.created_at),
+  };
+}
+
 export async function fetchOpenAIMessages(conversationId: string): Promise<{
   data: OpenAIMessage[];
   error: string | null;
 }> {
-  const { data, error } = await db
+  let { data, error } = await db
     .from("relay_openai_messages")
-    .select("id,conversation_id,role,agent_ref,agent_name,content,status,error,created_at")
+    .select(
+      "id,conversation_id,role,agent_ref,agent_name,content,dropbox_paths,reply_to,status,error,created_at",
+    )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true })
     .limit(300);
-  return { data: (data ?? []) as OpenAIMessage[], error: error?.message ?? null };
+  if (isMissingSchemaColumnError(error)) {
+    const legacy = await db
+      .from("relay_openai_messages")
+      .select("id,conversation_id,role,agent_ref,agent_name,content,status,error,created_at")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true })
+      .limit(300);
+    data = legacy.data as typeof data;
+    error = legacy.error;
+  }
+  return {
+    data: (data ?? []).map((r) => normalizeOpenAIMessage(r as Record<string, unknown>)),
+    error: error?.message ?? null,
+  };
 }
 
 export async function insertOpenAIMessage(input: {
@@ -1379,25 +1601,47 @@ export async function insertOpenAIMessage(input: {
   agent_ref: string | null;
   agent_name: string;
   content: string;
+  dropbox_paths?: string[];
+  reply_to?: ReplyToMeta | null;
   status?: "done" | "failed";
   error?: string | null;
 }): Promise<{ data?: OpenAIMessage; error: string | null }> {
   const auth = await requireUserId();
   if (!auth.userId) return { error: auth.error };
 
-  const { data, error } = await db
+  const baseRow = {
+    conversation_id: input.conversation_id,
+    owner_id: auth.userId,
+    role: input.role,
+    agent_ref: input.agent_ref,
+    agent_name: input.agent_name,
+    content: input.content,
+    status: input.status ?? "done",
+    error: input.error ?? null,
+  };
+
+  let { data, error } = await db
     .from("relay_openai_messages")
     .insert({
-      conversation_id: input.conversation_id,
-      owner_id: auth.userId,
-      role: input.role,
-      agent_ref: input.agent_ref,
-      agent_name: input.agent_name,
-      content: input.content,
-      status: input.status ?? "done",
-      error: input.error ?? null,
+      ...baseRow,
+      ...(input.dropbox_paths !== undefined ? { dropbox_paths: input.dropbox_paths } : {}),
+      ...(input.reply_to !== undefined ? { reply_to: input.reply_to } : {}),
     })
-    .select("id,conversation_id,role,agent_ref,agent_name,content,status,error,created_at")
+    .select(
+      "id,conversation_id,role,agent_ref,agent_name,content,dropbox_paths,reply_to,status,error,created_at",
+    )
     .single();
-  return { data: data as OpenAIMessage | undefined, error: error?.message ?? null };
+  if (isMissingSchemaColumnError(error)) {
+    const legacy = await db
+      .from("relay_openai_messages")
+      .insert(baseRow)
+      .select("id,conversation_id,role,agent_ref,agent_name,content,status,error,created_at")
+      .single();
+    data = legacy.data as typeof data;
+    error = legacy.error;
+  }
+  return {
+    data: data ? normalizeOpenAIMessage(data as Record<string, unknown>) : undefined,
+    error: error?.message ?? null,
+  };
 }

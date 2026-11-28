@@ -19,6 +19,18 @@ const MODE_HINT_KEY: Record<ConversationMode, I18nKey> = {
   mixed: "modeHint.mixed",
 };
 
+/** Prefilled group rules (system prompt) for new group conversations.
+ * Word choice matters: this text is fed to the agents themselves — address
+ * them as "agent", never "Muse"/"bot" (each believes it is the only one). */
+export const DEFAULT_GROUP_RULES = [
+  "QUY CHẾ NHÓM (system prompt). Bạn là một agent thành viên của nhóm chat này, cùng Owner (người điều phối) và các agent thành viên khác.",
+  "- Chỉ trả lời khi bạn được @-gọi (@Tên của bạn, hoặc @all — chỉ Owner được dùng). Không được @-gọi thì im lặng, không gửi gì cả.",
+  "- Mỗi câu trả lời chỉ được @-gọi TỐI ĐA MỘT agent khác: đúng @Tên, không tự gọi chính mình, không gọi nhiều agent trong một output. Cần nhiều người tham gia thì @ đúng một agent điều phối, hoặc kết luận cho Owner rồi dừng.",
+  "- Trả lời ngắn gọn, đúng việc được hỏi; không xã giao dài dòng, không lặp lại nội dung agent khác đã nói.",
+  "- Tôn trọng lượt đi: chưa được @-gọi thì không spam, không nhắc lại câu cũ, không tự mở đề tài mới.",
+  "- Nếu claim có reference_dropbox_paths: đó là tài nguyên Owner/agent khác chuyển cho bạn qua cầu relay, file nằm trong Dropbox của bạn — tải trực tiếp và dùng làm ngữ cảnh.",
+].join("\n");
+
 function resolveConversationMode(
   participants: ConversationParticipant[],
 ): ConversationMode | null {
@@ -42,6 +54,7 @@ export function NewConversationModal(props: {
 }) {
   const { t } = useLang();
   const [title, setTitle] = useState("");
+  const [rules, setRules] = useState<string>(DEFAULT_GROUP_RULES);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -93,6 +106,11 @@ export function NewConversationModal(props: {
 
   const participants = [...picked.values()];
   const resolvedMode = resolveConversationMode(participants);
+  const museParticipants = participants.filter((p) => p.kind === "muse");
+  /** group conversations (muse_group / mixed with muses) create a relay group */
+  const willCreateGroup =
+    museParticipants.length >= 2 ||
+    (resolvedMode === "mixed" && museParticipants.length >= 1);
 
   async function submit() {
     if (saving) return;
@@ -109,9 +127,8 @@ export function NewConversationModal(props: {
 
     setSaving(true);
     let groupId: string | null = null;
-    const museParticipants = participants.filter((p) => p.kind === "muse");
 
-    if (museParticipants.length >= 2) {
+    if (willCreateGroup) {
       const groupName = trimmed.slice(0, 64);
       const { id, error: gErr } = await createGroup(
         groupName,
@@ -119,6 +136,7 @@ export function NewConversationModal(props: {
           muse_recipient: m.ref,
           name: m.name.slice(0, 64),
         })),
+        rules,
       );
       if (gErr || !id) {
         setSaving(false);
@@ -212,6 +230,22 @@ export function NewConversationModal(props: {
       {resolvedMode && (
         <div className="mode-preview-box">
           <strong>{t("newConv.modeDetected")}</strong> {t(MODE_HINT_KEY[resolvedMode])}
+        </div>
+      )}
+
+      {/* Group rules (system prompt) — only for conversations that create a
+       * linked relay group; hidden for muse_single / openai modes. */}
+      {willCreateGroup && (
+        <div className="new-conv-rules">
+          <label htmlFor="conv-group-rules">{t("newConv.rulesLabel")}</label>
+          <textarea
+            id="conv-group-rules"
+            rows={7}
+            value={rules}
+            placeholder={t("group.systemPromptPlaceholder")}
+            onChange={(e) => setRules(e.target.value)}
+          />
+          <span className="hint">{t("newConv.rulesHint")}</span>
         </div>
       )}
 
