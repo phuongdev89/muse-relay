@@ -306,7 +306,8 @@ GAPEND=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GA_
 GAP_N=$(echo "$GAPEND" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
 [ "$GOK" = "True" ] && [ "$GAP_N" = "0" ] && ok "T-Gk turn cap: mention reply at turn 12 -> ok, no fan-out" || bad "T-Gk res=$GRES gapend=$GAPEND"
 
-# @all: GA's reply reaches BOTH remaining members, never the speaker.
+# v9 owner ruling: @all is OWNER-ONLY. GA's reply containing @all must wake
+# NOBODY (silently ignored like an unknown mention) and the chain stops.
 GQ="$TMP_DIR/acceptance-tg-q.json"
 printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @Acceptance GA all"}}' "$G_ID" > "$GQ"
 GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
@@ -324,9 +325,36 @@ GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok',
 GB_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GB_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
 GC_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GC_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
 GAP_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GA_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
-[ "$GOK" = "True" ] && [ "$GB_N" = "1" ] && [ "$GC_N" = "1" ] && [ "$GAP_N" = "0" ] && ok "T-GNa GA reply @all -> GB+GC each 1, speaker GA excluded" || bad "T-GNa res=$GRES gb=$GB_N gc=$GC_N ga=$GAP_N"
+[ "$GOK" = "True" ] && [ "$GB_N" = "0" ] && [ "$GC_N" = "0" ] && [ "$GAP_N" = "0" ] && ok "T-GNa muse reply @all -> NO fan-out (owner-only command)" || bad "T-GNa res=$GRES gb=$GB_N gc=$GC_N ga=$GAP_N"
 
-# Unknown mention: silently ignored, nothing fans out.
+# A muse steers the chain with at most ONE named agent: a reply tagging
+# several agents fans out to NOBODY (task decomposition happens across turns,
+# never via mass pinging in one output).
+GQ="$TMP_DIR/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @Acceptance GA multi"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
+GCLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d '{}')
+GA_ID=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
+GA_CLAIM=$(echo "$GCLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
+GREP="$TMP_DIR/acceptance-tg-rep.json"
+printf '{"message_id":"%s","claim_id":"%s","status":"done","output":{"dropbox_paths":[],"notes":null,"text":"GA tags @Acceptance GB and @Acceptance GC together"},"error":null}' "$GA_ID" "$GA_CLAIM" > "$GREP"
+GRES=$(curl -s -m 20 -X POST "$BASE/functions/v1/submit_result" \
+  -H "x-relay-token: $GA_TOKEN" -H 'content-type: application/json' -d @"$GREP")
+rm -f "$GREP"
+GOK=$(echo "$GRES" | jqpy "import json,sys; print(json.load(sys.stdin).get('ok', False))")
+GB_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GB_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+GC_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&recipient=eq.$GC_REC&status=eq.pending" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$GOK" = "True" ] && [ "$GB_N" = "0" ] && [ "$GC_N" = "0" ] && ok "T-GNc muse reply tagging 2 agents -> NO fan-out (single-mention rule)" || bad "T-GNc res=$GRES gb=$GB_N gc=$GC_N"
+
+# Unknown mention: silently ignored, nothing fans out. The owner @GB post
+# gives GB a row to claim (muse @all no longer fans one out).
+GQ="$TMP_DIR/acceptance-tg-q.json"
+printf '{"group_id":"%s","action":"chat","params":{"prompt":"[ACCEPTANCE] tg @Acceptance GB probe"}}' "$G_ID" > "$GQ"
+GSUB=$(curl -s -m 20 -o "$TMP_DIR/atgq" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -d @"$GQ")
+rm -f "$GQ"
 GB_CLAIM=$(curl -s -m 20 -X POST "$BASE/functions/v1/claim_message" -H "x-relay-token: $GB_TOKEN" -H 'content-type: application/json' -d '{}')
 GB_ID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('id',''))")
 GB_CLAIMID=$(echo "$GB_CLAIM" | jqpy "import json,sys; m=(json.load(sys.stdin).get('message') or {}); print(m.get('claim_id',''))")
