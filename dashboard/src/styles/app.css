@@ -2578,12 +2578,11 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   white-space: nowrap;
 }
 .mention-popup {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0.4rem;
-  z-index: 45;
+  position: fixed;
+  transform: translateY(-100%);
+  z-index: 60;
   min-width: 11rem;
-  max-width: 18rem;
+  max-width: min(18rem, calc(100vw - 1rem));
   max-height: 13rem;
   overflow-y: auto;
   display: flex;
@@ -2819,9 +2818,8 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   /* 16px controls: iOS Safari force-zooms focused inputs set below 16px */
   .dialog { max-height: 97dvh; }
   input, textarea, select, .rail-search input, .admin-search input, .composer-shell textarea, .composer-opts input, .composer-opts select { font-size: 1rem; }
-  /* v9 mirror + popup follow the composer's mobile font-size override */
+  /* v9 mirror follows the composer's mobile font-size override */
   .composer-mirror { font-size: 1rem; }
-  .mention-popup { left: 0; right: 0; max-width: none; }
   .group-sysprompt { width: 88%; }
 
   .bubble { max-width: 88%; }

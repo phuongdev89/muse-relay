@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { MAX_ATTACH_FILES, mergeAttachmentFiles } from "../../lib/dropbox";
 import { fmtFileSize } from "../../lib/format";
 import { useLang } from "../../lib/i18n";
@@ -99,6 +100,32 @@ export function Composer(props: {
       setMentionIdx((i) => Math.min(i, Math.max(mention.matches.length - 1, 0)));
     }
   }, [mentionOpen, mention?.matches.length]);
+  // The popup is portaled to document.body (fixed, above the textarea's top
+  // edge): .composer-shell clips absolutely-positioned children with its
+  // overflow:hidden, so anchoring inside the shell renders an invisible list.
+  const [popupPos, setPopupPos] = useState<{ left: number; top: number } | null>(null);
+  const updatePopupPos = useMemo(() => () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPopupPos({
+      left: Math.min(Math.max(r.left + 8, 8), Math.max(window.innerWidth - 190, 8)),
+      top: r.top - 8,
+    });
+  }, []);
+  useLayoutEffect(() => {
+    if (!mentionOpen) {
+      setPopupPos(null);
+      return;
+    }
+    updatePopupPos();
+    window.addEventListener("resize", updatePopupPos);
+    window.addEventListener("scroll", updatePopupPos, true);
+    return () => {
+      window.removeEventListener("resize", updatePopupPos);
+      window.removeEventListener("scroll", updatePopupPos, true);
+    };
+  }, [mentionOpen, updatePopupPos]);
 
   // If the allowed set changes under an open composer (caps edited elsewhere),
   // fall back to the first allowed tab instead of sending a gated action.
@@ -375,27 +402,34 @@ export function Composer(props: {
               {"\n"}
             </div>
           )}
-          {mentionOpen && (
-            <div className="mention-popup" role="listbox" aria-label={t("composer.mentionPopupAria")}>
-              {mention.matches.map((name, i) => (
-                <button
-                  key={`mention-${name}`}
-                  type="button"
-                  role="option"
-                  aria-selected={i === mentionIdx % mention.matches.length}
-                  className={`mention-item${i === mentionIdx % mention.matches.length ? " is-active" : ""}${name === "all" ? " is-all" : ""}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    applyMention(name);
-                  }}
-                  onMouseEnter={() => setMentionIdx(i)}
-                >
-                  @{name}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
+
+        {mentionOpen && popupPos && createPortal(
+          <div
+            className="mention-popup"
+            role="listbox"
+            aria-label={t("composer.mentionPopupAria")}
+            style={{ left: popupPos.left, top: popupPos.top }}
+          >
+            {mention.matches.map((name, i) => (
+              <button
+                key={`mention-${name}`}
+                type="button"
+                role="option"
+                aria-selected={i === mentionIdx % mention.matches.length}
+                className={`mention-item${i === mentionIdx % mention.matches.length ? " is-active" : ""}${name === "all" ? " is-all" : ""}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  applyMention(name);
+                }}
+                onMouseEnter={() => setMentionIdx(i)}
+              >
+                @{name}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
 
         {props.mentionNames && props.mentionNames.length > 0 && !disabled && (
           <div className="mention-chips" aria-label={t("composer.mentionAria")}>
