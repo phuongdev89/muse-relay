@@ -556,6 +556,163 @@ export async function fetchFleetActivity(limit = 80): Promise<{
   };
 }
 
+// ---- v9: AI usage quota reports ---------------------------------------------
+// Owner asks a muse for its AI account quota via params.command = "usage"
+// (prompt "/usage"). The muse answers with a human summary in output.text and
+// a machine JSON in output.notes (submit_result only allows
+// dropbox_paths/notes/text, so the JSON rides in notes, ≤ 2000 chars).
+
+export interface UsageReport {
+  plan: string;
+  weeklyUsedPercent: number;
+  weeklyRemainingPercent: number;
+  weeklyResetAt: string;
+  additionalTokensUsedPercent: number;
+  /** Kept as string ("31B") — the muse's own unit, not a plain number. */
+  additionalTokensRemaining: string;
+  checkedAt: string;
+  /** relay_results.created_at of the row the report was parsed from. */
+  resultAt: string;
+}
+
+/** Raw snake_case JSON the muse packs into notes for a usage request. */
+interface UsageNotesPayload {
+  command?: unknown;
+  plan?: unknown;
+  weekly_used_percent?: unknown;
+  weekly_remaining_percent?: unknown;
+  weekly_reset_at?: unknown;
+  additional_tokens_used_percent?: unknown;
+  additional_tokens_remaining?: unknown;
+  checked_at?: unknown;
+}
+
+/** notes → JSON.parse(trim). Never throws; null on any failure. */
+function parseNotesJson(raw: string): UsageNotesPayload | null {
+  try {
+    const parsed: unknown = JSON.parse(raw.trim());
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as UsageNotesPayload;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/** text → first {...} block (task contract fallback when notes is unparseable). */
+function parseTextJsonBlock(raw: string): UsageNotesPayload | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as UsageNotesPayload;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+function numOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function strOr(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+/** Validates the payload (numeric weekly_used_percent 0–100 required). */
+function toUsageReport(payload: UsageNotesPayload, resultAt: string): UsageReport | null {
+  const used = numOr(payload.weekly_used_percent, NaN);
+  if (!Number.isFinite(used) || used < 0 || used > 100) return null;
+  const remaining = numOr(
+    payload.weekly_remaining_percent,
+    Math.max(0, 100 - Math.round(used)),
+  );
+  return {
+    plan: strOr(payload.plan, ""),
+    weeklyUsedPercent: used,
+    weeklyRemainingPercent: remaining,
+    weeklyResetAt: strOr(payload.weekly_reset_at, ""),
+    additionalTokensUsedPercent: numOr(payload.additional_tokens_used_percent, 0),
+    additionalTokensRemaining: strOr(payload.additional_tokens_remaining, ""),
+    checkedAt: strOr(payload.checked_at, resultAt),
+    resultAt,
+  };
+}
+
+export async function fetchUsageReports(): Promise<{
+  reports: Map<string, UsageReport>;
+  error: string | null;
+}> {
+  const reports = new Map<string, UsageReport>();
+  try {
+    const msgs = await db
+      .from("relay_messages")
+      .select("id,recipient,params,created_at")
+      .eq("params->>command", "usage")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (msgs.error) return { reports, error: msgs.error.message };
+    const rows = (msgs.data ?? []) as {
+      id: string;
+      recipient: string;
+      created_at: string;
+    }[];
+    if (rows.length === 0) return { reports, error: null };
+
+    const ids = rows.map((r) => r.id);
+    const res = await db
+      .from("relay_results")
+      .select("message_id,status,output,created_at")
+      .in("message_id", ids)
+      .eq("status", "done");
+    if (res.error) return { reports, error: res.error.message };
+
+    const messageById = new Map(rows.map((r) => [r.id, r]));
+    // Latest report per recipient: .in() results are unordered, so compare
+    // result timestamps explicitly instead of relying on row order.
+    for (const r of res.data ?? []) {
+      if (r.status !== "done") continue;
+      const msg = messageById.get(r.message_id);
+      if (!msg || !msg.recipient) continue;
+      const result = r as RelayResult;
+      const resultAt = result.created_at || msg.created_at;
+      const parsed =
+        parseNotesJson(result.output?.notes ?? "") ??
+        parseTextJsonBlock(result.output?.text ?? "");
+      if (!parsed) continue;
+      const report = toUsageReport(parsed, resultAt);
+      if (!report) continue;
+
+      const key = msg.recipient.toLowerCase();
+      const prev = reports.get(key);
+      const thisMs = new Date(resultAt).getTime();
+      const prevMs = prev ? new Date(prev.resultAt).getTime() : NaN;
+      if (!prev || (Number.isFinite(thisMs) && thisMs > prevMs)) {
+        reports.set(key, report);
+      }
+    }
+    return { reports, error: null };
+  } catch (err) {
+    return {
+      reports,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function sendUsageRequest(recipient: string) {
+  return sendMessage({
+    recipient,
+    action: "chat",
+    params: { command: "usage", prompt: "/usage" },
+  });
+}
+
 // ---- group thread ----------------------------------------------------------
 
 function batchState(

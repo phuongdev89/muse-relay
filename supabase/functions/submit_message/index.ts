@@ -115,6 +115,9 @@ Deno.serve(async (req: Request) => {
           turn: 1,
           utterance,
           targets,
+          command: typeof validated.params.command === "string"
+            ? validated.params.command
+            : undefined,
         });
         return new Response(
           JSON.stringify({

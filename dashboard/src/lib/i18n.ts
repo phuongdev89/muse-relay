@@ -627,6 +627,17 @@ const VI = {
   "msg.imgPreviewAlt": "Xem trước ảnh",
   "md.copyCodeAria": "Copy đoạn mã",
   "md.copiedCode": "Đã copy đoạn mã",
+
+  // v9 AI usage quota ("hạn mức")
+  "usage.title": "Hạn mức AI",
+  "usage.send": "Gửi /usage",
+  "usage.sent": "Đã gửi yêu cầu kiểm tra hạn mức",
+  "usage.noData": "Chưa có báo cáo — nhấn Gửi /usage",
+  "usage.weeklyLabel": "Tuần này",
+  "usage.weeklyValue": "Đã dùng {used}% · còn {remaining}%",
+  "usage.resetAt": "Reset {time}",
+  "usage.additional": "Token bổ sung: còn {remaining} · đã dùng {used}%",
+  "usage.checkedAgo": "Kiểm tra {age}",
 } as const;
 
 export type I18nKey = keyof typeof VI;
@@ -1253,6 +1264,17 @@ const EN: Record<I18nKey, string> = {
   "msg.imgPreviewAlt": "Image preview",
   "md.copyCodeAria": "Copy code block",
   "md.copiedCode": "Copied code",
+
+  // v9 AI usage quota ("hạn mức")
+  "usage.title": "AI usage",
+  "usage.send": "Send /usage",
+  "usage.sent": "Usage check requested",
+  "usage.noData": "No report yet — hit Send /usage",
+  "usage.weeklyLabel": "This week",
+  "usage.weeklyValue": "{used}% used · {remaining}% left",
+  "usage.resetAt": "Resets {time}",
+  "usage.additional": "Additional tokens: {remaining} left · {used}% used",
+  "usage.checkedAgo": "Checked {age}",
 };
 
 const DICT: Record<Lang, Record<I18nKey, string>> = { vi: VI, en: EN };

@@ -538,6 +538,50 @@ LGC=$(curl -s -m 20 -o "$TMP_DIR/atlg" -w '%{http_code}' -X POST "$BASE/rest/v1/
 rm -f "$LGB"
 [ "$LGC" = "201" ] && ok "T-LGa legacy muse seeded -> 201 (own queue)" || bad "T-LGa seed got $LGC: $(head -c 200 "$TMP_DIR/atlg")"
 
+echo "== T-UC: machine command param on chat (/usage quota-check flow) =="
+UCSUB=$(curl -s -m 20 -o "$TMP_DIR/atuc" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] uc direct\",\"command\":\"usage\"}}")
+UC_ID=$(cat "$TMP_DIR/atuc" | jqpy "import json,sys; print(json.load(sys.stdin).get('message_id',''))")
+UCROW=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=params&id=eq.$UC_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+UC_OK=$(echo "$UCROW" | jqpy "import json,sys; rows=json.load(sys.stdin); p=(rows[0]['params'] if rows else {}); print(len(rows)==1 and p.get('command')=='usage' and p.get('prompt')=='[ACCEPTANCE] uc direct')")
+[ "$UCSUB" = "201" ] && [ "$UC_OK" = "True" ] && ok "T-UCa direct chat command=usage -> 201, signed params carry it" || bad "T-UCa got $UCSUB row=$UCROW"
+# The LG queue must be empty again before T2/T4 (claim ordering asserts on it).
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?id=eq.$UC_ID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+
+UCBAD=$(curl -s -m 20 -o "$TMP_DIR/atucb" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"recipient\":\"$LG_REC\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] uc hack\",\"command\":\"hack\"}}")
+UCB_ERR=$(cat "$TMP_DIR/atucb" | jqpy "import json,sys; print(json.load(sys.stdin).get('error',''))")
+UCB_N=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=id&params->>prompt=eq.%5BACCEPTANCE%5D%20uc%20hack" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" | jqpy "import json,sys; print(len(json.load(sys.stdin)))")
+[ "$UCBAD" = "400" ] && echo "$UCB_ERR" | grep -q 'command' && [ "$UCB_N" = "0" ] && ok "T-UCb command='hack' -> 400 (no row created)" || bad "T-UCb got $UCBAD err=$UCB_ERR rows=$UCB_N"
+
+# Group fan-out must bake the command into the HMAC-signed params at insert
+# time (params can never be patched onto rows afterwards). Minimal group:
+# LG's muse row is reused as the single member, so @Acceptance LG resolves.
+UCG="$TMP_DIR/acceptance-uc-group.json"
+UC_GID=$(python -I -c "import uuid; print(uuid.uuid4())")
+printf '{"id":"%s","owner_id":"%s","name":"Acceptance UC Group"}' "$UC_GID" "$RELAY_OWNER_ID" > "$UCG"
+UCGC=$(curl -s -m 20 -o "$TMP_DIR/atucg" -w '%{http_code}' -X POST "$BASE/rest/v1/relay_groups" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$UCG")
+rm -f "$UCG"
+printf '{"group_id":"%s","muse_recipient":"%s","name":"Acceptance LG"}' "$UC_GID" "$LG_REC" > "$UCG"
+UCMC=$(curl -s -m 20 -o "$TMP_DIR/atucg2" -w '%{http_code}' -X POST "$BASE/rest/v1/relay_group_members" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' -H 'Prefer: return=minimal' -d @"$UCG")
+rm -f "$UCG"
+UCSUB2=$(curl -s -m 20 -o "$TMP_DIR/atucg3" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \
+  -H "authorization: Bearer $JWT" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-type: application/json' \
+  -d "{\"group_id\":\"$UC_GID\",\"action\":\"chat\",\"params\":{\"prompt\":\"[ACCEPTANCE] uc group @Acceptance LG usage\",\"command\":\"usage\"}}")
+UCGROW=$(curl -s -m 20 "$BASE/rest/v1/relay_messages?select=params&recipient=eq.$LG_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+UCG_OK=$(echo "$UCGROW" | jqpy "import json,sys; rows=json.load(sys.stdin); p=(rows[0]['params'] if rows else {}); print(len(rows)==1 and p.get('command')=='usage' and p.get('thread_id')=='$UC_GID')")
+[ "$UCGC" = "201" ] && [ "$UCMC" = "201" ] && [ "$UCSUB2" = "201" ] && [ "$UCG_OK" = "True" ] && ok "T-UCc group fan-out @Acceptance LG -> 201, command carried in signed params" || bad "T-UCc group=$UCGC member=$UCMC sub=$UCSUB2 row=$UCGROW"
+# Cleanup: messages (LG delivery + owner rows by thread_id) first — deleting
+# them cascades the relay_group_posts rows — then the group cascades members.
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=eq.$LG_REC" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_messages?recipient=eq.$RELAY_OWNER_ID&params->>thread_id=eq.$UC_GID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+curl -s -m 20 -X DELETE "$BASE/rest/v1/relay_groups?id=eq.$UC_GID" -H "apikey: $SUPABASE_SECRET_KEY" -H "Authorization: Bearer $SUPABASE_SECRET_KEY" -H "Prefer: return=minimal" > /dev/null
+echo "== end T-UC =="
+
 echo "== T2: signed submit -> 201 + message_id + pending row =="
 SUB_BODY="{\"recipient\":\"$LG_REC\",\"action\":\"image\",\"params\":{\"prompt\":\"[ACCEPTANCE] t2 image\",\"aspect_ratio\":\"1:1\",\"count\":1,\"reference_storage_paths\":[]}}"
 SUB=$(curl -s -m 20 -o "$TMP_DIR/at2" -w '%{http_code}' -X POST "$BASE/functions/v1/submit_message" \

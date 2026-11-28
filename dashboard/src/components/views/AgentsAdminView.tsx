@@ -1,5 +1,10 @@
-import { useMemo, useState } from "react";
-import { testOpenAIAgentConnection } from "../../lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  fetchUsageReports,
+  sendUsageRequest,
+  testOpenAIAgentConnection,
+  type UsageReport,
+} from "../../lib/api";
 import {
   fmtRelativeAge,
   fmtTime,
@@ -10,6 +15,7 @@ import {
 import { useLang } from "../../lib/i18n";
 import type { Muse, OpenAIAgent, ProjectAgent } from "../../types";
 import {
+  ActivityIcon,
   BotIcon,
   CheckIcon,
   CopyIcon,
@@ -27,7 +33,8 @@ import {
 } from "../common/Icons";
 import { DeleteDialog, EditDialog, RotateDialog } from "../modals/MuseManage";
 import { DeleteOpenAIDialog, OpenAIAgentModal } from "../modals/OpenAIAgentModal";
-import { Chip, copyText } from "../common/ui";
+import { Chip, copyText, toast } from "../common/ui";
+import { UsageBar } from "../chat/UsageBar";
 
 type AgentFilter = "all" | "muse" | "openai";
 
@@ -116,6 +123,45 @@ export function AgentsAdminView(props: {
 
   // Per-agent connection test state
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestState>>({});
+
+  // v9 AI usage quota reports, keyed by lowercase muse recipient.
+  const [usageReports, setUsageReports] = useState<Map<string, UsageReport>>(new Map());
+  // Single delayed refetch after a manual "Gửi /usage" press (the muse polls
+  // every ~10s, so ~15s later its done result should be visible).
+  const usageRefetchTimerRef = useRef<number | null>(null);
+
+  const loadUsage = useCallback(async () => {
+    const { reports, error } = await fetchUsageReports();
+    if (!error) setUsageReports(reports);
+  }, []);
+
+  useEffect(() => {
+    void loadUsage();
+    const tmr = setInterval(() => void loadUsage(), 15000);
+    return () => {
+      clearInterval(tmr);
+      if (usageRefetchTimerRef.current !== null) {
+        window.clearTimeout(usageRefetchTimerRef.current);
+        usageRefetchTimerRef.current = null;
+      }
+    };
+  }, [loadUsage]);
+
+  async function requestUsage(recipient: string) {
+    const { error } = await sendUsageRequest(recipient);
+    if (error) {
+      toast(t("common.errorPrefix", { err: error }));
+      return;
+    }
+    toast(t("usage.sent"));
+    if (usageRefetchTimerRef.current !== null) {
+      window.clearTimeout(usageRefetchTimerRef.current);
+    }
+    usageRefetchTimerRef.current = window.setTimeout(() => {
+      usageRefetchTimerRef.current = null;
+      void loadUsage();
+    }, 15000);
+  }
 
   // Count how many projects each agent is assigned to
   const projectCounts = useMemo(() => {
@@ -553,6 +599,26 @@ export function AgentsAdminView(props: {
                               </span>
                             </div>
                           )}
+                        </div>
+
+                        {/* v9 AI usage quota ("hạn mức") + manual /usage probe */}
+                        <div className="agent-usage-row">
+                          <div className="agent-usage-main">
+                            <span className="agent-usage-title">{t("usage.title")}</span>
+                            <UsageBar
+                              report={usageReports.get(m.recipient.toLowerCase()) ?? null}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className="btn-ghost btn-sm agent-usage-btn"
+                            onClick={() => void requestUsage(m.recipient)}
+                            title={t("usage.send")}
+                            aria-label={`${t("usage.send")} — ${m.name}`}
+                          >
+                            <ActivityIcon size={13} />
+                            <span>{t("usage.send")}</span>
+                          </button>
                         </div>
 
                         <div className="agent-card-actions">

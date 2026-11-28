@@ -5,11 +5,13 @@ import {
   fetchGroupThread,
   fetchMuseThread,
   fetchOpenAIMessages,
+  fetchUsageReports,
   insertOpenAIMessage,
   sendGroupMessage,
   sendMessage,
   uploadFileToMuseDropbox,
   type OpenAIChatHistoryTurn,
+  type UsageReport,
 } from "../../lib/api";
 import { getConfig } from "../../lib/config";
 import {
@@ -50,6 +52,7 @@ import {
 } from "../common/Icons";
 import { MarkdownBody } from "../chat/MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "../chat/MessageBubble";
+import { UsageBar } from "../chat/UsageBar";
 import { ErrorMsg, Modal, toast } from "../common/ui";
 
 const POLL_MS = 10000;
@@ -137,6 +140,10 @@ export function ConversationRoom(props: {
   const [loadError, setLoadError] = useState("");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
+
+  // v9 AI usage quota reports (keyed by lowercase recipient). Only fetched for
+  // muse_single rooms; group/openai/mixed never request it.
+  const [usageReports, setUsageReports] = useState<Map<string, UsageReport>>(new Map());
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -261,6 +268,16 @@ export function ConversationRoom(props: {
           }
         }),
       );
+      // v9 usage quota rides the same load cycle (poll interval, explicit
+      // refresh, and post-send reloads) — muse_single rooms only.
+      if (conversation.mode === "muse_single") {
+        tasks.push(
+          fetchUsageReports().then(({ reports, error }) => {
+            if (convIdRef.current !== targetConvId) return;
+            if (!error) setUsageReports(reports);
+          }),
+        );
+      }
     }
 
     if (usesGroupMuse && conversation.group_id) {
@@ -326,6 +343,7 @@ export function ConversationRoom(props: {
     setInflightOai([]);
     setAttachedFiles([]);
     setIsDragging(false);
+    setUsageReports(new Map());
     dragDepthRef.current = 0;
     setUpdatedAt(null);
     setLoadError("");
@@ -1318,7 +1336,16 @@ export function ConversationRoom(props: {
 
       <div className="pane-head">
         <div className="pane-title-group">
-          <h2>{conversation.title}</h2>
+          <div className="pane-title-row">
+            <h2>{conversation.title}</h2>
+            {/* v9 compact usage quota bar — direct muse channel only. */}
+            {conversation.mode === "muse_single" && (
+              <UsageBar
+                compact
+                report={usageReports.get(singleMuseRef.toLowerCase()) ?? null}
+              />
+            )}
+          </div>
           <span className="sub">
             {project.name} · {t(MODE_KEY[conversation.mode])} ·{" "}
             {loadError

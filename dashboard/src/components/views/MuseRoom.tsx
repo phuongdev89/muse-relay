@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { fetchMuseThread, sendMessage, uploadFileToMuseDropbox } from "../../lib/api";
+import {
+  fetchMuseThread,
+  fetchUsageReports,
+  sendMessage,
+  uploadFileToMuseDropbox,
+  type UsageReport,
+} from "../../lib/api";
 import {
   MAX_ATTACH_FILES,
   mergeAttachmentFiles,
@@ -20,6 +26,7 @@ import {
 } from "../common/Icons";
 import { MarkdownBody } from "../chat/MarkdownBody";
 import { MessageBubble, ResourceCards, UrlPreviews } from "../chat/MessageBubble";
+import { UsageBar } from "../chat/UsageBar";
 import { capsToAllowedModes } from "../common/CapsPicker";
 import { MuseManageMenu } from "../modals/MuseManage";
 import { Chip, toast } from "../common/ui";
@@ -66,6 +73,8 @@ export function MuseRoom(props: {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  // v9 AI usage quota reports (keyed by lowercase recipient) for the header bar.
+  const [usageReports, setUsageReports] = useState<Map<string, UsageReport>>(new Map());
 
   const threadRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
@@ -133,6 +142,22 @@ export function MuseRoom(props: {
     const tmr = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(tmr);
   }, [load, props.refreshTrigger]);
+
+  // v9 usage quota: parallel poll on the same 10s cadence as the thread load.
+  // Kept separate from `load` so the thread/auto-scroll logic stays untouched.
+  const loadUsage = useCallback(async () => {
+    const targetRecipient = muse.recipient;
+    const { reports, error } = await fetchUsageReports();
+    if (recipientRef.current !== targetRecipient) return;
+    if (error) return;
+    setUsageReports(reports);
+  }, [muse.recipient]);
+
+  useEffect(() => {
+    void loadUsage();
+    const tmr = setInterval(() => void loadUsage(), POLL_MS);
+    return () => clearInterval(tmr);
+  }, [loadUsage, props.refreshTrigger]);
 
   // Smart auto-scroll
   useEffect(() => {
@@ -417,6 +442,10 @@ export function MuseRoom(props: {
           <div className="pane-title-row">
             <h2>{muse.name}</h2>
             <Chip state={conn.chipClass} label={conn.label} />
+            <UsageBar
+              compact
+              report={usageReports.get(muse.recipient.toLowerCase()) ?? null}
+            />
           </div>
           <span className="sub">
             {loadError

@@ -24,6 +24,8 @@ export interface Muse {
 
 export interface MessageParams {
   prompt?: string;
+  /** v9 control commands ride in params (e.g. "usage" → /usage quota check). */
+  command?: string;
   thread_id?: string | null;
   aspect_ratio?: string;
   count?: number;

@@ -139,6 +139,8 @@ Configured in [`supabase/config.toml`](../supabase/config.toml):
 
 `claim_message` re-computes and timing-safe-compares this signature before leasing a message. If manual SQL edits tamper with `params` or other signed fields, `claim_message` marks the message `failed`, inserts an `invalid_signature` row in `relay_results`, and moves on to the next candidate.
 
+`validateParams` whitelists every param key per action. `chat` accepts an optional `command` — only the value `"usage"` (`400` otherwise), forwarded verbatim into the signed row params (direct + group fan-out) so muses can react to machine commands like the /usage quota check.
+
 ### `claim_message` Contract
 
 - **Request**: `POST /functions/v1/claim_message` with header `x-relay-token: <token>` and JSON body `{}`.

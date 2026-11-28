@@ -295,6 +295,15 @@ function readThreadId(params: Record<string, unknown>): string | null {
   return value;
 }
 
+// Machine commands ride the same chat params (e.g. the /usage quota check).
+// Only the exact value "usage" is whitelisted so a stray client field can
+// never smuggle arbitrary directives to the muses.
+function readUsageCommand(params: Record<string, unknown>): string | undefined {
+  if (params["command"] === undefined) return undefined;
+  if (params["command"] !== "usage") throw new Error("command must be 'usage'");
+  return "usage";
+}
+
 function readReferencePaths(
   params: Record<string, unknown>,
   ownerId: string,
@@ -358,9 +367,11 @@ export function validateParams(
       "duration_seconds",
       "reference_storage_paths",
       "reference_dropbox_paths",
+      "command",
     ]);
     const resourceType = readResourceType(params);
     const dbxPaths = readReferenceDropboxPaths(params, 4);
+    const command = readUsageCommand(params);
     return {
       action,
       params: {
@@ -380,6 +391,7 @@ export function validateParams(
         duration_seconds: readIntInRange(params, "duration_seconds", 8, 5, 10),
         reference_storage_paths: readReferencePaths(params, ownerId, 4),
         ...(dbxPaths ? { reference_dropbox_paths: dbxPaths } : {}),
+        ...(command ? { command } : {}),
       },
     };
   }
@@ -531,6 +543,7 @@ export async function fanoutGroupMessage(
     turn: number;
     utterance: string;
     targets: GroupFanoutTarget[];
+    command?: string;
   },
 ): Promise<{ batchId: string; messageIds: string[]; expiresAt: string }> {
   const batchId = crypto.randomUUID();
@@ -538,7 +551,13 @@ export async function fanoutGroupMessage(
   const expiresAtUnix = nowUnix + 30 * 60;
   const expiresAt = new Date(expiresAtUnix * 1000).toISOString();
   const prompt = `[${opts.fromName}]: ${opts.utterance}`;
-  const rowParams = { prompt, thread_id: opts.groupId };
+  // params is HMAC-signed at insert time, so optional extras (machine
+  // commands) must be baked in here — never patched onto rows afterwards.
+  const rowParams = {
+    prompt,
+    thread_id: opts.groupId,
+    ...(opts.command ? { command: opts.command } : {}),
+  };
   const inserted: string[] = [];
 
   try {
