@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 /** Owner request: long names (conversation, project, sidebar rows) that get
- * clipped by their container should MARQUEE instead of dying in an ellipsis.
- * Measures the inner text against the wrapper; when it truly overflows, the
- * inner span sways back and forth (duration scales with the overflow width).
+ * clipped by their container should MARQUEE — but only while HOVERED, never
+ * running permanently. Measures the inner text against the wrapper; when it
+ * truly overflows the wrapper gets the `over` class and the CSS plays the
+ * sway animation on :hover (duration scales with the overflow width).
  * prefers-reduced-motion keeps the text clipped and still — every caller
  * carries the full name in a title tooltip for hover/AT users. */
 export function MarqueeText({ text }: { text: string }) {
@@ -32,7 +33,7 @@ export function MarqueeText({ text }: { text: string }) {
 
   const dur = shift > 0 ? Math.max(3.5, Math.round((shift / 22) * 10) / 10) : 0;
   return (
-    <span ref={wrapRef} className={`marquee${shift > 0 ? " on" : ""}`}>
+    <span ref={wrapRef} className={`marquee${shift > 0 ? " over" : ""}`}>
       <span
         ref={innerRef}
         className="marquee-inner"

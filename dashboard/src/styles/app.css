@@ -4525,7 +4525,7 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   white-space: nowrap;
   will-change: transform;
 }
-.marquee.on .marquee-inner {
+.marquee.over:hover .marquee-inner {
   animation: marquee-sway var(--marquee-dur, 9s) ease-in-out infinite alternate;
 }
 @keyframes marquee-sway {
@@ -4533,5 +4533,5 @@ button, a, [role="button"], input, select, label, textarea { -webkit-tap-highlig
   to { transform: translateX(var(--marquee-shift, 0px)); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .marquee.on .marquee-inner { animation: none; }
+  .marquee.over:hover .marquee-inner { animation: none; }
 }
