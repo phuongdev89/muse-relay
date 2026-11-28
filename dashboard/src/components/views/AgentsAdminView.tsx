@@ -545,54 +545,56 @@ export function AgentsAdminView(props: {
                           </div>
                         )}
 
-                        <div className="agent-meta-grid">
-                          <div className="agent-meta-pair">
-                            <span className="agent-meta-k">{t("agents.metaDropbox")}</span>
-                            <code className="agent-meta-code" title={m.dropbox_root || "/"}>
-                              {m.dropbox_root || "/"}
-                            </code>
-                          </div>
-
-                          <div className="agent-meta-pair">
-                            <span className="agent-meta-k">{t("agents.metaEmail")}</span>
-                            <span className="agent-meta-v" title={m.email_owner ?? undefined}>
-                              {m.email_owner || t("common.none")}
-                            </span>
-                          </div>
-
-                          <div className="agent-meta-pair">
-                            <span className="agent-meta-k">{t("agents.metaUuid")}</span>
-                            <span className="agent-meta-copy-wrap">
-                              <code className="agent-meta-code" title={m.recipient}>
-                                {truncateUuid(m.recipient)}
+                        <div className="agent-meta-block">
+                          <div className="agent-meta-grid">
+                            <div className="agent-meta-pair">
+                              <span className="agent-meta-k">{t("agents.metaDropbox")}</span>
+                              <code className="agent-meta-code" title={m.dropbox_root || "/"}>
+                                {m.dropbox_root || "/"}
                               </code>
-                              <button
-                                type="button"
-                                className="btn-quiet btn-icon-copy"
-                                aria-label={t("agents.copyUuidAria", { name: m.name })}
-                                title={t("agents.copyUuidAria", { name: m.name })}
-                                onClick={() => copyText(m.recipient, t("agents.copyUuidToast"))}
-                              >
-                                <CopyIcon size={12} />
-                              </button>
-                            </span>
-                          </div>
+                            </div>
 
-                          <div className="agent-meta-pair">
-                            <span className="agent-meta-k">{t("agents.metaProjects")}</span>
-                            <span className="agent-meta-v">
-                              {t("agents.projectsValue", {
-                                count: pCount,
-                                date: fmtTime(m.created_at, lang),
-                              })}
-                            </span>
+                            <div className="agent-meta-pair">
+                              <span className="agent-meta-k">{t("agents.metaEmail")}</span>
+                              <span className="agent-meta-v" title={m.email_owner ?? undefined}>
+                                {m.email_owner || t("common.none")}
+                              </span>
+                            </div>
+
+                            <div className="agent-meta-pair">
+                              <span className="agent-meta-k">{t("agents.metaUuid")}</span>
+                              <span className="agent-meta-copy-wrap">
+                                <code className="agent-meta-code" title={m.recipient}>
+                                  {truncateUuid(m.recipient)}
+                                </code>
+                                <button
+                                  type="button"
+                                  className="btn-quiet btn-icon-copy"
+                                  aria-label={t("agents.copyUuidAria", { name: m.name })}
+                                  title={t("agents.copyUuidAria", { name: m.name })}
+                                  onClick={() => copyText(m.recipient, t("agents.copyUuidToast"))}
+                                >
+                                  <CopyIcon size={12} />
+                                </button>
+                              </span>
+                            </div>
+
+                            <div className="agent-meta-pair">
+                              <span className="agent-meta-k">{t("agents.metaProjects")}</span>
+                              <span className="agent-meta-v">
+                                {t("agents.projectsValue", {
+                                  count: pCount,
+                                  date: fmtTime(m.created_at, lang),
+                                })}
+                              </span>
+                            </div>
                           </div>
 
                           {m.last_result_at && (
-                            <div className="agent-meta-pair">
+                            <div className="agent-last-result">
                               <span className="agent-meta-k">{t("agents.metaLastResult")}</span>
                               <span
-                                className="agent-meta-v"
+                                className="agent-last-result-v"
                                 title={fmtTime(m.last_result_at, lang)}
                               >
                                 {fmtRelativeAge(m.last_result_at, lang)}
@@ -603,22 +605,22 @@ export function AgentsAdminView(props: {
 
                         {/* v9 AI usage quota ("hạn mức") + manual /usage probe */}
                         <div className="agent-usage-row">
-                          <div className="agent-usage-main">
+                          <div className="agent-usage-head">
                             <span className="agent-usage-title">{t("usage.title")}</span>
-                            <UsageBar
-                              report={usageReports.get(m.recipient.toLowerCase()) ?? null}
-                            />
+                            <button
+                              type="button"
+                              className="btn-ghost btn-sm agent-usage-btn"
+                              onClick={() => void requestUsage(m.recipient)}
+                              title={t("usage.send")}
+                              aria-label={`${t("usage.send")} — ${m.name}`}
+                            >
+                              <ActivityIcon size={13} />
+                              <span>{t("usage.send")}</span>
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            className="btn-ghost btn-sm agent-usage-btn"
-                            onClick={() => void requestUsage(m.recipient)}
-                            title={t("usage.send")}
-                            aria-label={`${t("usage.send")} — ${m.name}`}
-                          >
-                            <ActivityIcon size={13} />
-                            <span>{t("usage.send")}</span>
-                          </button>
+                          <UsageBar
+                            report={usageReports.get(m.recipient.toLowerCase()) ?? null}
+                          />
                         </div>
 
                         <div className="agent-card-actions">
